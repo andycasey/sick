@@ -1,5 +1,5 @@
 import pyfits
-import pyyaml
+import yaml
 
 def test_assert():
     assert True
