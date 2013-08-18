@@ -17,7 +17,7 @@ that can incorporate all of these convolutions. That's what this does.
 
 Status
 ======
-.. image:: https://travis-ci.org/andycasey/a-new-scope.png?branch=master :target: https://travis-ci.org/andycasey/a-new-scope
+.. image:: https://travis-ci.org/andycasey/a-new-scope.png?branch=master
 
 Usage
 =====
