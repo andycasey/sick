@@ -11,9 +11,10 @@ I'm fucking hilarious.
 Idea
 ====
 Most (if not all) attempts to determine stellar parameters from a grid of
-spectra separate out the normalisation and radial velocity components. In
-reality these are all linked. You should have a single mathematical model
-that can incorporate all of these convolutions. That's what this does.
+spectra separate out the normalisation, radial velocity, and synthetic
+smoothing components. In reality these are all linked. You should have a 
+single mathematical model that can incorporate all of these convolutions. 
+That's what this does.
 
 Status
 ======
