@@ -1,0 +1,5 @@
+numpy
+scipy
+matplotlib==1.0.1
+pyfits
+pyyaml

@@ -1,0 +1,16 @@
+branches:
+  only:
+    - master
+language: python
+python:
+  - 2.7
+virtualenv:
+  system_site_packages: true
+before_install:
+  - sudo apt-get install libcfitsio3-dev python-matplotlib python-pyfits python-scipy
+install: 
+  - pip install -r requirements.txt --use-mirrors
+script:
+  - nosetests
+notifications:
+  email: false
