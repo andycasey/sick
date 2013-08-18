@@ -88,7 +88,7 @@ class Models(object):
             sort_indices = []
 
             for point in points:
-                index = np.where(np.all(np.equal(self.grid_points - point, np.zeros(len(point))), 1))[0][0]
+                index = self.check_grid_point(point)
                 sort_indices.append(index)
 
             self.flux_filenames[beam] = [flux_filenames[beam][index] for index in sort_indices]
@@ -96,6 +96,112 @@ class Models(object):
         return None
 
 
+    def get_nearest_neighbours(self, point, n=1):
+        """Returns the indices for the nearest `n` neighbours to the given `point` in each dimension.
+
+        Inputs
+        ------
+        point : list of `float` values
+            The point to find neighbours for.
+
+        n : int
+            The number of neighbours to find either side of `point` in each dimension.
+            Therefore the total number of points returned will be dim(point)^n.
+        """
+
+        if len(point) != self.grid_points.shape[1]:
+            raise ValueError("point length ({length}) is incompatible with grid shape ({shape})"
+                .format(length=len(point), shape=self.grid_points.shape))
+
+        try: n = int(n)
+        except TypeError:
+            raise TypeError("number of neighbours must be an integer-type")
+        if 1 > n:
+            raise ValueError("number of neighbours must be a positive integer-type")
+
+        indices = set(np.arange(len(self.grid_points)))
+        for i, point_value in enumerate(point):
+            difference = np.unique(self.grid_points[:, i] - point_value)
+
+            limit_min = difference[np.where(difference < 0)][-n:][0] + point_value
+            limit_max = difference[np.where(difference > 0)][:n][-1] + point_value
+    
+            these_indices = np.where((limit_max >= self.grid_points[:, i]) & (self.grid_points[:, i] >= limit_min))[0]
+            indices.intersection_update(these_indices)
+
+        return np.array(list(indices))
+
+
+    def check_grid_point(self, point):
+        """Checks whether the point provided exists in the grid of models. If so,
+        its index is returned.
+
+        Inputs
+        ------
+        point : list of float values
+            The point of interest.
+        """
+
+        index = np.where(np.all(np.equal(self.grid_points - point, np.zeros(len(point))), 1))[0]
+
+        if len(index) > 0:
+            return index[0]
+
+        return False
+        
+
+    def interpolate_flux(self, point, beams='all', kind='linear', **kwargs):
+        """Interpolates through the grid of models to the given `point` and returns
+        the interpolated flux.
+
+        Inputs
+        ------
+        point : list of `float` values
+            The point to interpolate to.
+
+        beams : str, optional
+            The beams to interpolate flux for. If this is 'all', a dictionary is
+            returned with interpolated fluxes for all beams.
+
+        kind : str or int, optional
+            Specifies the kind of interpolation as a string
+            ('linear', 'nearest', 'zero', 'slinear', 'quadratic', 'cubic')
+            or as an integer specifying the order of the spline interpolator
+            to use. Default is 'linear'.
+        """
+
+        neighbour_indices = self.get_nearest_neighbours(point)
+
+        if beams is 'all':
+            beams = self.flux_filenames.keys()
+
+        elif not isinstance(beams, (list, tuple)):
+            beams = [beams]
+
+        for beam in beams:
+            if beam not in self.flux_filenames.keys():
+                raise ValueError("could not find '{beam}' beam".format(beam=beam))
+
+        interpolated_flux = {}
+        for beam in beams:
+
+            beam_flux = np.zeros((
+                len(neighbour_indices),
+                len(self.dispersion[beam])
+                ))
+            beam_flux[:] = np.nan
+
+            # Load the flux points
+            for i, index in enumerate(neighbour_indices):
+                beam_flux[i, :] = load_model_data(self.flux_filenames[beam][index])
+            
+            interpolated_flux[beam] = scipy.interpolate.griddata(
+                self.grid_points[neighbour_indices],
+                beam_flux,
+                [point],
+                **kwargs).flatten()
+
+        return interpolated_flux
 
 
 
