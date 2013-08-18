@@ -3,3 +3,4 @@ scipy
 matplotlib==1.0.1
 pyfits
 pyyaml
+PyYAML==3.10
