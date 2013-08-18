@@ -8,6 +8,17 @@ I'm fucking hilarious.
 :Author: `Andy Casey <acasey@mso.anu.edu.au>`_ (acasey@mso.anu.edu.au)
 :License: `Academic License <http://github.com/dfm/license>`_: This project includes academic-research code and documents under development. You would be a fool to run any of the code. Any use of the content requires citation.
 
+Idea
+====
+Most (if not all) attempts to determine stellar parameters from a grid of
+spectra separate out the normalisation and radial velocity components. In
+reality these are all linked. You should have a single mathematical model
+that can incorporate all of these convolutions. That's what this does.
+
+Status
+======
+.. image:: https://travis-ci.org/andycasey/a-new-scope.png?branch=master
+:target: https://travis-ci.org/andycasey/a-new-scope
 
 Usage
 =====
