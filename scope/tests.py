@@ -1,5 +1,5 @@
 import pyfits
 import pyyaml
 
-def test_assert();
+def test_assert():
     assert True
