@@ -16,19 +16,17 @@ from glob import glob
 # Third-party
 import numpy as np
 import pyfits
+import scipy
 import yaml
 
 # Module imports
 import config
 
 folder_path = os.path.abspath(os.path.dirname(__file__))
+environment = ['remote', 'localhost'][folder_path.startswith('/Users/andycasey/')]
 
 def test_assert():
     assert True
-
-
-def test_scipy():
-    from scipy.interpolate import griddata
 
 
 def test_default_configuration():
@@ -36,6 +34,8 @@ def test_default_configuration():
     configuration = config.load(os.path.join(folder_path, '../config.yml'))
 
     # Verify everything except models
+    if environment == 'localhost':
+        config.verify_models(configuration)
 
     # Check the normalisation
     normalisation_priors = config.verify_normalisation(configuration)
