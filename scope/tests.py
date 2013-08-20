@@ -38,17 +38,17 @@ def test_default_configuration():
     # Verify everything except models
 
     # Check the normalisation
-    normalisation_priors = verify_normalisation(configuration)
+    normalisation_priors = config.verify_normalisation(configuration)
 
     # Check the smoothing
-    smoothing_priors = verify_smoothing(configuration)
+    smoothing_priors = config.verify_smoothing(configuration)
 
     # Check the doppler corrections
-    doppler_priors = verify_doppler(configuration)
+    doppler_priors = config.verify_doppler(configuration)
 
     # Establish all of the priors    
     priors_to_expect = doppler_priors + smoothing_priors + normalisation_priors
 
     # Verify that we have priors established for all the priors
     # we expect, and the stellar parameters we plan to solve for
-    verify_priors(configuration, priors_to_expect)
+    config.verify_priors(configuration, priors_to_expect)
