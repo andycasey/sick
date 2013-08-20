@@ -46,7 +46,13 @@ def verify(configuration):
         A dictionary configuration for SCOPE.
     """
 
-    priors_to_expect = []
+    # Check optional parameters
+    integer_types = ('parallelism', )
+    for key in integer_types:
+        if key in configuration:
+            if not isinstance(configuration[key], (int, )):
+                raise TypeError("configuration setting '{key}' is expected "
+                        "to be an integer-type".format(key=key))
 
     # Check the models
     verify_models(configuration)
@@ -57,11 +63,68 @@ def verify(configuration):
     # Check the smoothing
     smoothing_priors = verify_smoothing(configuration)
 
+    # Check the doppler corrections
+    doppler_priors = verify_doppler(configuration)
 
-    # Establish all of the priors
-    priors_to_expect.extend(normalisation_priors)
+    # Establish all of the priors    
+    priors_to_expect = doppler_priors + smoothing_priors + normalisation_priors
+
+    # Verify that we have priors established for all the priors
+    # we expect, and the stellar parameters we plan to solve for
+    verify_priors(configuration, priors_to_expect)
 
     return True
+
+
+def verify_doppler(configuration):
+    """Verifies the doppler component of a configuration.
+
+    Inputs
+    ------
+    `configuration` : dict
+        A dictionary configuration for SCOPE.
+    """
+
+    apertures = get_aperture_names(configuration)
+    check_aperture_names(configuration, 'doppler_correct')
+
+    if not 'perform_initial_measurement' in configuration['doppler_correct']:
+        raise KeyError("configuration setting 'doppler_correct.{aperture}.perform_initial_measurement' not found"
+                .format(aperture=aperture))
+
+    if configuration['doppler_correct']['perform_initial_measurement']:
+
+        if not 'initial_template' in configuration['doppler_correct']:
+            raise KeyError("configuration setting 'doppler_correct.initial_template' not found")
+
+        elif not os.path.exists(configuration['doppler_correct']['initial_template']):
+            raise ValueError("initial template for doppler correct (doppler_correct.initial_template = {filename})"
+                " does not exist".format(filename=configuration['doppler_correct']['initial_template']))
+
+    priors_to_expect = []
+    for aperture in apertures:
+        if 'allow_shift' not in configuration['doppler_correct'][aperture]:
+            raise KeyError("configuration setting 'doppler_correct.{aperture}.allow_shift' not found"
+                .format(aperture=aperture))
+
+        if configuration['doppler_correct'][aperture]['allow_shift']:
+            priors_to_expect.append('doppler_correct.{aperture}.allow_shift'.format(aperture=aperture))
+
+    return priors_to_expect
+
+
+def verify_priors(configuration, expected_priors):
+    """Verifies that the priors in a configuration are valid."""
+
+    # What can be a prior?
+
+    # Do the values for the priors make sense?
+
+    # Create a toy model. What parameters (from the model file names) are we solving for?
+
+    # Do priors for these values exist?
+
+    raise NotImplementedError
 
 
 def verify_smoothing(configuration):
@@ -198,11 +261,11 @@ def check_aperture_names(configuration, key):
     sub_configuration = configuration[key]
 
     for aperture in apertures:
-        if aperture not in normalisation_configuration:
+        if aperture not in sub_configuration:
             raise KeyError("no aperture '{aperture}' listed in {key}, but"
             " it's specified in the models".format(aperture=aperture, key=key))
-
     return True
+
 
 def verify_models(configuration):
     """Verifies the model component of a given configuration.
@@ -217,6 +280,14 @@ def verify_models(configuration):
         raise KeyError("no 'models' found in configuration")
 
     model_configuration = configuration['models']
+
+    aperture_names = get_aperture_names(configuration)
+    protected_aperture_names = ('perform_initial_measurement', 'initial_template')
+    
+    for aperture in aperture_names:
+        if aperture in protected_aperture_names:
+            raise ValueError("aperture name '{aperture}' is protected and cannot be used"
+                .format(aperture=aperture))
 
     required_keys = ('dispersion_filenames', 'flux_filenames')
     for key in required_keys:
@@ -265,17 +336,17 @@ def verify_models(configuration):
     toy_model = models.Models(configuration)
 
     # Check the length of the dispersion map and some random point
-    for beam, dispersion_map in toy_model.dispersion.iteritems():
+    for aperture, dispersion_map in toy_model.dispersion.iteritems():
         n_dispersion_points = len(dispersion_map)
 
-        random_filename = choice(toy_model.flux_filenames[beam])
+        random_filename = choice(toy_model.flux_filenames[aperture])
         random_flux = models.load_model_data(random_filename)
         n_flux_points = len(random_flux)
 
         if n_dispersion_points != n_flux_points:
             raise ValueError("number of dispersion points ({n_dispersion_points}) and flux points ({n_flux_points})"
-                " does not match for {beam} beam in randomly selected filename: {random_filename}"
-                .format(n_dispersion_points=n_dispersion_points, beam=beam, n_flux_points=n_flux_points,
+                " does not match for {aperture} aperture in randomly selected filename: {random_filename}"
+                .format(n_dispersion_points=n_dispersion_points, aperture=aperture, n_flux_points=n_flux_points,
                     random_filename=random_filename))
 
     return True
