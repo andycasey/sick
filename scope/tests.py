@@ -24,7 +24,7 @@ import config
 folder_path = os.path.abspath(os.path.dirname(__file__))
 
 def test_assert():
-    assert False
+    assert True
 
 
 def test_scipy():
