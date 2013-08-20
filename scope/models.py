@@ -17,6 +17,7 @@ from glob import glob
 import numpy as np
 import pyfits
 
+__all__ = ['Models', 'load_model_data']
 
 class Models(object):
     """Class for interpolating model fluxes for SCOPE."""
@@ -148,7 +149,7 @@ class Models(object):
             return index[0]
 
         return False
-        
+
 
     def interpolate_flux(self, point, beams='all', kind='linear', **kwargs):
         """Interpolates through the grid of models to the given `point` and returns

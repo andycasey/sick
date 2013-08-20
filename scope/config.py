@@ -46,11 +46,163 @@ def verify(configuration):
         A dictionary configuration for SCOPE.
     """
 
+    priors_to_expect = []
+
+    # Check the models
     verify_models(configuration)
+
+    # Check the normalisation
+    normalisation_priors = verify_normalisation(configuration)
+
+    # Check the smoothing
+    smoothing_priors = verify_smoothing(configuration)
+
+
+    # Establish all of the priors
+    priors_to_expect.extend(normalisation_priors)
 
     return True
 
 
+def verify_smoothing(configuration):
+    """Verifies the synthetic smoothing component of a configuration.
+
+    Inputs
+    ------
+    `configuration` : dict
+        A dictionary configuration for SCOPE.
+    """
+
+    apertures = get_aperture_names(configuration)
+    check_aperture_names(configuration, 'smooth_model_flux')
+
+    required_aperture_smooth_settings = ('mode', 'kernel')
+
+    # Verify the settings for each aperture
+    priors_to_expect = []
+    for aperture in apertures:
+
+        aperture_smooth_settings = configuration['smooth_model_flux'][aperture]
+
+        # Check that settings exist
+        if 'perform' not in aperture_smooth_settings:
+            raise KeyError("configuration setting 'smooth_model_flux.{aperture}.perform' not found"
+                .format(aperture=aperture))
+
+        else:
+            for required_setting in required_aperture_smooth_settings:
+                if required_setting not in aperture_smooth_settings:
+                    raise KeyError("configuration setting 'smooth_model_flux.{aperture}.{required_setting}' not found"
+                        .format(aperture=aperture, required_setting=required_setting))
+
+        # Check the types
+        for key, value in aperture_smooth_settings.iteritems():
+            if key == 'perform' and not value:
+                # No smoothing necessary for this aperture
+                break
+
+            # Is this going to be a free parameter?
+            if value == 'free':
+                priors_to_expect.append('smooth_model_flux.{aperture}.{key}'
+                    .format(aperture=aperture, key=key))
+                continue
+
+            available_modes = ('gaussian', )
+            if key == 'mode' and value not in available_modes:
+                raise ValueError("configuration setting 'smooth_model_flux.{aperture}.mode' is not valid. Available"
+                    " options are: {available_modes}".format(aperture=aperture, available_modes=', '.join(available_modes)))
+
+            if key == 'kernel' and not isinstance(value, (int, float)):
+                raise TypeError("configuration setting 'smooth_model_flux.{aperture}.kernel' is expected to be a float-type"
+                    .format(aperture=aperture))
+
+    return priors_to_expect
+
+
+def verify_normalisation(configuration):
+    """Verifies the normalisation component of a configuration.
+
+    Inputs
+    ------
+    `configuration` : dict
+        A dictionary configuration for SCOPE.
+    """
+
+    apertures = get_aperture_names(configuration)
+    check_aperture_names(configuration, 'normalise_observed')
+    
+    required_aperture_normalisation_settings = ('order', 'knot_spacing', 'upper_sigma_clip', 'lower_sigma_clip')
+
+    # Verify the settings for each aperture.
+    priors_to_expect = []
+    for aperture in apertures:
+
+        aperture_normalisation_settings = configuration['normalise_observed'][aperture]
+
+        # Check that settings exist
+        if 'perform' not in aperture_normalisation_settings:
+            raise KeyError("configuration setting 'normalise_observed.{aperture}.perform' not found"
+                .format(aperture=aperture))
+
+        else:
+            for required_setting in required_aperture_normalisation_settings:
+                if required_setting not in aperture_normalisation_settings:
+                    raise KeyError("configuration setting 'normalise_observed.{aperture}.{required_setting}' not found"
+                        .format(aperture=aperture, required_setting=required_setting))
+
+        # Check setting value types
+        for key, value in aperture_normalisation_settings.iteritems():
+            if key == 'perform' and not value:
+                # No normalisation necessary for this aperture
+                break
+
+            # Is this going to be a free parameter?
+            if value == 'free':
+                priors_to_expect.append('normalise_observed.{aperture}.{key}'
+                    .format(aperture=aperture, key=key))
+                continue
+
+            if key in ('order', ):
+                if not isinstance(value, (int, )):
+                    raise TypeError("configuration setting 'normalise_observed.{aperture}.{key}' is expected "
+                        "to be an integer-type".format(aperture=aperture, key=key))
+
+            elif key in ('knot_spacing', 'lower_sigma_clip', 'upper_sigma_clip'):
+                if not isinstance(value, (int, )):
+                    raise TypeError("configuration setting 'normalise_observed.{aperture}.{key}' is expected "
+                        "to be a float-type".format(aperture=aperture, key=key))
+
+    return priors_to_expect
+
+
+def get_aperture_names(configuration):
+    """Returns the aperture names specified in the configuration."""
+
+    return configuration['models']['dispersion_filenames'].keys()
+
+
+def check_aperture_names(configuration, key):
+    """Checks that all the apertures specified in the models
+    exist in the given sub-config `key`.
+
+    Inputs
+    ------
+    `configuration` : dict
+        A dictionary configuration for SCOPE.
+
+    `key` : str
+        The sub-key to check (e.g. 'normalise_observed')
+    """
+
+    apertures = get_aperture_names(configuration)
+    sub_configuration = configuration[key]
+
+    for aperture in apertures:
+        if aperture not in normalisation_configuration:
+            raise KeyError("no aperture '{aperture}' listed in {key}, but"
+            " it's specified in the models".format(aperture=aperture, key=key))
+
+    return True
 
 def verify_models(configuration):
     """Verifies the model component of a given configuration.
@@ -126,3 +278,4 @@ def verify_models(configuration):
                 .format(n_dispersion_points=n_dispersion_points, beam=beam, n_flux_points=n_flux_points,
                     random_filename=random_filename))
 
+    return True
