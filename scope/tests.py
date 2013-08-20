@@ -30,25 +30,25 @@ def test_assert():
 
 
 def test_default_configuration():
-        
+    """Verifies that the default configuration file is valid."""
+    
     configuration = config.load(os.path.join(folder_path, '../config.yml'))
 
-    # Verify everything except models
+    # Only verify the models if we are on localhost
     if environment == 'localhost':
-        config.verify_models(configuration)
+        config.verify(configuration)
 
-    # Check the normalisation
-    normalisation_priors = config.verify_normalisation(configuration)
+    else:
 
-    # Check the smoothing
-    smoothing_priors = config.verify_smoothing(configuration)
+        logging.warn("Cannot verify models or priors because no model data exists. Checking normalisation,"
+            " smoothing, and doppler configuration only.")
 
-    # Check the doppler corrections
-    doppler_priors = config.verify_doppler(configuration)
+        # Check the normalisation
+        normalisation_priors = config.verify_normalisation(configuration)
 
-    # Establish all of the priors    
-    priors_to_expect = doppler_priors + smoothing_priors + normalisation_priors
+        # Check the smoothing
+        smoothing_priors = config.verify_smoothing(configuration)
 
-    # Verify that we have priors established for all the priors
-    # we expect, and the stellar parameters we plan to solve for
-    config.verify_priors(configuration, priors_to_expect)
+        # Check the doppler corrections
+        doppler_priors = config.verify_doppler(configuration)
+
