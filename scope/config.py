@@ -116,15 +116,25 @@ def verify_doppler(configuration):
 def verify_priors(configuration, expected_priors):
     """Verifies that the priors in a configuration are valid."""
 
-    # What can be a prior?
+    # Create a toy model. What parameters (from the model file names) are we solving for?
+    toy_model = models.Models(configuration)
+    parameters_to_solve = toy_model.colnames
+
+    # Do priors for these values exist?
+    for parameter in parameters_to_solve:
+        if parameter not in configuration['priors']:
+            raise KeyError("no prior found for '{parameter}' parameter".format(parameter=parameter))
+
+    # Verify that these priors make sense.
+
+    # What else can be a prior?
+    for expected_prior in expected_priors:
+        if expected_prior not in configuration['priors']:
+            raise KeyError("no prior found for '{expected_prior}' parameter".format(expected_prior=expected_prior))
 
     # Do the values for the priors make sense?
 
-    # Create a toy model. What parameters (from the model file names) are we solving for?
-
-    # Do priors for these values exist?
-
-    raise NotImplementedError
+    return True
 
 
 def verify_smoothing(configuration):
@@ -281,6 +291,7 @@ def verify_models(configuration):
 
     model_configuration = configuration['models']
 
+    # Check the aperture names
     aperture_names = get_aperture_names(configuration)
     protected_aperture_names = ('perform_initial_measurement', 'initial_template')
     
@@ -288,6 +299,12 @@ def verify_models(configuration):
         if aperture in protected_aperture_names:
             raise ValueError("aperture name '{aperture}' is protected and cannot be used"
                 .format(aperture=aperture))
+
+        if '.' in aperture:
+            raise ValueError("aperture name '{aperture}' is invalid because aperture names cannot contain a full-stop character '.'"
+                .format(aperture=aperture))
+
+
 
     required_keys = ('dispersion_filenames', 'flux_filenames')
     for key in required_keys:

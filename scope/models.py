@@ -46,17 +46,17 @@ class Models(object):
                 match = re.match(re_match, os.path.basename(filename))
 
                 if match is not None:
-                    if not hasattr(self, 'point_dtypes'):
-                        point_dtypes = []
+                    if not hasattr(self, 'colnames'):
+                        colnames = []
                         groups = match.groups()
 
                         groupdict = match.groupdict()
                         for value in match.groupdict().itervalues():
                             if groups.count(value) > 1: break
-                            point_dtypes.append(match.groupdict().keys()[groups.index(value)])
+                            colnames.append(match.groupdict().keys()[groups.index(value)])
 
-                        if len(point_dtypes) == len(groups):
-                            self.point_dtypes = point_dtypes
+                        if len(colnames) == len(groups):
+                            self.colnames = colnames
 
                     points.append(map(float, match.groups()))
                     matched_filenames.append(filename)
@@ -67,6 +67,9 @@ class Models(object):
         # If it's just the one beam, it's easy!
         first_beam = configuration['models']['flux_filenames'].keys()[0]
         self.grid_points = np.array(grid_points[first_beam])
+
+        #dtype = np.dtype({'names': tuple(self.colnames), 'formats': tuple(['<f8'] * len(self.colnames))})
+        #self.grid_points = np.array(self.grid_points, dtype=dtype)
         
         if len(configuration['models']['flux_filenames'].keys()) == 1:
             self.flux_filenames = flux_filenames[first_beam]
