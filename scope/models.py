@@ -64,13 +64,13 @@ class Models(object):
             grid_points[beam] = points
             flux_filenames[beam] = matched_filenames
 
-        # If it's just the one beam, it's easy!
         first_beam = configuration['models']['flux_filenames'].keys()[0]
         self.grid_points = np.array(grid_points[first_beam])
 
         #dtype = np.dtype({'names': tuple(self.colnames), 'formats': tuple(['<f8'] * len(self.colnames))})
         #self.grid_points = np.array(self.grid_points, dtype=dtype)
-        
+
+        # If it's just the one beam, it's easy!        
         if len(configuration['models']['flux_filenames'].keys()) == 1:
             self.flux_filenames = flux_filenames[first_beam]
 
@@ -98,6 +98,21 @@ class Models(object):
             self.flux_filenames[beam] = [flux_filenames[beam][index] for index in sort_indices]
 
         return None
+
+
+    def __repr__(self):
+        num_apertures = len(self.dispersion)
+        num_models = len(self.grid_points) * num_apertures
+        num_pixels = np.array([len(dispersion) * num_models for dispersion in self.dispersion.values()]) * 10e-9
+        num_billion_pixels = np.sum(num_pixels)
+
+        return 'Models({num_models} models, {num_apertures} apertures: "{apertures}", {num_parameters} parameters: "{parameters}", ~{num_billion_pixels:.0f} billion pixels)'.format(
+            num_models=num_models,
+            num_apertures=num_apertures,
+            apertures=', '.join(self.dispersion.keys()),
+            num_billion_pixels=num_billion_pixels,
+            num_parameters=self.grid_points.shape[1],
+            parameters=', '.join(self.colnames))
 
 
     def get_nearest_neighbours(self, point, n=1):
@@ -206,6 +221,52 @@ class Models(object):
                 **kwargs).flatten()
 
         return interpolated_flux
+
+
+    def map_apertures(self, observed_dispersions):
+        """References model spectra to each observed spectra based on their wavelengths.
+
+        Inputs
+        ------
+        observed_dispsersions : a list of observed dispersion maps (e.g. list-types full of floats)
+            The dispersion maps for all observed apertures.
+        """
+
+        mapped_apertures = []
+        for i, observed_dispersion in enumerate(observed_dispersions):
+
+            # Initialise the list
+            apertures_found = []
+
+            observed_wlmin = np.min(observed_dispersion)
+            observed_wlmax = np.max(observed_dispersion)
+
+            for model_aperture, model_dispersion in enumerate(self.dispersion.iteritems()):
+
+                model_wlmin = np.min(model_dispersion)
+                model_wlmax = np.max(model_dispersion)
+
+                # Is there overlap?
+                if (model_wlmin < observed_wlmin and observed_wlmax < model_wlmax) \
+                or (observed_wlmin < model_wlmin and model_wlmax < observed_wlmax) \
+                or (model_wlmin < observed_wlmin and (observed_wlmin < model_wlmax and model_wlmax < observed_wlmax)) \
+                or ((observed_wlmin < model_wlmin and model_wlmin < observed_wlmax) and observed_wlmax < model_wlmax):
+                    apertures_found.append(model_aperture)
+
+            if len(apertures_found) == 0:
+                raise ValueError("no model apertures found for observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
+                    .format(wl_start=observed_wlmin, wl_end=observed_wlmax))
+
+            elif len(apertures_found) > 1:
+                raise ValueError("multiple model apertures found for observed dispersion map from {wl_start.1f} to {wl_end:.1f}"
+                    .format(wl_start=observed_wlmin, wl_end=observed_wlmax))
+
+            mapped_apertures.append(apertures_found[0])
+
+        return mapped_apertures
+
+
+
 
 
 

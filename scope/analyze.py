@@ -45,38 +45,27 @@ def analyse(observed_spectra, configuration_filename):
     models = models.Models(configuration)
 
     # Get the aperture mapping from observed spectra to model spectra
-    model_apertures = []
-    model_dispersions = []
-    for aperture, dispersion in models.dispersion.iteritems():
-        model_apertures.append(aperture)
-        model_dispersions.append(dispersion)
+    aperture_mapping = models.map_apertures(observed_dispersions)
 
-    aperture_mapping = util.map_apertures(observed_dispersions, model_dispersions)
+    # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
+    for aperture, observed_dispersion in zip(aperture_mapping, observed_dispersions):
 
-    # Check that we have at least one model aperture for each observed aperture
-    for i, (observed_aperture_index, model_aperture_indices, ) in enumerate(aperture_mapping.iteritems()):
-        if len(model_aperture_indices) == 0:
-            raise ValueError("no model aperture mapped to observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
-                .format(wl_start=np.min(observed_dispersions[i]), wl_end=np.max(observed_dispersions[i])))
+        mean_observed_pixel_size = np.mean(np.diff(observed_dispersion))
+        mean_model_pixel_size = np.mean(np.diff(models.dispersion[aperture]))
 
-        # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
-        mean_observed_pixel_size = np.mean(np.diff(observed_dispersions[i]))
-
-        for model_aperture_index in model_aperture_indices:
-            mean_model_pixel_size = np.mean(np.diff(model_dispersions[model_aperture_index]))
-
-            if mean_model_pixel_size > mean_observed_pixel_size:
-                raise ValueError("the mean model pixel size in the {aperture} aperture is larger than the mean"
-                    " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
-                    .format(
-                        aperture=model_apertures[model_aperture_index],
-                        wl_start=np.min(observed_dispersions[i]),
-                        wl_end=np.max(observed_dispersions[i])))
+        if mean_model_pixel_size > mean_observed_pixel_size:
+            raise ValueError("the mean model pixel size in the {aperture} aperture is larger than the mean"
+                " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
+                .format(
+                    aperture=aperture,
+                    wl_start=np.min(observed_dispersion),
+                    wl_end=np.max(observed_dispersion)))
 
     # Initialise priors
     parameters = []
     parameter_names = []
 
+    optimisation_args = (parameter_names, observed_spectra, named_aperture_mapping, models, configuration)
     # Get aperture mapping
     #chi_squared(parameters, parameter_names, spectra, aperture_mapping, models, configuration)
 
@@ -93,7 +82,7 @@ def log_likelihood(parameters, parameter_names, spectra, aperture_mapping,
     raise NotImplementedError
 
 
-def chi_squared(parameters, parameter_names, spectra, aperture_mapping, \
+def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping, \
     models, configuration):
     """Calculates the \chi^2 difference between observed and
     synthetic spectra.
@@ -102,14 +91,10 @@ def chi_squared(parameters, parameter_names, spectra, aperture_mapping, \
         The free parameters to solve for. These are referenced in 
         `parameter_names`.
 
-    spectra : list of `Spectrum1D` objects
+    observed_spectra : list of `Spectrum1D` objects
         The observed spectra.
     """
 
-    aperture_mapping = {
-        'blue': 0,
-        'red': 1,
-        }
 
     assert len(parameters) == len(parameter_names)
 
