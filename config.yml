@@ -5,10 +5,10 @@ models:
   flux_filenames:
     blue:
       folder: '/Users/andycasey/thesis/old.scope/standards/UVES580/GES_4600_alfa+0.4_fits/'
-      re_match: '[s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.-]+).+fits$'
+      re_match: '[s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.+-]+).+fits$'
     red: 
       folder: '/Users/andycasey/thesis/old.scope/standards/HR21/GES_HR21_alfa+0.4_fits/'
-      re_match: '[s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.-]+).+fits$'
+      re_match: '[s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.+-]+).+fits$'
 interpolation: linear
 parallelism: 32
 verbosity: debug
@@ -46,9 +46,9 @@ priors:
   normalise_observed.blue.upper_sigma_clip: 5.0
   normalise_observed.red.lower_sigma_clip: 1.2
   normalise_observed.red.upper_sigma_clip: 5.0
-  teff: 'sampleGrid 3'
-  logg: 'sampleGrid 3'
-  feh: 'sampleGrid 3'
+  teff: 4500
+  logg: 2.0
+  feh: -1.0
   smooth_model_flux.blue.kernel: 0.10
   smooth_model_flux.red.kernel: 0.10
   doppler_correct.blue.allow_shift: 0

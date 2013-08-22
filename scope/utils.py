@@ -32,16 +32,16 @@ def find_spectral_overlap(dispersion_maps, interval_resolution=1):
     None if no overlap is found, otherwise the wavelength near the overlap is returned.
     """
 
-    all_min = map(np.min, dispersion_maps)
-    all_max = map(np.max, dispersion_maps)
+    all_min = np.min(map(np.min, dispersion_maps))
+    all_max = np.max(map(np.max, dispersion_maps))
 
-    interval_tree_disp = np.arange(all_min, all_max + interval_tree_resolution, interval_tree_resolution)
+    interval_tree_disp = np.arange(all_min, all_max + interval_resolution, interval_resolution)
     interval_tree_flux = np.zeros(len(interval_tree_disp))
 
     for dispersion_map in dispersion_maps:
 
         wlstart, wlend = np.min(dispersion_map), np.max(dispersion_map)
-        idx = np.searchsorted(interval_tree_disp, [wlstart, wlend + interval_tree_resolution])
+        idx = np.searchsorted(interval_tree_disp, [wlstart, wlend + interval_resolution])
 
         interval_tree_flux[idx[0]:idx[1]] += 1
 

@@ -17,6 +17,8 @@ from glob import glob
 import numpy as np
 import pyfits
 
+from scipy import interpolate
+
 __all__ = ['Models', 'load_model_data']
 
 class Models(object):
@@ -214,11 +216,17 @@ class Models(object):
             for i, index in enumerate(neighbour_indices):
                 beam_flux[i, :] = load_model_data(self.flux_filenames[beam][index])
             
-            interpolated_flux[beam] = scipy.interpolate.griddata(
-                self.grid_points[neighbour_indices],
-                beam_flux,
-                [point],
-                **kwargs).flatten()
+            try:
+                interpolated_flux[beam] = interpolate.griddata(
+                    self.grid_points[neighbour_indices],
+                    beam_flux,
+                    [point],
+                    **kwargs).flatten()
+
+            except:
+                # Return all nans!
+                continue
+
 
         return interpolated_flux
 
@@ -241,7 +249,7 @@ class Models(object):
             observed_wlmin = np.min(observed_dispersion)
             observed_wlmax = np.max(observed_dispersion)
 
-            for model_aperture, model_dispersion in enumerate(self.dispersion.iteritems()):
+            for model_aperture, model_dispersion in self.dispersion.iteritems():
 
                 model_wlmin = np.min(model_dispersion)
                 model_wlmax = np.max(model_dispersion)

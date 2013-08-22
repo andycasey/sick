@@ -12,13 +12,17 @@ import os
 
 # Third-party
 import numpy as np
+import numpy.random as random
+import scipy.optimize
 
 # Module
 import config
 import models
 import utils
+import specutils
 
-def analyse(observed_spectra, configuration_filename):
+
+def analyze(observed_spectra, configuration_filename):
     """Analyse some spectra of a given star according to the configuration
     provided.
 
@@ -41,17 +45,17 @@ def analyse(observed_spectra, configuration_filename):
     # Load the configuration
     configuration = config.load(configuration_filename)
 
-    # Load our models
-    models = models.Models(configuration)
+    # Load our model
+    model = models.Models(configuration)
 
     # Get the aperture mapping from observed spectra to model spectra
-    aperture_mapping = models.map_apertures(observed_dispersions)
+    aperture_mapping = model.map_apertures(observed_dispersions)
 
     # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
     for aperture, observed_dispersion in zip(aperture_mapping, observed_dispersions):
 
         mean_observed_pixel_size = np.mean(np.diff(observed_dispersion))
-        mean_model_pixel_size = np.mean(np.diff(models.dispersion[aperture]))
+        mean_model_pixel_size = np.mean(np.diff(model.dispersion[aperture]))
 
         if mean_model_pixel_size > mean_observed_pixel_size:
             raise ValueError("the mean model pixel size in the {aperture} aperture is larger than the mean"
@@ -61,29 +65,165 @@ def analyse(observed_spectra, configuration_filename):
                     wl_start=np.min(observed_dispersion),
                     wl_end=np.max(observed_dispersion)))
 
+    # Do we have uncertainties in our spectra? If not we should estimate it.
+    for spectrum in observed_spectra:
+        if spectrum.uncertainty is None:
+            spectrum.uncertainty = spectrum.flux**(-0.5)
+
     # Initialise priors
-    parameters = []
     parameter_names = []
+    parameters_initial = []
+    
+    for parameter_name, parameter in configuration['priors'].iteritems():
+        parameter_names.append(parameter_name)
 
-    optimisation_args = (parameter_names, observed_spectra, named_aperture_mapping, models, configuration)
+        try:
+            float(parameter)
+
+        except:
+            # We probably need to evaluate this.
+            if parameter == "uniform":
+                # Only works on stellar parameter values.
+
+                index = model.colnames.index(parameter_name)
+                possible_points = model.grid_points[:, index]
+
+                parameters_initial.append(random.uniform(np.min(possible_points), np.max(possible_points)))
+
+            else:
+                raise TypeError("prior type not valid for {parameter_name}".format(parameter_name=parameter_name))
+
+        else:
+            parameters_initial.append(parameter)
+
+    optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration)
+
     # Get aperture mapping
-    #chi_squared(parameters, parameter_names, spectra, aperture_mapping, models, configuration)
+    #chi_squared(parameters_initial, parameter_names, spectra, aperture_mapping, models, configuration)
+    print(parameter_names)
+    parameters_final = scipy.optimize.fmin(chi_squared, parameters_initial, args=optimisation_args, xtol=0.01, ftol=0.01)
+
+    results = {}
+    for parameter_name, parameter_final in zip(parameter_names, parameters_final):
+        results[parameter_name] = parameter_final
+
+    return results
 
 
 
+def prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration):
+    """Interpolates the flux for a set of stellar parameters and prepares the model spectra
+    for comparison (i.e. smoothing and resampling).
+
+    Inputs
+    ------
+    parameters : list of floats
+        The input parameters that were provdided to the `chi_squared` function.
+
+    parameter_names : list of str, should be same length as `parameters`.
+        The names for the input parameters.
+
+    observed_spectra : list of `Spectrum1D` objects
+        The observed spectra.
+
+    aperture_mapping : list of `str`, same length as `observed_spectra`
+        The names of the model apertures associated to each observed spectrum.
+
+    model : `models.Model` class
+        The model class containing the reference to the grid of model atmospheres.
+
+    configuration : `dict`
+        The configuration class.
+    """
+
+    # Build the grid point
+    stellar_parameters = model.colnames
+    grid_point = [parameters[parameter_names.index(stellar_parameter)] for stellar_parameter in stellar_parameters]
+
+    # Get interpolated flux
+    synthetic_fluxes = model.interpolate_flux(grid_point)
+
+    if synthetic_fluxes == {}: return None
+
+    # Create spectra
+    model_spectra = {}
+    for aperture, synthetic_flux in synthetic_fluxes.iteritems():
+        model_spectra[aperture] = specutils.Spectrum1D(
+                                          disp=model.dispersion[aperture],
+                                          flux=synthetic_flux)
+
+    # Any synthetic smoothing to apply?
+    for aperture in aperture_mapping:
+        key = 'smooth_model_flux.{aperture}.kernel'.format(aperture=aperture)
+
+        # Is the smoothing a free parameter?
+        if key in parameter_names:
+            index = parameter_names.index(key)
+            model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(parameters[index])
+
+        elif configuration['smooth_model_flux'][aperture]['perform']:
+            # It's a fixed value.
+            model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(configuration['smooth_model_flux'][aperture]['kernel'])
+
+    # Interpolate synthetic to observed dispersion map
+    for aperture, observed_spectrum in zip(aperture_mapping, observed_spectra):
+        model_spectra[aperture] = model_spectra[aperture].interpolate(observed_spectrum.disp)
+
+    return model_spectra
 
 
+def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, configuration):
+    """Prepares the observed spectra for comparison against model spectra by performing
+    normalisation and doppler shifts to the spectra.
 
+    Inputs
+    ------
+    parameters : list of floats
+        The input parameters that were provdided to the `chi_squared` function.
 
-def log_likelihood(parameters, parameter_names, spectra, aperture_mapping,
-    models, configuration, **kwargs):
-    """Calculates the log likelihood that a model fits the data."""
+    parameter_names : list of str, should be same length as `parameters`.
+        The names for the input parameters.
 
-    raise NotImplementedError
+    observed_spectra : list of `Spectrum1D` objects
+        The observed spectra.
+
+    aperture_mapping : list of `str`, same length as `observed_spectra`
+        The names of the model apertures associated to each observed spectrum.
+
+    configuration : `dict`
+        The configuration class.
+    """
+
+    # Any normalisation to perform?
+    for aperture, spectrum in zip(aperture_mapping, observed_spectra):
+        if not configuration['normalise_observed'][aperture]['perform']: continue
+
+        normalisation_kwargs = {}
+        normalisation_kwargs.update(configuration['normalise_observed'][aperture])
+
+        # Now update these keywords with priors
+        for parameter_name, parameter in zip(parameter_names, parameters):
+            if parameter_name.startswith('normalise_observed.{aperture}.'.format(aperture=aperture)):
+
+                parameter_name_sliced = '.'.join(parameter_name.split('.')[2:])
+                normalisation_kwargs[parameter_name_sliced] = parameter
+
+        # Normalise the spectrum
+        spectrum = spectrum.normalise(**normalisation_kwargs)
+
+    # Any doppler shift?
+    for aperture, spectrum in zip(aperture_mapping, observed_spectra):
+        key = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
+
+        if key in parameter_names:
+            index = parameter_names.index(key)
+            spectrum = spectrum.doppler_shift(parameters[index])
+
+    return observed_spectra
 
 
 def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping, \
-    models, configuration):
+    model, configuration, fail_value=999):
     """Calculates the \chi^2 difference between observed and
     synthetic spectra.
 
@@ -95,54 +235,36 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
         The observed spectra.
     """
 
-
     assert len(parameters) == len(parameter_names)
 
-    # Any normalisation to perform?
-    if 'normalise_observed' in configuration['priors']:
-        for beam in configuration['priors']['normalise_observed']:
+    # Prepare the observed spectra
+    observed_spectra = prepare_observed_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, configuration)
 
-            beam_index = aperture_mapping[beam]
+    # Get the synthetic spectra
+    model_spectra = prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration)
 
-            normalisation_kwargs = {}
-            normalisation_kwargs.update(configuration['normalise_observed'][beam])
-
-            # Now update any of those from priors
-            normalisation_parameters = {}
-            for parameter_name, parameter_value in zip(parameter_names, parameters):
-                if parameter_name.startswith('normalised_observed.{beam}.'.format(beam=beam)):
-                    normalisation_parameters[parameter_name.split('.')[2]] = parameter_value
-
-            normalisation_kwargs.update(normalisation_parameters)
-
-            spectra[beam_index] = spectra[beam_index].normalise(**normalisation_kwargs)
-
-    # Any doppler shift?
-
-    # Get interpolated flux
-    # Build grid_point
-    grid_point = []
-    #models.grid_points.dtypes
-
-    synthetic_spectra = models.interpolate_flux(grid_point)
-
-    # Any synthetic smoothing?
-    if 'smooth_model_flux' in configuration['priors']:
-        for beam in configuration['priors']['smooth_model_flux']:
-
-            index = parameter_names.index('smooth_model_flux.{beam}.kernel'.format(beam=beam))
-            kernel = parameters[index]
-
-            synthetic_spectra[beam] = synthetic_spectra[beam].gaussian_smooth(kernel)
-
-    # Interpolate synthetic to observed dispersion map
-    for beam in synthetic_spectra.keys():
-        beam_index = aperture_mapping[beam]
-
-        synthetic_spectra[beam] = synthetic_spectra[beam].interpolate(spectra[beam_index].disp)
+    if model_spectra is None:
+        return fail_value
 
     # Calculate chi^2 difference
+    chi_sq_i = {}
+    for i, (aperture, observed_spectrum) in enumerate(zip(aperture_mapping, observed_spectra)):
 
+        chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2)/observed_spectrum.uncertainty
+
+        # Pearson's \chi^2:
+        #chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2)/model_spectra[aperture].flux
+
+        # Add only finite values
+        finite_indices = np.isfinite(chi_sq)
+        chi_sq_i[aperture] = chi_sq[finite_indices]
+
+    num_pixels = sum(map(len, chi_sq_i.values()))
+    total_chi_sq = np.sum(map(np.sum, chi_sq_i.values()))
+
+    num_dof = num_pixels - len(parameters) - 1
     # Any masks?
 
     # Return likelihood
+    print((parameters, total_chi_sq, num_dof, total_chi_sq/num_dof))
+    return total_chi_sq/num_dof
