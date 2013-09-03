@@ -204,7 +204,7 @@ def verify_normalisation(configuration):
     apertures = get_aperture_names(configuration)
     check_aperture_names(configuration, 'normalise_observed')
     
-    required_aperture_normalisation_settings = ('order', 'knot_spacing', 'upper_sigma_clip', 'lower_sigma_clip')
+    required_aperture_normalisation_settings = ('order', 'knot_spacing', 'upper_clip', 'lower_clip')
 
     # Verify the settings for each aperture.
     priors_to_expect = []
@@ -240,7 +240,7 @@ def verify_normalisation(configuration):
                     raise TypeError("configuration setting 'normalise_observed.{aperture}.{key}' is expected "
                         "to be an integer-type".format(aperture=aperture, key=key))
 
-            elif key in ('knot_spacing', 'lower_sigma_clip', 'upper_sigma_clip'):
+            elif key in ('knot_spacing', 'lower_clip', 'upper_clip'):
                 if not isinstance(value, (int, )):
                     raise TypeError("configuration setting 'normalise_observed.{aperture}.{key}' is expected "
                         "to be a float-type".format(aperture=aperture, key=key))

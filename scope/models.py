@@ -108,7 +108,7 @@ class Models(object):
     def __repr__(self):
         num_apertures = len(self.dispersion)
         num_models = len(self.grid_points) * num_apertures
-        num_pixels = np.array([len(dispersion) * num_models for dispersion in self.dispersion.values()]) * 10e-9
+        num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
         return 'Models({num_models} models, {num_apertures} apertures: "{apertures}", {num_parameters} parameters: "{parameters}", ~{num_pixels} pixels)'.format(
             num_models=num_models,
@@ -365,7 +365,6 @@ class Models(object):
             except:
                 # Return all nans!
                 continue
-
 
         return interpolated_flux
 

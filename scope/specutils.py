@@ -15,6 +15,7 @@ import pyfits
 import numpy as np
 
 from scipy import interpolate, ndimage, polyfit, poly1d
+from scipy.optimize import leastsq
 
 __all__ = ['Spectrum1D']
 
@@ -255,7 +256,9 @@ class Spectrum1D(object):
             The FWHM of the Gaussian kernel to smooth with.
         """
 
-        profile_sigma = fwhm / (2 * (2*np.log(2))**0.5)
+
+
+        profile_sigma = abs(fwhm) / (2 * (2*np.log(2))**0.5)
         
         # The requested FWHM is in Angstroms, but the dispersion between each
         # pixel is likely less than an Angstrom, so we must calculate the true
@@ -445,7 +448,7 @@ class Spectrum1D(object):
         return [measured_vrad, measured_verr]
 
 
-    def fit_continuum(self, knot_spacing=200, sigma_clip=(1.0, 0.2), \
+    def fit_continuum(self, knot_spacing=200, lower_clip=1.0, upper_clip=0.20, \
                       max_iterations=3, order=3, exclude=None, include=None, \
                       additional_points=None, function='spline', scale=1.0, **kwargs):
         """Fits the continuum for a given `Spectrum1D` spectrum.
@@ -456,8 +459,11 @@ class Spectrum1D(object):
             The knot spacing for the continuum spline function in Angstroms. Optional.
             If not provided then the knot spacing will be determined automatically.
         
-        sigma_clip : a tuple of two floats, optional
-            This is the lower and upper sigma clipping level respectively. Optional.
+        lower_clip : float, optional
+            This is the lower sigma clipping level. Optional.
+
+        upper_clip : float, optional
+            This is the upper sigma clipping level. Optional.
             
         max_iterations : int, optional
             Maximum number of spline-fitting operations.
@@ -487,6 +493,8 @@ class Spectrum1D(object):
             A list of wavelength regions to always include when determining the
             continuum.
         """
+
+        logging.debug("fit_continuum({self}, {knot_spacing}, {sigma_clip}, {iter}, {order}, {scale})".format(self=self,knot_spacing=knot_spacing,sigma_clip=(lower_clip,upper_clip), iter=max_iterations,order=order,scale=scale))
         
         exclusions = []
         continuum_indices = range(len(self.flux))
@@ -605,8 +613,8 @@ class Spectrum1D(object):
             sigma_difference = difference / np.std(difference)
 
             # Clip 
-            upper_exclude = np.where(sigma_difference > sigma_clip[1])[0]
-            lower_exclude = np.where(sigma_difference < -sigma_clip[0])[0]
+            upper_exclude = np.where(sigma_difference > upper_clip)[0]
+            lower_exclude = np.where(sigma_difference < -lower_clip)[0]
             
             exclude_indices = list(upper_exclude)
             exclude_indices.extend(lower_exclude)
@@ -644,4 +652,12 @@ class Spectrum1D(object):
         # Apply flux scaling
         continuum *= scale
 
-        return self.__class__(disp=self.disp[left_index:right_index], flux=continuum[left_index:right_index], headers=self.headers)
+        normalised = self.__class__(
+            disp=self.disp[left_index:right_index],
+            flux=(self.flux/continuum)[left_index:right_index],
+            uncertainty=self.uncertainty[left_index:right_index] if self.uncertainty is not None else None,
+            headers=self.headers)
+
+        continuum = self.__class__(disp=self.disp[left_index:right_index], flux=continuum[left_index:right_index])
+
+        return (normalised, continuum)
