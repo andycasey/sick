@@ -22,7 +22,7 @@ import utils
 import specutils
 
 
-def analyze(observed_spectra, configuration_filename):
+def analyze(observed_spectra, configuration_filename, callback=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
 
@@ -33,6 +33,9 @@ def analyze(observed_spectra, configuration_filename):
 
     configuration_filename : str
         The configuration filename for this analysis.
+
+    callback : function
+        A callback to perform after every model comparison.
     """
 
     # Check observed arms do not overlap
@@ -96,12 +99,13 @@ def analyze(observed_spectra, configuration_filename):
         else:
             parameters_initial.append(parameter)
 
-    optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration)
+    fail_value = 999
+    optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)
 
     # Get aperture mapping
     #chi_squared(parameters_initial, parameter_names, spectra, aperture_mapping, models, configuration)
     print(parameter_names)
-    parameters_final = scipy.optimize.fmin(chi_squared, parameters_initial, args=optimisation_args, xtol=0.01, ftol=0.01)
+    parameters_final = scipy.optimize.fmin_powell(chi_squared, parameters_initial, args=optimisation_args, xtol=0.01, ftol=0.01)
 
     results = {}
     for parameter_name, parameter_final in zip(parameter_names, parameters_final):
@@ -141,9 +145,14 @@ def prepare_model_spectra(parameters, parameter_names, observed_spectra, apertur
     grid_point = [parameters[parameter_names.index(stellar_parameter)] for stellar_parameter in stellar_parameters]
 
     # Get interpolated flux
-    synthetic_fluxes = model.interpolate_flux(grid_point)
+    try:
+        synthetic_fluxes = model.interpolate_flux(grid_point)
+
+    except: return None
 
     if synthetic_fluxes == {}: return None
+    for aperture, flux in synthetic_fluxes.iteritems():
+        if np.all(~np.isfinite(flux)): return None
 
     # Create spectra
     model_spectra = {}
@@ -194,9 +203,14 @@ def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aper
         The configuration class.
     """
 
+    logging.debug("Preparing observed spectra for comparison")
+
     # Any normalisation to perform?
+    normalised_spectra = []
     for aperture, spectrum in zip(aperture_mapping, observed_spectra):
-        if not configuration['normalise_observed'][aperture]['perform']: continue
+        if not configuration['normalise_observed'][aperture]['perform']:
+            normalised_spectra.append(spectrum)
+            continue
 
         normalisation_kwargs = {}
         normalisation_kwargs.update(configuration['normalise_observed'][aperture])
@@ -209,21 +223,34 @@ def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aper
                 normalisation_kwargs[parameter_name_sliced] = parameter
 
         # Normalise the spectrum
-        spectrum = spectrum.normalise(**normalisation_kwargs)
+        logging.debug("Normalisation arguments for '{aperture}' aperture: {kwargs}"
+            .format(aperture=aperture, kwargs=normalisation_kwargs))
+
+        try:
+            normalised_spectrum, continuum = spectrum.fit_continuum(**normalisation_kwargs)
+
+        except:
+            return None
+
+        else:
+            normalised_spectra.append(normalised_spectrum)
+
+        logging.debug("Performed normalisation for aperture '{aperture}'".format(aperture=aperture))
+
 
     # Any doppler shift?
-    for aperture, spectrum in zip(aperture_mapping, observed_spectra):
+    for i, aperture in enumerate(aperture_mapping):
         key = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
 
         if key in parameter_names:
             index = parameter_names.index(key)
-            spectrum = spectrum.doppler_shift(parameters[index])
+            normalised_spectra[i] = normalised_spectra[i].doppler_shift(parameters[index])
 
-    return observed_spectra
+    return normalised_spectra
 
 
 def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping, \
-    model, configuration, fail_value=999):
+    model, configuration, fail_value=999, callback=None):
     """Calculates the \chi^2 difference between observed and
     synthetic spectra.
 
@@ -233,18 +260,23 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
 
     observed_spectra : list of `Spectrum1D` objects
         The observed spectra.
+
+    callback : function
+        A callback to apply after completing the comparison.
     """
 
     assert len(parameters) == len(parameter_names)
 
     # Prepare the observed spectra
     observed_spectra = prepare_observed_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, configuration)
+    if observed_spectra is None: return fail_value
 
     # Get the synthetic spectra
     model_spectra = prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration)
+    if model_spectra is None: return fail_value
 
-    if model_spectra is None:
-        return fail_value
+    logging.debug("model_spectra")
+    logging.debug(model_spectra['blue'].flux)
 
     # Calculate chi^2 difference
     chi_sq_i = {}
@@ -266,5 +298,17 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
     # Any masks?
 
     # Return likelihood
-    print((parameters, total_chi_sq, num_dof, total_chi_sq/num_dof))
-    return total_chi_sq/num_dof
+    logging.debug((parameters, total_chi_sq, num_dof, total_chi_sq/num_dof))
+
+    if callback is not None:
+        # Perform the callback function
+        callback(
+            total_chi_sq,
+            num_dof,
+            dict(zip(parameter_names, parameters)),
+            observed_spectra,
+            [model_spectra[aperture] for aperture in aperture_mapping]
+            )
+
+    logging.debug("total chi^2: {chi_sq}, ndof: {ndof}".format(chi_sq=total_chi_sq, ndof=num_dof))
+    return total_chi_sq

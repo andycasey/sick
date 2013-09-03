@@ -27,6 +27,9 @@ import config
 folder_path = os.path.abspath(os.path.dirname(__file__))
 environment = ['remote', 'localhost'][folder_path.startswith('/Users/andycasey/')]
 
+logging.basicConfig(level=logging.DEBUG)
+
+
 def test_assert():
     assert True
 
@@ -62,11 +65,60 @@ def test_sun():
     sun_red.uncertainty = [1/snr] * len(sun_red.disp)
 
     # Analyse the spectrum
-    results = analyze.analyze([sun_blue, sun_red], configuration_filename)
+    results = analyze.analyze([sun_blue, sun_red], configuration_filename, callback=lambda *x: print(("callback:", x)))
 
     # Check the results are good.
     for parameter, (value, error) in expected_results.iteritems():
         assert np.less_equal(abs(results[parameter] - value), error)
+
+    return results
+
+
+def test_aaomega():
+
+    if environment != 'localhost': return
+
+    import analyze
+    from specutils import Spectrum1D
+    import matplotlib.pyplot as plt
+
+    spectra = map(Spectrum1D.load, ['../data/NGC288_blue_8.fits', '../data/NGC288_red_8.fits'])
+    configuration_filename = os.path.join(folder_path, '../config.cached.yml')
+
+    def setup():
+        # Create figure
+        fig = plt.figure()
+
+        # Create axes
+        for i in xrange(len(spectra)):
+            ax = fig.add_subplot(len(spectra), 1, i + 1)
+            # One for model, and one for observed
+            ax.plot([], [])
+            ax.plot([], [])
+
+    # Setup axes
+    setup()
+
+    def callback(total_chi_sq, num_dof, parameters, observed_spectra, model_spectra):
+
+        fig = plt.gcf()
+        
+        for ax, observed_spectrum, model_spectrum in zip(fig.axes, observed_spectra, model_spectra):
+
+            xlims = [observed_spectrum.disp[0], observed_spectrum.disp[-1]]
+            ylims = [0, np.max(observed_spectrum.flux)]
+
+            ax.lines[0].set_data(np.array([observed_spectrum.disp, observed_spectrum.flux]))
+            ax.lines[1].set_data(np.array([model_spectrum.disp, model_spectrum.flux]))
+
+            ax.set_xlim(xlims)
+            ax.set_ylim(ylims)
+
+        plt.draw()
+        plt.pause(0.01)
+        
+
+    results = analyze.analyze(spectra, configuration_filename, callback=callback)
 
     return results
 
