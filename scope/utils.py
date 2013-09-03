@@ -16,10 +16,12 @@ import numpy as np
 __all__ = ['human_readable_digit', 'find_spectral_overlap']
 
 def human_readable_digit(number):
-    millnames =['', 'thousand', 'million', 'billion', 'trillion']
+    millnames = ['', 'thousand', 'million', 'billion', 'trillion']
     millidx = max(0, min(len(millnames)-1,
-                        int(np.floor(np.log10(abs(number))/3.0))))
-    return '{:.0f} {}'.format(n/10**(3*millidx), millnames[millidx])
+                      int(np.floor(np.log10(abs(number))/3.0))))
+    return '{digit:.1f} {multiple}'.format(
+        digit=number/10**(3*millidx),
+        multiple=millnames[millidx])
 
 def find_spectral_overlap(dispersion_maps, interval_resolution=1):
     """Checks whether the dispersion maps overlap or not.
