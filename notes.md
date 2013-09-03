@@ -1,13 +1,13 @@
 
 Checking spectra
 --------
-- [ ] Assume anything being given to ``scope`` at the moment is all part of the same star.
-- [ ] Check wavelengths of spectra and associate a standard spectrum to each observed spectrum
-- [ ] Check observed wavelengths dont overlap
+- [x] Assume anything being given to ``scope`` at the moment is all part of the same star.
+- [x] Check wavelengths of spectra and associate a standard spectrum to each observed spectrum
+- [x] Check observed wavelengths dont overlap
 - [x] Check standard arms don't overlap
-- [ ] Check coverage: Do standard arms cover full extend of observed spectra
-- [ ] Check observed pixel size is larger than synthetic arms in each
-- [ ] Put everything in blue -> red order
+- [x] Check coverage: Do standard arms cover full extend of observed spectra
+- [x] Check observed pixel size is larger than synthetic arms in each
+- [x] Put everything in blue -> red order
 
 Checking standards
 ------------------
