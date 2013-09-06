@@ -8,5 +8,9 @@ __author__ = "Andy Casey <acasey@mso.anu.edu.au>"
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
+# Module imports
 import config
 import models
+import specutils
+import visualise
+from analyze import *

@@ -21,6 +21,7 @@ import models
 import utils
 import specutils
 
+__all__ = ['analyze', 'prepare_model_spectra', 'prepare_observed_spectra', 'chi_squared']
 
 def analyze(observed_spectra, configuration_filename, callback=None):
     """Analyse some spectra of a given star according to the configuration
@@ -99,17 +100,28 @@ def analyze(observed_spectra, configuration_filename, callback=None):
         else:
             parameters_initial.append(parameter)
 
+    # Measure the radial velocity if required
+    if configuration['doppler_correct']['perform_initial_measurement']:
+
+        velocities = [spectrum.cross_correlate(specutils.Spectrum1D.load(configuration['doppler_correct']['initial_template']),
+            [spectrum.disp[0], spectrum.disp[-1]]) for spectrum in observed_spectra]
+    
+        logging.debug("velocities")
+        logging.debug(velocities)
+
+        # Are velocities free parameters?
+        for aperture, velocity in zip(aperture_mapping, velocities):
+            if configuration['doppler_correct'][aperture]['allow_shift']:
+
+                # Update the configuration with this velocity measurement
+                configuration['priors']['doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)] = velocity
+
+
     fail_value = 999
     optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)
-
-    # Get aperture mapping
-    #chi_squared(parameters_initial, parameter_names, spectra, aperture_mapping, models, configuration)
-    print(parameter_names)
     parameters_final = scipy.optimize.fmin_powell(chi_squared, parameters_initial, args=optimisation_args, xtol=0.01, ftol=0.01)
 
-    results = {}
-    for parameter_name, parameter_final in zip(parameter_names, parameters_final):
-        results[parameter_name] = parameter_final
+    results = dict(zip(parameter_names, parameters_final))
 
     return results
 
@@ -274,9 +286,6 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
     # Get the synthetic spectra
     model_spectra = prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration)
     if model_spectra is None: return fail_value
-
-    logging.debug("model_spectra")
-    logging.debug(model_spectra['blue'].flux)
 
     # Calculate chi^2 difference
     chi_sq_i = {}
