@@ -88,27 +88,33 @@ def verify_doppler(configuration):
     apertures = get_aperture_names(configuration)
     check_aperture_names(configuration, 'doppler_correct')
 
-    if not 'perform_initial_measurement' in configuration['doppler_correct']:
-        raise KeyError("configuration setting 'doppler_correct.{aperture}.perform_initial_measurement' not found"
-                .format(aperture=aperture))
-
-    if configuration['doppler_correct']['perform_initial_measurement']:
-
-        if not 'initial_template' in configuration['doppler_correct']:
-            raise KeyError("configuration setting 'doppler_correct.initial_template' not found")
-
-        elif not os.path.exists(configuration['doppler_correct']['initial_template']):
-            raise ValueError("initial template for doppler correct (doppler_correct.initial_template = {filename})"
-                " does not exist".format(filename=configuration['doppler_correct']['initial_template']))
-
     priors_to_expect = []
     for aperture in apertures:
         if 'allow_shift' not in configuration['doppler_correct'][aperture]:
             raise KeyError("configuration setting 'doppler_correct.{aperture}.allow_shift' not found"
                 .format(aperture=aperture))
 
+        # Radial velocity as a prior?
         if configuration['doppler_correct'][aperture]['allow_shift']:
             priors_to_expect.append('doppler_correct.{aperture}.allow_shift'.format(aperture=aperture))
+
+        # Should we be measuring radial velocity?
+        if 'measure' in configuration['doppler_correct'][aperture] \
+        and configuration['doppler_correct'][aperture]['measure']:
+
+            # Check the template and wavelength range
+            if 'template' not in configuration['doppler_correct'][aperture]:
+                raise KeyError("configuration setting 'doppler_correct.{aperture}.template' not found"
+                    ", and is needed because doppler_correct.{aperture}.measure is true".format(aperture=aperture))
+
+            if 'wavelength_region' not in configuration['doppler_correct'][aperture]:
+                raise KeyError("configuration setting 'doppler_correct.{aperture}.wavelength_region' not found"
+                    ", and is needed becasue doppler_correct.{aperture}.measure is true".format(aperture=aperture))
+
+            # Check the template filename exists
+            if not os.path.exists(configuration['doppler_correct'][aperture]['template']):
+                raise IOError("doppler correct template filename for {aperture} arm does not exist: {filename}"
+                    .format(aperture=aperture, filename=configuration['doppler_correct'][aperture]['template']))
 
     return priors_to_expect
 

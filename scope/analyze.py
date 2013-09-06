@@ -23,6 +23,9 @@ import specutils
 
 __all__ = ['analyze', 'prepare_model_spectra', 'prepare_observed_spectra', 'chi_squared']
 
+class CallbackClass(object):
+    pass
+
 def analyze(observed_spectra, configuration_filename, callback=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
@@ -101,30 +104,48 @@ def analyze(observed_spectra, configuration_filename, callback=None):
             parameters_initial.append(parameter)
 
     # Measure the radial velocity if required
-    if configuration['doppler_correct']['perform_initial_measurement']:
+    velocities = {}
+    apertures_without_measurements = []
+    for aperture, spectrum in zip(aperture_mapping, observed_spectra):
 
-        velocities = [spectrum.cross_correlate(specutils.Spectrum1D.load(configuration['doppler_correct']['initial_template']),
-            [spectrum.disp[0], spectrum.disp[-1]]) for spectrum in observed_spectra]
-    
-        logging.debug("velocities")
-        logging.debug(velocities)
+        # Should we be measuring velocity for this aperture?
+        if 'measure' in configuration['doppler_correct'][aperture] \
+        and configuration['doppler_correct'][aperture]['measure']:
+            velocity = spectrum.cross_correlate(
+                specutils.Spectrum1D.load(configuration['doppler_correct'][aperture]['template']),
+                configuration['doppler_correct'][aperture]['wavelength_region']
+                )
+            velocities[aperture] = velocity
 
-        # Are velocities free parameters?
-        for aperture, velocity in zip(aperture_mapping, velocities):
             if configuration['doppler_correct'][aperture]['allow_shift']:
-
-                # Update the configuration with this velocity measurement
                 configuration['priors']['doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)] = velocity
 
+        elif configuration['doppler_correct'][aperture]['allow_shift']:
+            apertures_without_measurements.append(aperture)
+
+    if len(velocities) > 0:
+        mean_velocity = np.mean(velocities.values())
+
+        for aperture in apertures_without_measurements:
+            configuration['priors']['doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)] = mean_velocity
+
+    elif len(velocities) > 0:
+        logging.warn("There are apertures that allow a velocity shift but no mean velocity could be determined"
+            " from other apertures.")
 
     fail_value = 999
     optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)
+    
     parameters_final = scipy.optimize.fmin_powell(chi_squared, parameters_initial, args=optimisation_args, xtol=0.01, ftol=0.01)
 
-    results = dict(zip(parameter_names, parameters_final))
-
-    return results
-
+    # We will need to sample the chi_squared function again with a callback to save
+    # the results
+    output = CallbackClass()
+    final_callback = lambda *x: setattr(output, 'data', x)
+    chi_squared(parameters_final, parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, final_callback)
+    chi_sq, num_dof, posteriors, observed_spectra, model_spectra = output.data
+    
+    return (chi_sq, num_dof, posteriors, observed_spectra, model_spectra)
 
 
 def prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration):
