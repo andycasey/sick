@@ -17,17 +17,17 @@ normalise_observed:
     perform: yes
     order: 3
     knot_spacing: 20
-    lower_sigma_clip: free
-    upper_sigma_clip: free
+    lower_clip: free
+    upper_clip: free
   red:
     perform: true
     order: 3
     knot_spacing: 20
-    lower_sigma_clip: free
-    upper_sigma_clip: free
+    lower_clip: free
+    upper_clip: free
 doppler_correct:
   perform_initial_measurement: no
-  initial_template: standards/template.fits
+  initial_template: data/sun.ms.fits
   blue:
     allow_shift: true
   red:
@@ -42,10 +42,10 @@ smooth_model_flux:
     mode: gaussian
     kernel: free
 priors:
-  normalise_observed.blue.lower_sigma_clip: 1.2
-  normalise_observed.blue.upper_sigma_clip: 5.0
-  normalise_observed.red.lower_sigma_clip: 1.2
-  normalise_observed.red.upper_sigma_clip: 5.0
+  normalise_observed.blue.lower_clip: 1.2
+  normalise_observed.blue.upper_clip: 5.0
+  normalise_observed.red.lower_clip: 1.2
+  normalise_observed.red.upper_clip: 5.0
   teff: 4500
   logg: 2.0
   feh: -1.0
@@ -53,3 +53,12 @@ priors:
   smooth_model_flux.red.kernel: 0.10
   doppler_correct.blue.allow_shift: 0
   doppler_correct.red.allow_shift: 0
+pre-cache:
+  blue:
+    kernel: 0.10
+    dispersion_filename: /Users/andycasey/thesis/old.scope/standards/UVES580_aao_wlmap.txt
+    oversample: true
+  red:
+    kernel: 0.10
+    dispersion_filename: /Users/andycasey/thesis/old.scope/standards/HR21_aao_wlmap.txt
+    oversample: true

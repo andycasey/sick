@@ -20,18 +20,15 @@ import scipy
 import yaml
 
 from numpy.random import normal
+from time import time
 
 # Module imports
-import config
+from .. import config
 
-folder_path = os.path.abspath(os.path.dirname(__file__))
-environment = ['remote', 'localhost'][folder_path.startswith('/Users/andycasey/')]
+scope_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+environment = ['remote', 'localhost'][scope_path.startswith('/Users/andycasey/')]
 
 logging.basicConfig(level=logging.DEBUG)
-
-
-def test_assert():
-    assert True
 
 
 def test_sun():
@@ -39,8 +36,8 @@ def test_sun():
     # Only run this test on localhost
     if environment != 'localhost': return
 
-    import analyze
-    from specutils import Spectrum1D
+    from .. import analyze
+    from ..specutils import Spectrum1D
 
     expected_results = {
         # Parameter: (Expected, Acceptable error)
@@ -49,8 +46,8 @@ def test_sun():
         'feh':  (0.0, 0.2)
     }
 
-    spectrum_filename = os.path.join(folder_path, '../data/sun.ms.fits')
-    configuration_filename = os.path.join(folder_path, '../data/sun.yml')
+    spectrum_filename = os.path.join(scope_path, 'data/sun.ms.fits')
+    configuration_filename = os.path.join(scope_path, 'data/sun.yml')
 
     sun = Spectrum1D.load(spectrum_filename)
     
@@ -78,12 +75,12 @@ def test_aaomega():
 
     if environment != 'localhost': return
 
-    import analyze
-    from specutils import Spectrum1D
+    from .. import analyze
+    from ..specutils import Spectrum1D
     import matplotlib.pyplot as plt
 
-    spectra = map(Spectrum1D.load, ['../data/NGC288_blue_8.fits', '../data/NGC288_red_8.fits'])
-    configuration_filename = os.path.join(folder_path, '../config.cached.yml')
+    spectra = map(Spectrum1D.load, ['data/NGC288_blue_90.fits', 'data/NGC288_red_90.fits'])
+    configuration_filename = os.path.join(scope_path, 'config.cached.yml')
 
     def setup():
         # Create figure
@@ -93,8 +90,8 @@ def test_aaomega():
         for i in xrange(len(spectra)):
             ax = fig.add_subplot(len(spectra), 1, i + 1)
             # One for model, and one for observed
-            ax.plot([], [])
-            ax.plot([], [])
+            ax.plot([], [], 'k', zorder=5)
+            ax.plot([], [], 'b', zorder=1)
 
     # Setup axes
     setup()
@@ -114,6 +111,8 @@ def test_aaomega():
             ax.set_xlim(xlims)
             ax.set_ylim(ylims)
 
+        fig.axes[0].set_title('{:.0f}'.format(time()))
+
         plt.draw()
         plt.pause(0.01)
         
@@ -126,7 +125,7 @@ def test_aaomega():
 def test_default_configuration():
     """Verifies that the default configuration file is valid."""
     
-    configuration = config.load(os.path.join(folder_path, '../config.yml'))
+    configuration = config.load(os.path.join(scope_path, 'config.yml'))
 
     # Only verify the models if we are on localhost
     if environment == 'localhost':
@@ -145,4 +144,3 @@ def test_default_configuration():
 
         # Check the doppler corrections
         doppler_priors = config.verify_doppler(configuration)
-

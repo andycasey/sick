@@ -613,8 +613,8 @@ class Spectrum1D(object):
             sigma_difference = difference / np.std(difference)
 
             # Clip 
-            upper_exclude = np.where(sigma_difference > upper_clip)[0]
-            lower_exclude = np.where(sigma_difference < -lower_clip)[0]
+            upper_exclude = np.where(sigma_difference > abs(upper_clip))[0]
+            lower_exclude = np.where(sigma_difference < -abs(lower_clip))[0]
             
             exclude_indices = list(upper_exclude)
             exclude_indices.extend(lower_exclude)
