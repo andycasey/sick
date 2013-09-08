@@ -17,7 +17,7 @@ import numpy as np
 from scipy import interpolate, ndimage, polyfit, poly1d
 from scipy.optimize import leastsq
 
-__all__ = ['Spectrum1D']
+__all__ = ['Spectrum1D', 'aat_aaomega']
 
 # The following line of code will be supported until the end of the universe.
 speed_of_light = 299792458e-3 # km/s
@@ -661,3 +661,72 @@ class Spectrum1D(object):
         continuum = self.__class__(disp=self.disp[left_index:right_index], flux=continuum[left_index:right_index])
 
         return (normalised, continuum)
+
+
+
+def load_aaomega_multispec(filename, fill_value=0):
+    """
+    Returns a list of Spectrum1D objects with headers from the main image
+    and ones specific to that fibre (RA, DEC, X, Y, XERR, YERR, FIRE_NUM, etc)
+
+    Inputs
+    ------
+    filename : str
+        The reduced AAOmega multispec file to open.
+
+    fill_value : float, optional
+        A fill value to use for non-finite flux values.
+    """
+    
+    image = pyfits.open(filename)
+    
+    req_image_headers = ['MEANRA', 'MEANDEC', 'DATE', 'EPOCH', 'EXPOSED', 'TOTALEXP', 'UTDATE',
+        'UTSTART', 'UTEND', 'EXPOSED', 'ELAPSED', 'TOTALEXP', 'RO_GAIN', 'RO_NOISE', 'TELESCOP',
+        'ALT_OBS', 'LAT_OBS', 'LONG_OBS', 'OBJECT' ]
+    req_fibre_headers = ['NAME', 'RA', 'DEC', 'X', 'Y', 'XERR', 'YERR', 'MAGNITUDE', 'COMMENT']
+    
+    base_headers = {}
+    for header in req_image_headers:
+        try:
+            base_headers[header] = image[0].header[header]
+        except KeyError:
+            logging.info('Could not find "{keyword}" keyword in the headers of filename {filename}'
+                .format(keyword=header, filename=filename))
+    
+    dispersion = image[0].header['CRVAL1'] \
+        + (np.arange(image[0].header['NAXIS1']) - image[0].header['CRPIX1']) * image[0].header['CDELT1']
+    
+    spectra = []    
+    columns = image[2].columns.names
+
+    for i, star in enumerate(image[2].data, start=1):
+        
+        if star['TYPE'] == 'P': # Program object
+            
+            headers = base_headers.copy()
+            headers['FIBRE_NUM'] = i
+            
+            for header in req_fibre_headers:
+                headers[header] = star[header]
+            
+            flux = image[0].data[i]
+            
+            # Check if it's worthwhile having these
+            #if any(~np.isfinite(flux)): continue
+
+            # Remove off the edge nan's                
+            left_side = list(np.isfinite(flux)).index(True)
+            right_side = -list(np.isfinite(flux[::-1])).index(True)
+
+            dispersion_copy = dispersion.copy()
+            dispersion_copy = dispersion_copy[left_side:right_side]
+            flux = flux[left_side:right_side]
+            
+            # Now fill any remaining values
+            remaining_nans = ~np.isfinite(flux)
+            flux[remaining_nans] = fill_value
+            
+            spectrum = Spectrum1D(dispersion_copy, flux, headers=headers)
+            spectra.append(spectrum)
+    
+    return spectra
