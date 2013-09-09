@@ -285,6 +285,7 @@ class Spectrum1D(object):
         """
         
         new_disp = self.disp * np.sqrt((1 + velocity/speed_of_light)/(1 - velocity/speed_of_light))
+        #new_disp = (self.disp * (1 + velocity/speed_of_light))/np.sqrt(1 - velocity**2/speed_of_light**2)
             
         return self.__class__(
             new_disp,
@@ -699,12 +700,12 @@ def load_aaomega_multispec(filename, fill_value=0):
     spectra = []    
     columns = image[2].columns.names
 
-    for i, star in enumerate(image[2].data, start=1):
+    for i, star in enumerate(image[2].data):
         
         if star['TYPE'] == 'P': # Program object
             
             headers = base_headers.copy()
-            headers['FIBRE_NUM'] = i
+            headers['FIBRE_NUM'] = i + 1
             
             for header in req_fibre_headers:
                 headers[header] = star[header]
@@ -712,7 +713,8 @@ def load_aaomega_multispec(filename, fill_value=0):
             flux = image[0].data[i]
             
             # Check if it's worthwhile having these
-            #if any(~np.isfinite(flux)): continue
+            if all(~np.isfinite(flux)):
+                flux = np.array([fill_value] * len(flux))
 
             # Remove off the edge nan's                
             left_side = list(np.isfinite(flux)).index(True)
@@ -722,6 +724,8 @@ def load_aaomega_multispec(filename, fill_value=0):
             dispersion_copy = dispersion_copy[left_side:right_side]
             flux = flux[left_side:right_side]
             
+            #if len(dispersion_copy) == 0: continue
+
             # Now fill any remaining values
             remaining_nans = ~np.isfinite(flux)
             flux[remaining_nans] = fill_value
