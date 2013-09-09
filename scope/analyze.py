@@ -111,14 +111,22 @@ def analyze(observed_spectra, configuration_filename, callback=None):
         # Should we be measuring velocity for this aperture?
         if 'measure' in configuration['doppler_correct'][aperture] \
         and configuration['doppler_correct'][aperture]['measure']:
-            velocity = spectrum.cross_correlate(
+            velocity, velocity_err = spectrum.cross_correlate(
                 specutils.Spectrum1D.load(configuration['doppler_correct'][aperture]['template']),
                 configuration['doppler_correct'][aperture]['wavelength_region']
                 )
+
             velocities[aperture] = velocity
+            logging.debug("Measured velocity in {aperture} aperture to be {velocity:.2f} km/s"
+                .format(aperture=aperture, velocity=velocity))
 
             if configuration['doppler_correct'][aperture]['allow_shift']:
-                configuration['priors']['doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)] = velocity
+                logging.debug("Updating prior 'doppler_correct.{aperture}.allow_shift' with measured velocity {velocity:.2f} km/s"
+                    .format(aperture=aperture, velocity=-velocity))
+
+                parameter_name = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
+                parameters_initial[parameter_names.index(parameter_name)] = -velocity
+                configuration['priors'][parameter_name] = -velocity
 
         elif configuration['doppler_correct'][aperture]['allow_shift']:
             apertures_without_measurements.append(aperture)
@@ -127,7 +135,12 @@ def analyze(observed_spectra, configuration_filename, callback=None):
         mean_velocity = np.mean(velocities.values())
 
         for aperture in apertures_without_measurements:
-            configuration['priors']['doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)] = mean_velocity
+            logging.debug("Updating prior 'doppler_correct.{aperture}.allow_shift' with mean velocity {mean_velocity:.2f} km/s"
+                .format(aperture=aperture, mean_velocity=-mean_velocity))
+
+            parameter_name = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
+            parameters_initial[parameter_names.index(parameter_name)] = -mean_velocity
+            configuration['priors'][parameter_name] = -mean_velocity
 
     elif len(velocities) > 0:
         logging.warn("There are apertures that allow a velocity shift but no mean velocity could be determined"
@@ -143,9 +156,15 @@ def analyze(observed_spectra, configuration_filename, callback=None):
     output = CallbackClass()
     final_callback = lambda *x: setattr(output, 'data', x)
     chi_squared(parameters_final, parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, final_callback)
-    chi_sq, num_dof, posteriors, observed_spectra, model_spectra = output.data
     
-    return (chi_sq, num_dof, posteriors, observed_spectra, model_spectra)
+    try:
+        chi_sq, num_dof, posteriors, observed_spectra, model_spectra = output.data
+
+    except AttributeError:
+        return (np.nan, np.nan, None, None, None)
+
+    else:
+        return (chi_sq, num_dof, posteriors, observed_spectra, model_spectra)
 
 
 def prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration):
@@ -183,6 +202,8 @@ def prepare_model_spectra(parameters, parameter_names, observed_spectra, apertur
 
     except: return None
 
+    logging.debug("Interpolated model flux")
+
     if synthetic_fluxes == {}: return None
     for aperture, flux in synthetic_fluxes.iteritems():
         if np.all(~np.isfinite(flux)): return None
@@ -206,6 +227,7 @@ def prepare_model_spectra(parameters, parameter_names, observed_spectra, apertur
         elif configuration['smooth_model_flux'][aperture]['perform']:
             # It's a fixed value.
             model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(configuration['smooth_model_flux'][aperture]['kernel'])
+            logging.debug("Smoothed model flux for '{aperture}' aperture".format(aperture=aperture))
 
     # Interpolate synthetic to observed dispersion map
     for aperture, observed_spectrum in zip(aperture_mapping, observed_spectra):
@@ -278,6 +300,9 @@ def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aper
         if key in parameter_names:
             index = parameter_names.index(key)
             normalised_spectra[i] = normalised_spectra[i].doppler_shift(parameters[index])
+
+            logging.debug("Performed doppler shift of {velocity:.2f} km/s for aperture '{aperture}'"
+                .format(aperture=aperture, velocity=parameters[index]))
 
     return normalised_spectra
 
