@@ -13,4 +13,4 @@ import config
 import models
 import specutils
 import visualise
-from analyze import analyze
+from analyze import analyze_star, analyze_all

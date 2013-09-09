@@ -9,6 +9,9 @@ __author__ = "Andy Casey <acasey@mso.anu.edu.au>"
 # Standard library
 import logging
 import os
+import multiprocessing
+import random
+import time
 
 # Third-party
 import numpy as np
@@ -21,12 +24,89 @@ import models
 import utils
 import specutils
 
-__all__ = ['analyze', 'prepare_model_spectra', 'prepare_observed_spectra', 'chi_squared']
+__all__ = ['analyze', 'analyze_star', 'prepare_model_spectra', 'prepare_observed_spectra', 'chi_squared']
 
 class CallbackClass(object):
     pass
 
-def analyze(observed_spectra, configuration_filename, callback=None):
+
+class Worker(multiprocessing.Process):
+    """A SCOPE worker to analyse stellar spectra."""
+
+    def __init__(self, queue_in, queue_out):
+        super(Worker, self).__init__()
+        self.queue_in = queue_in
+        self.queue_out = queue_out
+        
+        logging.debug("Initialised a new Worker.")
+
+    def run(self):
+        logging.debug("Running new Worker process.")
+
+        for data in iter(self.queue_in.get, None):
+            result = analyze_star(*data)
+
+            self.queue_out.put(result)
+
+
+def analyze_all(stars, configuration_filename, callback=None, timeout=120):
+    """Analyse a number of stars according to the configuration provided.
+
+    Inputs
+    ------
+    stars : iterable of spectra
+        Each star can contain multiple spectra, but they must be in sub-lists.
+
+    configuration_filename : str
+        The configuration filename for this analysis.
+
+    callback : function
+        A callback to perform after every model comparison. If you're running
+        things in parallel, I hope you know what you're doing.
+
+    timout : int
+        The number of seconds to wait for each parallel thread to send results
+        before killing the thread.
+    """
+
+    # Load the configuration
+    configuration = config.load(configuration_filename)
+
+    # Check for parallelism
+    if 'parallelism' in configuration and configuration['parallelism'] > 1:
+
+        logging.info("Initializing {n} parallel workers".format(n=configuration['parallelism']))
+
+        # Do parallel
+        queue_in = multiprocessing.Queue()
+        queue_out = multiprocessing.Queue()
+
+        # Initialise all the workers
+        for i in xrange(configuration['parallelism']):
+            Worker(queue_in, queue_out).start()
+
+        for star in stars:
+            queue_in.put((star, configuration, callback))
+
+        # Shut down all workers
+        [queue_in.put(None) for i in xrange(configuration['parallelism'])]
+
+        # Get all the results
+        results = []
+        for i in xrange(len(stars)):
+            results.append(queue_out.get(timeout=timeout))
+
+    else:
+
+        logging.info("Performing analysis in serial mode")
+
+        # Do serial
+        results = [analyze_star(star, configuration, callback) for star in stellar_spectra]
+
+    return results
+
+
+def analyze_star(observed_spectra, configuration, callback=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
 
@@ -35,12 +115,14 @@ def analyze(observed_spectra, configuration_filename, callback=None):
     observed_spectra : list of `Spectrum1D` objects
         Non-overlapping spectral beams of a single star.
 
-    configuration_filename : str
-        The configuration filename for this analysis.
+    configuration : dict
+        The configuration settings for this analysis.
 
     callback : function
         A callback to perform after every model comparison.
     """
+
+    if 0 in [len(spectrum.disp) for spectrum in observed_spectra]: return None
 
     # Check observed arms do not overlap
     observed_dispersions = [spectrum.disp for spectrum in observed_spectra]
@@ -48,9 +130,6 @@ def analyze(observed_spectra, configuration_filename, callback=None):
     if overlap is not None:
         raise ValueError("observed apertures cannot overlap in wavelength, but they do near {wavelength} Angstroms"
             .format(wavelength=overlap))
-
-    # Load the configuration
-    configuration = config.load(configuration_filename)
 
     # Load our model
     model = models.Models(configuration)
