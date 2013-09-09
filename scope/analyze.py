@@ -206,7 +206,7 @@ def analyze_star(observed_spectra, configuration, callback=None):
             logging.debug("Measured velocity in {aperture} aperture to be {velocity:.2f} km/s"
                 .format(aperture=aperture, velocity=velocity))
 
-            if configuration['doppler_correct'][aperture]['allow_shift']:
+            if configuration['doppler_correct'][aperture]['allow_shift'] and abs(velocity) < 500.:
                 logging.debug("Updating prior 'doppler_correct.{aperture}.allow_shift' with measured velocity {velocity:.2f} km/s"
                     .format(aperture=aperture, velocity=-velocity))
 
@@ -214,19 +214,29 @@ def analyze_star(observed_spectra, configuration, callback=None):
                 parameters_initial[parameter_names.index(parameter_name)] = -velocity
                 configuration['priors'][parameter_name] = -velocity
 
+            elif abs(velocity) > 500.:
+                logging.warn("Ignoring velocity measurement for prior 'doppler_correct.{aperture}.allow_shift' because it was too "
+                    "high: {velocity:.2f} km/s".format(aperture=aperture, velocity=velocity))
+
         elif configuration['doppler_correct'][aperture]['allow_shift']:
             apertures_without_measurements.append(aperture)
 
     if len(velocities) > 0:
         mean_velocity = np.mean(velocities.values())
 
-        for aperture in apertures_without_measurements:
-            logging.debug("Updating prior 'doppler_correct.{aperture}.allow_shift' with mean velocity {mean_velocity:.2f} km/s"
-                .format(aperture=aperture, mean_velocity=-mean_velocity))
+        if abs(mean_velocity) > 500.:
+            logging.warn("Ignoring mean velocity measurement for other apertures because it was too high: {mean_velocity:.2f} km/s"
+                .format(mean_velocity=mean_velocity))
 
-            parameter_name = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
-            parameters_initial[parameter_names.index(parameter_name)] = -mean_velocity
-            configuration['priors'][parameter_name] = -mean_velocity
+        else:
+
+            for aperture in apertures_without_measurements:
+                logging.debug("Updating prior 'doppler_correct.{aperture}.allow_shift' with mean velocity {mean_velocity:.2f} km/s"
+                    .format(aperture=aperture, mean_velocity=-mean_velocity))
+
+                parameter_name = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
+                parameters_initial[parameter_names.index(parameter_name)] = -mean_velocity
+                configuration['priors'][parameter_name] = -mean_velocity
 
     elif len(velocities) > 0:
         logging.warn("There are apertures that allow a velocity shift but no mean velocity could be determined"
