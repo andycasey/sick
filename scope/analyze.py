@@ -37,16 +37,21 @@ class Worker(multiprocessing.Process):
         super(Worker, self).__init__()
         self.queue_in = queue_in
         self.queue_out = queue_out
-        
+
         logging.debug("Initialised a new Worker.")
 
     def run(self):
         logging.debug("Running new Worker process.")
 
         for data in iter(self.queue_in.get, None):
-            result = analyze_star(*data)
+            try:
+                result = analyze_star(*data)
 
-            self.queue_out.put(result)
+            except:
+                self.queue_out.put(False)
+
+            else:
+                self.queue_out.put(result)
 
 
 def analyze_all(stars, configuration_filename, callback=None, timeout=120):
@@ -93,8 +98,10 @@ def analyze_all(stars, configuration_filename, callback=None, timeout=120):
 
         # Get all the results
         results = []
-        for i in xrange(len(stars)):
-            results.append(queue_out.get(timeout=timeout))
+        while len(results) < len(stars):
+            try:
+                results.append(queue_out.get(timeout=timeout))
+            except: continue
 
     else:
 
