@@ -403,6 +403,44 @@ def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aper
     return normalised_spectra
 
 
+def prepare_masks(model_spectra, configuration):
+    """Returns pixel masks to apply to the model spectra
+    based on the configuration provided.
+
+    Inputs
+    ------
+    model_spectra : dict
+        A dictionary containing aperture names as keys and specutils.Spectrum1D objects
+        as values.
+
+    configuration : dict
+        The configuration dictionary.
+    """
+
+    if "masks" not in configuration:
+        masks = {}
+        for aperture, spectrum in model_spectra.iteritems():
+            masks[aperture] = np.ones(len(spectrum.disp))
+
+    else:
+        masks = {}
+        for aperture, spectrum in model_spectra.iteritems():
+            if aperture not in configuration["masks"]:
+                masks[aperture] = np.ones(len(spectrum.disp))
+            
+            else:
+                # We are required to build a mask.
+                mask = np.zeros(len(spectrum.disp))
+                for region in configuration["masks"][aperture]:
+                    index_start, index_end = np.searchsorted(spectrum.disp, region)
+
+                    mask[index_start:index_end] = 1
+
+                masks[aperture] = mask
+
+    return masks
+
+
 def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping, \
     model, configuration, fail_value=999, callback=None):
     """Calculates the \chi^2 difference between observed and
@@ -429,11 +467,20 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
     model_spectra = prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration)
     if model_spectra is None: return fail_value
 
+    # Any masks?
+    masks = prepare_masks(model_spectra, configuration)
+
+    # Any weighting functions?
+    #weights = prepare_weights(model_spectra, configuration)
+
     # Calculate chi^2 difference
     chi_sq_i = {}
     for i, (aperture, observed_spectrum) in enumerate(zip(aperture_mapping, observed_spectra)):
 
         chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2)/observed_spectrum.uncertainty
+
+        # Apply masks
+        chi_sq *= masks[aperture]
 
         # Pearson's \chi^2:
         #chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2)/model_spectra[aperture].flux
@@ -442,11 +489,17 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
         finite_indices = np.isfinite(chi_sq)
         chi_sq_i[aperture] = chi_sq[finite_indices]
 
+        # Update the masks values:
+        #> -2: Not interested in this region, and it was non-finite (not used).
+        #> -1: Interested in this region, but it was non-finite (not used).
+        #>  0: Not interested in this region, it was finite (not used).
+        #>  1: Interested in this region, it was finite (used for \chi^2 determination)
+        masks[aperture][~finite_indices] -= 2
+
     num_pixels = sum(map(len, chi_sq_i.values()))
     total_chi_sq = np.sum(map(np.sum, chi_sq_i.values()))
 
     num_dof = num_pixels - len(parameters) - 1
-    # Any masks?
 
     # Return likelihood
     logging.debug((parameters, total_chi_sq, num_dof, total_chi_sq/num_dof))
@@ -461,5 +514,5 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
             [model_spectra[aperture] for aperture in aperture_mapping]
             )
 
-    logging.debug("total chi^2: {chi_sq}, ndof: {ndof}".format(chi_sq=total_chi_sq, ndof=num_dof))
+    logging.debug("Total \chi^2: {chi_sq}, n_dof: {ndof}".format(chi_sq=total_chi_sq, ndof=num_dof))
     return total_chi_sq

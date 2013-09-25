@@ -373,3 +373,34 @@ def verify_models(configuration):
                     random_filename=random_filename))
 
     return True
+
+
+def verify_masks(configuration):
+    """Verifies any (optional) masks specified in the input configuration."""
+
+    if "masks" not in configuration.keys():
+        # Masks are optional
+        return True
+
+    # Check the aperture names
+    aperture_names = get_aperture_names(configuration)
+
+    for mask_aperture_name in configuration["masks"]:
+        if mask_aperture_name not in aperture_names:
+            raise ValueError("unrecognised aperture name '{aperture}' specified in masks".format(aperture=mask_aperture_name))
+
+        # We know nothing about the wavelength coverage, so all we can do is check
+        # for float/ints
+        if not isinstance(configuration["masks"][mask_aperture_name], (tuple, list)):
+            raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
+
+        for region in configuration["masks"][mask_aperture_name]:
+            if not isinstance(region, (list, tuple)) or len(region) != 2:
+                raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
+
+            try:
+                map(float, region)
+            except TypeError:
+                raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
+
+    return True
