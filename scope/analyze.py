@@ -7,9 +7,11 @@ from __future__ import division, print_function
 __author__ = "Andy Casey <acasey@mso.anu.edu.au>"
 
 # Standard library
+import csv
 import logging
 import os
 import multiprocessing
+import pickle
 import random
 import time
 
@@ -54,7 +56,8 @@ class Worker(multiprocessing.Process):
                 self.queue_out.put(result)
 
 
-def analyze_all(stars, configuration_filename, callback=None, timeout=120):
+def analyze_all(stars, configuration_filename, output_filename_prefix=None, clobber=False, 
+    callback=None, timeout=120):
     """Analyse a number of stars according to the configuration provided.
 
     Inputs
@@ -65,11 +68,18 @@ def analyze_all(stars, configuration_filename, callback=None, timeout=120):
     configuration_filename : str
         The configuration filename for this analysis.
 
-    callback : function
+    output_filename_prefix : str, optional
+        The filename prefix to use for saving results. If this is specified, a summary file
+        will be produced, and individual results will be saved.
+
+    clobber : bool, default False
+        Whether to overwrite existing output files if they already exist. 
+
+    callback : function, optional
         A callback to perform after every model comparison. If you're running
         things in parallel, I hope you know what you're doing.
 
-    timout : int
+    timout : int, default is 120
         The number of seconds to wait for each parallel thread to send results
         before killing the thread.
     """
@@ -108,7 +118,101 @@ def analyze_all(stars, configuration_filename, callback=None, timeout=120):
         logging.info("Performing analysis in serial mode")
 
         # Do serial
-        results = [analyze_star(star, configuration, callback) for star in stellar_spectra]
+        results = [analyze_star(star, configuration, callback) for star in stars]
+
+    # Should we be saving the results?
+    if output_filename_prefix is not None:
+
+        summary_filename = output_filename_prefix + ".csv"
+
+        logging.info("Summarising results to {summary_filename}".format(summary_filename=summary_filename))
+
+        # What columns do we want in our summary file?
+        # star ID, pickle filename, ra, dec, object name, ut_date, ut_time, airmass, exposure time?, chi^2, 
+        # ndof, r_chi^2, S/N estimates? all the parameters solved for
+
+        summary_lines = []
+        sorted_posterior_keys = None
+        observed_headers_requested = ["RA", "DEC", "OBJECT", "AIRMASS", "EXPTIME"]
+        
+        for i, result in enumerate(results, start=1):
+
+            if result is None:
+                line_data = ["Star #{i}".format(i=i), ""]
+                
+                # Add in the observed headers to the line data.
+                line_data += [observed_spectra[0].headers[header] \
+                    if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
+
+                # Fill the \chi^2, DOF, reduced \chi^2 with blanks
+                line_data += ["", "", ""]
+                
+            else:
+
+                # Create a pickle filename
+                pickle_filename = "{prefix}-star-{i}.pickle".format(prefix=output_filename_prefix, i=i)
+
+                # Save results to pickle
+                if os.path.exists(pickle_filename) and not clobber:
+                    logging.warn("Pickle filename {filename} already exists and we've been asked not to clobber it. Skipping.."
+                        .format(filename=pickle_filename))
+
+                else:
+                    with open(pickle_filename, "w") as fp:
+                        pickle.save(result)
+            
+                    logging.info("Results for Star #{i} saved to {filename}".format(i=i, filename=pickle_filename))
+        
+                line_data = [
+                    "Star #{i}".format(i=i),
+                    pickle_filename,
+                ]
+
+                chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks = result
+
+                if sorted_posterior_keys is None:
+                    sorted_posterior_keys = sorted(posteriors.keys(), key=len)
+
+                # Add in observed headers to line data
+                [line_data.append(observed_spectra[0].headers[header]) 
+                    if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
+
+                # Add in results information
+                line_data.extend([chi_sq, num_dof, chi_sq/num_dof])
+
+                # Add in the posteriors
+                line_data.extend([posteriors[key] for key in sorted_posterior_keys])
+
+            # Add this line in
+            summary_lines.append(line_data)
+            
+        column_headers = ["Name", "Results filename"] + observed_headers_requested \
+            + ["\chi^2", "DOF", "Reduced \chi^2"] + sorted_posterior_keys
+
+        # Fill in any 'non-results' with the appropriate number of blanks
+        summary_lines_formatted = []
+        for line in summary_lines:
+            if len(line) < len(column_headers):
+                line += [""] * (len(column_headers) - len(line))
+
+            summary_lines_formatted.append(line)
+
+        # Save the summary file
+        if os.path.exists(summary_filename) and not clobber:
+            logging.warn("Summary filename {filename} already exists and we've been asked not to clobber it. Logging summary results instead.")
+
+            logging.info(",".join(column_headers))
+            logging.info("\n".join([",".join(line) for line in summary_lines_formatted]))
+
+        else:
+
+            with open(summary_filename, "w") as fp:
+                fwriter = csv.writer(fp, delimiter=",")
+                fwriter.writerow(column_headers)
+                fwriter.writerows(summary_lines_formatted)
+
+            logging.info("Summary file saved to {filename}".format(filename=summary_filename))
+
 
     return results
 
