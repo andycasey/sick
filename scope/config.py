@@ -77,6 +77,18 @@ def verify(configuration):
     verify_masks(configuration)
     verify_weights(configuration)
 
+    # Verify solution setup
+    if "solution_method" in configuration:
+        acceptable_methods = ("fmin_powell", "emcee")
+
+        if not configuration["solution_method"] in acceptable_methods:
+            raise ValueError("configuration setting 'solution_method' is expected to be "
+                "one of the following: {acceptable}".format(acceptable=", ".join(acceptable_methods)))
+
+        #if configuration["solution_method"] == "emcee":
+        #    # Check for emcee things
+
+
     return True
 
 

@@ -15,8 +15,10 @@ import pickle
 import random
 import sys
 import time
+from ast import literal_eval
 
 # Third-party
+import emcee
 import numpy as np
 import numpy.random as random
 import scipy.optimize
@@ -58,6 +60,92 @@ class Worker(multiprocessing.Process):
 
             else:
                 self.queue_out.put(result)
+
+
+def initialise_priors(configuration, model, observed_spectra, aperture_mapping, nwalkers=1):
+
+    walker_priors = []
+    measured_doppler_shifts = {}
+
+    ordered_parameter_names = configuration["priors"].keys()
+
+    assert "jitter" not in ordered_parameter_names
+
+    for i in xrange(nwalkers):
+
+        current_walker = []
+        for j, parameter_name in enumerate(ordered_parameter_names):
+            if parameter_name == "jitter": continue
+
+            prior_value = configuration["priors"][parameter_name]
+
+            try:
+                prior_value = float(prior_value)
+
+            except:
+
+                # We probably need to evaluate this.
+                if prior_value.lower() == "uniform":
+                    # Only works on stellar parameter values.
+
+                    index = model.colnames.index(parameter_name)
+                    possible_points = model.grid_points[:, index]
+
+                    current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
+
+                elif prior_value.lower().startswith("cross_correlate") \
+                    and parameter_name.lower().startswith("doppler_correct.") and parameter_name.lower().endswith(".allow_shift"):
+
+                    # Do we need to measure the velocity?
+                    aperture = parameter_name.split(".")[1]
+                    if aperture not in measured_doppler_shifts:
+
+                        # Measure the velocity
+                        template_filename, region = literal_eval(prior_value.lstrip("cross_correlate"))
+
+                        velocity, velocity_err = observed_spectra[aperture_mapping.index(aperture)].cross_correlate(
+                            specutils.Spectrum1D.load(template_filename),
+                            region
+                            )
+
+                        # Safeguards against bad velocity measurements?
+                        measured_doppler_shifts[aperture] = (velocity, velocity_err)
+
+                    # Get the mu and sigma
+                    mu, sigma = measured_doppler_shifts[aperture]
+
+                    current_walker.append(random.normal(mu, sigma))
+
+                elif prior_value.lower().startswith("gaussian"):
+                    mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
+
+                    current_walker.append(random.normal(mu, sigma))
+
+                elif prior_value.lower().startswith("uniform"):
+                    minimum, maximum = map(float, prior_value.split("(")[1].rstrip(")").split(","))
+
+                    current_walker.append(random.uniform(minimum, maximum))
+
+                else:
+                    raise TypeError("prior type not valid for {parameter_name}".format(parameter_name=parameter_name))
+
+            else:
+                current_walker.append(prior_value)
+
+        # Add the walker
+        if nwalkers == 1:
+            walker_priors = current_walker
+        
+        else:
+            
+            # Add jitter
+            if ordered_parameter_names[-1] != "jitter":
+                ordered_parameter_names.append("jitter")
+
+            current_walker.append(random.rand())
+            walker_priors.append(current_walker)
+
+    return (ordered_parameter_names, walker_priors)
 
 
 def analyze_all(stars, configuration_filename, output_filename_prefix=None, clobber=False, 
@@ -285,100 +373,36 @@ def analyze_star(observed_spectra, configuration, callback=None):
                     wl_start=np.min(observed_dispersion),
                     wl_end=np.max(observed_dispersion)))
 
-    # Do we have uncertainties in our spectra? If not we should estimate it.
+    # Do we have uncertainties in our spectra? If not we should estimate them.
     for spectrum in observed_spectra:
         if spectrum.uncertainty is None:
             spectrum.uncertainty = spectrum.flux**(-0.5)
 
-    # Initialise priors
-    parameter_names = []
-    parameters_initial = []
     
-    for parameter_name, parameter in configuration['priors'].iteritems():
-        parameter_names.append(parameter_name)
-
-        try:
-            float(parameter)
-
-        except:
-            # We probably need to evaluate this.
-            if parameter == "uniform":
-                # Only works on stellar parameter values.
-
-                index = model.colnames.index(parameter_name)
-                possible_points = model.grid_points[:, index]
-
-                parameters_initial.append(random.uniform(np.min(possible_points), np.max(possible_points)))
-
-            else:
-                raise TypeError("prior type not valid for {parameter_name}".format(parameter_name=parameter_name))
-
-        else:
-            parameters_initial.append(parameter)
-
-    # Measure the radial velocity if required
-    velocities = {}
-    apertures_without_measurements = []
-    for aperture, spectrum in zip(aperture_mapping, observed_spectra):
-
-        # Should we be measuring velocity for this aperture?
-        if 'measure' in configuration['doppler_correct'][aperture] \
-        and configuration['doppler_correct'][aperture]['measure']:
-            velocity, velocity_err = spectrum.cross_correlate(
-                specutils.Spectrum1D.load(configuration['doppler_correct'][aperture]['template']),
-                configuration['doppler_correct'][aperture]['wavelength_region']
-                )
-
-            velocities[aperture] = velocity
-            logging.debug("Measured velocity in {aperture} aperture to be {velocity:.2f} km/s"
-                .format(aperture=aperture, velocity=velocity))
-
-            if configuration['doppler_correct'][aperture]['allow_shift'] and abs(velocity) < 500.:
-                logging.debug("Updating prior 'doppler_correct.{aperture}.allow_shift' with measured velocity {velocity:.2f} km/s"
-                    .format(aperture=aperture, velocity=-velocity))
-
-                parameter_name = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
-                parameters_initial[parameter_names.index(parameter_name)] = -velocity
-                configuration['priors'][parameter_name] = -velocity
-
-            elif abs(velocity) > 500.:
-                logging.warn("Ignoring velocity measurement for prior 'doppler_correct.{aperture}.allow_shift' because it was too "
-                    "high: {velocity:.2f} km/s".format(aperture=aperture, velocity=velocity))
-
-        elif configuration['doppler_correct'][aperture]['allow_shift']:
-            apertures_without_measurements.append(aperture)
-
-    if len(velocities) > 0:
-        mean_velocity = np.mean(velocities.values())
-
-        if abs(mean_velocity) > 500.:
-            logging.warn("Ignoring mean velocity measurement for other apertures because it was too high: {mean_velocity:.2f} km/s"
-                .format(mean_velocity=mean_velocity))
-
-        else:
-
-            for aperture in apertures_without_measurements:
-                logging.debug("Updating prior 'doppler_correct.{aperture}.allow_shift' with mean velocity {mean_velocity:.2f} km/s"
-                    .format(aperture=aperture, mean_velocity=-mean_velocity))
-
-                parameter_name = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
-                parameters_initial[parameter_names.index(parameter_name)] = -mean_velocity
-                configuration['priors'][parameter_name] = -mean_velocity
-
-    elif len(velocities) > 0:
-        logging.warn("There are apertures that allow a velocity shift but no mean velocity could be determined"
-            " from other apertures.")
-
+    fail_value = 999
+    
     # Make fmin_powell the default
     if "solution_method" not in configuration or configuration["solution_method"] == "fmin_powell":
 
-        fail_value = 999
-        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)
-    
-        parameters_final = scipy.optimize.fmin_powell(chi_squared_fn, parameters_initial, args=optimisation_args, xtol=0.01, ftol=0.01)
+        parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping)
+        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)   
+
+        parameters_final = scipy.optimize.fmin_powell(chi_squared_fn, p0, args=optimisation_args, xtol=0.01, ftol=0.01)
 
     elif configuration["solution_method"] == "emcee":
-        raise NotImplementedError
+
+        nwalkers, nsteps = configuration["emcee"]["nwalkers"], configuration["emcee"]["nsteps"]
+
+        parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping, nwalkers)
+        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)   
+
+        sampler = emcee.EnsembleSampler(nwalkers, len(parameter_names), lnprob_fn,
+            args=optimisation_args)
+
+        pos, prob, state = sampler.run_mcmc(p0, nsteps)
+
+        raise a
+
 
     else:
         raise NotImplementedError
@@ -710,9 +734,9 @@ def lnprob_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
     for spectrum in observed_spectra:
         variance += list(spectrum.flux**2 + jitter)
 
-    inverse_variance = 1 / variance
+    inverse_variance = 1 / np.array(variance)
 
-    chi_sq = chi_squared_fn(parameters, input_parameters, observed_spectra, aperture_mapping,
+    chi_sq = chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mapping,
         model, configuration, fail_value=fail_value, callback=callback)
 
     log_likelihood = -0.5 * (chi_sq - np.sum(np.log(inverse_variance)))
