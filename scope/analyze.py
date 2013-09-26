@@ -555,7 +555,7 @@ def prepare_weights(model_spectra, configuration):
                 weights[aperture] = lambda disp, flux: flux
 
             else:
-                weights[aperture] = lambda disp, flux: eval(configuration["weights"][aperture],
+                weights[aperture] = lambda disp, flux: eval(configuration["weights"][aperture], 
                     {"disp": disp, "np": np, "flux": flux})
 
     return weights
