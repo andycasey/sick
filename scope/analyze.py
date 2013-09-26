@@ -15,7 +15,6 @@ import pickle
 import random
 import sys
 import time
-from ast import literal_eval
 
 # Third-party
 import numpy as np
@@ -207,6 +206,16 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
 
             summary_lines_formatted.append(line)
 
+        # Get max lengths
+        max_lengths = [0] * len(column_headers)
+        for line in summary_lines_formatted:
+            for i, length in enumerate(map(len, line)):
+                if length > max_lengths[i]:
+                    max_lengths[i] = length + 1
+
+        column_headers = [header.ljust(length) for header, length in zip(column_headers, max_lengths)]
+        summary_lines_formatted = [[item.ljust(length) for item, length in zip(line, max_lengths)] for line in summary_lines_formatted]
+
         # Save the summary file
         if os.path.exists(summary_filename) and not clobber:
             logging.warn("Summary filename {filename} already exists and we've been asked not to clobber it. Logging summary results instead.")
@@ -218,6 +227,7 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
 
             with open(summary_filename, "w") as fp:
                 fwriter = csv.writer(fp, delimiter=",")
+
                 fwriter.writerow(column_headers)
                 fwriter.writerows(summary_lines_formatted)
 
@@ -545,7 +555,8 @@ def prepare_weights(model_spectra, configuration):
                 weights[aperture] = lambda disp, flux: flux
 
             else:
-                weights[aperture] = lambda disp, flux: literal_eval(configuration["weights"][aperture])
+                weights[aperture] = lambda disp, flux: eval(configuration["weights"][aperture],
+                    {"disp": disp, "np": np, "flux": flux})
 
     return weights
 

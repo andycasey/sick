@@ -77,7 +77,7 @@ def animate_callback(total_chi_sq, num_dof, parameters, observed_spectra, model_
 
     # Ensure everything is drawn
     plt.draw()
-    plt.pause(0.01)
+    plt.pause(0.005)
 
 
 def plot_result(chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks):
@@ -129,11 +129,13 @@ def plot_all_results(results, output_prefix):
     """Plots and saves each result to file."""
 
     for i, result in enumerate(results, start=1):
-        
+
+        if result is None: continue
+
         fig = plot_result(*result)
         if fig is None: continue
 
-        filename = '{output_prefix}-{i}.png'.format(output_prefix=output_prefix, i=i)
+        filename = '{output_prefix}-star-{i}.png'.format(output_prefix=output_prefix, i=i)
         logging.info("Saved plotted result to {filename}".format(filename=filename))
 
         plt.savefig(filename)

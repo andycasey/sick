@@ -488,7 +488,7 @@ class Spectrum1D(object):
         function: only 'spline' or 'poly'
 
         scale : float
-            A scaling factor to apply to the normalised flux levels.
+            A positive scaling factor to apply to the normalised flux levels.
             
         include : list of tuple-types containing floats, optional
             A list of wavelength regions to always include when determining the
@@ -497,6 +497,8 @@ class Spectrum1D(object):
 
         logging.debug("fit_continuum({self}, {function}, {knot_spacing}, {sigma_clip}, {iter}, {order}, {scale})".format(self=self,function=function,knot_spacing=knot_spacing,sigma_clip=(lower_clip,upper_clip), iter=max_iterations,order=order,scale=scale))
         
+        scale = abs(scale)
+
         exclusions = []
         continuum_indices = range(len(self.flux))
 

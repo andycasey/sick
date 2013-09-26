@@ -73,6 +73,10 @@ def verify(configuration):
     # we expect, and the stellar parameters we plan to solve for
     verify_priors(configuration, priors_to_expect)
 
+    # Verify masks and weights (both are optional)
+    verify_masks(configuration)
+    verify_weights(configuration)
+
     return True
 
 
@@ -404,3 +408,31 @@ def verify_masks(configuration):
                 raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
 
     return True
+
+
+def verify_weights(configuration):
+    """Verifies any (optional) pixel weighting functions specified in the input configuration."""
+
+    if "weights" not in configuration.keys():
+        return True
+
+    # Check the aperture names
+    aperture_names = get_aperture_names(configuration)
+
+    for weight_aperture_name in configuration["weights"]:
+        if weight_aperture_name not in aperture_names:
+            raise ValueError("unrecognised aperture name '{0}' specified in weights".format(weight_aperture_name))
+
+        # Check is callable
+        test_weighting_func = lambda disp, flux: eval(configuration["weights"][weight_aperture_name],
+            {"disp": disp, "flux": flux, "np": np})
+
+        try:
+            test_weighting_func(1, 1)
+            test_weighting_func(np.arange(10), np.ones(10))
+
+        except:
+            raise
+
+    return True
+        
