@@ -112,8 +112,8 @@ def plot_result(chi_sq, num_dof, posteriors, observed_spectra, model_spectra, ma
 
         # Get the overlap
         xlim = [
-            max(observed_spectrum.disp[0], model_spectrum.disp[np.where(np.isfinite(model_spectrum.flux) == True)[0][0]]),
-            min(observed_spectrum.disp[-1], model_spectrum.disp[np.where(np.isfinite(model_spectrum.flux) == True)[0][-1]])
+            max(observed_spectrum.disp[0], model_spectrum.disp[0]),
+            min(observed_spectrum.disp[-1], model_spectrum.disp[-1]) 
         ]
         axis.set_xlim(xlim)
         axis.set_ylim(0, 1.2)
@@ -129,6 +129,8 @@ def plot_all_results(results, output_prefix):
     """Plots and saves each result to file."""
 
     for i, result in enumerate(results, start=1):
+
+        if result in (None, False): continue
         
         fig = plot_result(*result)
         if fig is None: continue
