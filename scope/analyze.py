@@ -141,8 +141,9 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
                 line_data = ["Star #{i}".format(i=i), ""]
                 
                 # Add in the observed headers to the line data.
-                line_data += [observed_spectra[0].headers[header] \
-                    if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
+                #line_data += [observed_spectra[0].headers[header] \
+                #    if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
+                line_data += [""] * len(observed_headers_requested)
 
                 # Fill the \chi^2, DOF, reduced \chi^2 with blanks
                 line_data += ["", "", ""]
