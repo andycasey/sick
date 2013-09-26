@@ -137,11 +137,11 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
         
         for i, result in enumerate(results, start=1):
 
-            if result in (None, False) or np.isnan(result[0]):
+            if result is None or np.isnan(result[0]):
                 line_data = ["Star #{i}".format(i=i), ""]
                 
                 # Add in the observed headers to the line data.
-                if len(result) > 3 and result[3] != None:
+                if result is not None and len(result) > 3 and result[3] != None:
                     line_data += [observed_spectra[0].headers[header] \
                         if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
                     
@@ -618,8 +618,10 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
     chi_sq_i = {}
     for i, (aperture, observed_spectrum) in enumerate(zip(aperture_mapping, observed_spectra)):
 
-        weighted_flux = weighting_functions[aperture](observed_spectrum.disp, observed_spectrum.flux)
-        chi_sq = ((weighted_flux - model_spectra[aperture].flux)**2)/observed_spectrum.uncertainty
+        chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2)/observed_spectrum.uncertainty
+
+        # Apply weights
+        chi_sq *= weighting_functions[aperture](observed_spectrum.disp, observed_spectrum.flux)
 
         # Apply masks
         chi_sq *= masks[aperture]
