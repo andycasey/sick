@@ -495,7 +495,7 @@ class Spectrum1D(object):
             continuum.
         """
 
-        logging.debug("fit_continuum({self}, {knot_spacing}, {sigma_clip}, {iter}, {order}, {scale})".format(self=self,knot_spacing=knot_spacing,sigma_clip=(lower_clip,upper_clip), iter=max_iterations,order=order,scale=scale))
+        logging.debug("fit_continuum({self}, {function}, {knot_spacing}, {sigma_clip}, {iter}, {order}, {scale})".format(self=self,function=function,knot_spacing=knot_spacing,sigma_clip=(lower_clip,upper_clip), iter=max_iterations,order=order,scale=scale))
         
         exclusions = []
         continuum_indices = range(len(self.flux))
