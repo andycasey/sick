@@ -160,7 +160,7 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
 
                 else:
                     with open(pickle_filename, "w") as fp:
-                        pickle.save(result)
+                        pickle.dump(result, fp, -1)
             
                     logging.info("Results for Star #{i} saved to {filename}".format(i=i, filename=pickle_filename))
         
