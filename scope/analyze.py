@@ -137,7 +137,7 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
         
         for i, result in enumerate(results, start=1):
 
-            if result is None:
+            if result is None or result == np.nan:
                 line_data = ["Star #{i}".format(i=i), ""]
                 
                 # Add in the observed headers to the line data.
