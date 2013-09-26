@@ -682,4 +682,4 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
             )
 
     logging.debug("Total \chi^2: {chi_sq}, n_dof: {ndof}".format(chi_sq=total_chi_sq, ndof=num_dof))
-    return total_chi_sq
+    return total_chi_sq/num_dof
