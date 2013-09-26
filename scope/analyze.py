@@ -27,7 +27,7 @@ import models
 import utils
 import specutils
 
-__all__ = ['analyze', 'analyze_star', 'prepare_model_spectra', 'prepare_observed_spectra', 'chi_squared']
+__all__ = ['analyze', 'analyze_star', 'prepare_model_spectra', 'prepare_observed_spectra', 'chi_squared_fn']
 
 class CallbackClass(object):
     pass
@@ -209,8 +209,8 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
         # Get max lengths
         max_lengths = [0] * len(column_headers)
         for line in summary_lines_formatted:
-            for i, length in enumerate(map(len, line)):
-                if length > max_lengths[i]:
+            for i, length in enumerate(map(len, map(str, line))):
+                if length + 1 > max_lengths[i]:
                     max_lengths[i] = length + 1
 
         column_headers = [header.ljust(length) for header, length in zip(column_headers, max_lengths)]
@@ -369,16 +369,25 @@ def analyze_star(observed_spectra, configuration, callback=None):
         logging.warn("There are apertures that allow a velocity shift but no mean velocity could be determined"
             " from other apertures.")
 
-    fail_value = 999
-    optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)
-    
-    parameters_final = scipy.optimize.fmin_powell(chi_squared, parameters_initial, args=optimisation_args, xtol=0.01, ftol=0.01)
+    # Make fmin_powell the default
+    if "solution_method" not in configuration or configuration["solution_method"] == "fmin_powell":
 
-    # We will need to sample the chi_squared function again with a callback to save
+        fail_value = 999
+        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)
+    
+        parameters_final = scipy.optimize.fmin_powell(chi_squared_fn, parameters_initial, args=optimisation_args, xtol=0.01, ftol=0.01)
+
+    elif configuration["solution_method"] == "emcee":
+        raise NotImplementedError
+
+    else:
+        raise NotImplementedError
+
+    # We will need to sample the \chi^2 function again with a callback to save
     # the results
     output = CallbackClass()
     final_callback = lambda *x: setattr(output, 'data', x)
-    chi_squared(parameters_final, parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, final_callback)
+    chi_squared_fn(parameters_final, parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, final_callback)
     
     try:
         chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks = output.data
@@ -397,7 +406,7 @@ def prepare_model_spectra(parameters, parameter_names, observed_spectra, apertur
     Inputs
     ------
     parameters : list of floats
-        The input parameters that were provdided to the `chi_squared` function.
+        The input parameters that were provdided to the `chi_squared_fn` function.
 
     parameter_names : list of str, should be same length as `parameters`.
         The names for the input parameters.
@@ -466,7 +475,7 @@ def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aper
     Inputs
     ------
     parameters : list of floats
-        The input parameters that were provdided to the `chi_squared` function.
+        The input parameters that were provdided to the `chi_squared_fn` function.
 
     parameter_names : list of str, should be same length as `parameters`.
         The names for the input parameters.
@@ -599,7 +608,7 @@ def prepare_masks(model_spectra, configuration):
     return masks
 
 
-def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping, \
+def chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
     model, configuration, fail_value=999, callback=None):
     """Calculates the \chi^2 difference between observed and
     synthetic spectra.
@@ -682,4 +691,30 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
             )
 
     logging.debug("Total \chi^2: {chi_sq}, n_dof: {ndof}".format(chi_sq=total_chi_sq, ndof=num_dof))
-    return total_chi_sq/num_dof
+    return total_chi_sq
+
+
+def lnprob_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
+    model, configuration, fail_value=999, callback=None, **kwargs):
+    """Calculates the log of the probability of the $\chi^2$ distribution function.
+
+    Inputs the same as `chi_squared_fn_fn`"""
+
+    # Check the jitter
+    jitter_index = parameter_names.index("jitter")
+    jitter = parameters[jitter_index]
+    if not 0 <= jitter <= 1:
+        return -np.inf
+
+    variance = []
+    for spectrum in observed_spectra:
+        variance += list(spectrum.flux**2 + jitter)
+
+    inverse_variance = 1 / variance
+
+    chi_sq = chi_squared_fn(parameters, input_parameters, observed_spectra, aperture_mapping,
+        model, configuration, fail_value=fail_value, callback=callback)
+
+    log_likelihood = -0.5 * (chi_sq - np.sum(np.log(inverse_variance)))
+
+    return log_likelihood
