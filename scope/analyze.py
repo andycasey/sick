@@ -14,6 +14,7 @@ import multiprocessing
 import pickle
 import random
 import time
+from ast import literal_eval
 
 # Third-party
 import numpy as np
@@ -137,11 +138,11 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
         
         for i, result in enumerate(results, start=1):
 
-            if result is in (None, False) or np.isnan(result[0]):
+            if result in (None, False) or np.isnan(result[0]):
                 line_data = ["Star #{i}".format(i=i), ""]
                 
                 # Add in the observed headers to the line data.
-                if result is not in (None, False) and len(result) > 3 and result[3] != None:
+                if result not in (None, False) and len(result) > 3 and result[3] != None:
                     line_data += [observed_spectra[0].headers[header] \
                         if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
                     
@@ -539,7 +540,7 @@ def prepare_weights(model_spectra, configuration):
                 weights[aperture] = lambda disp, flux: flux
 
             else:
-                weights[aperture] = lambda disp, flux: eval(configuration["weights"][aperture], {"disp": disp, "flux": flux})
+                weights[aperture] = lambda disp, flux: literal_eval(configuration["weights"][aperture])
 
     return weights
 
