@@ -133,17 +133,20 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
 
         summary_lines = []
         sorted_posterior_keys = None
-        observed_headers_requested = ["RA", "DEC", "OBJECT", "AIRMASS", "EXPTIME"]
+        observed_headers_requested = ["RA", "DEC", "OBJECT", ]
         
         for i, result in enumerate(results, start=1):
 
-            if result in (None, False) or result[0] == np.nan:
+            if result in (None, False) or np.isnan(result[0]):
                 line_data = ["Star #{i}".format(i=i), ""]
                 
                 # Add in the observed headers to the line data.
-                #line_data += [observed_spectra[0].headers[header] \
-                #    if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
-                line_data += [""] * len(observed_headers_requested)
+                if len(result) > 3 and result[3] != None:
+                    line_data += [observed_spectra[0].headers[header] \
+                        if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
+                    
+                else:
+                    line_data += [""] * len(observed_headers_requested)
 
                 # Fill the \chi^2, DOF, reduced \chi^2 with blanks
                 line_data += ["", "", ""]
@@ -365,7 +368,7 @@ def analyze_star(observed_spectra, configuration, callback=None):
         chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks = output.data
 
     except AttributeError:
-        return (np.nan, np.nan, None, None, None, None)
+        return (np.nan, 0, None, observed_spectra, None, None)
 
     else:
         return (chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks)
@@ -511,6 +514,36 @@ def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aper
     return normalised_spectra
 
 
+def prepare_weights(model_spectra, configuration):
+    """Returns callable weighting functions to apply to the \chi^2 comparison.
+
+    Inputs
+    ------
+    model_spectra : dict
+        A dictionary containing aperture names as keys and specutils.Spectrum1D objects
+        as values.
+
+    configuration_filename : dict
+        The configuration dictionary.
+    """
+
+    if "weights" not in configuration:
+        weights = {}
+        for aperture, spectrum in model_spectra.iteritems():
+            weights[aperture] = lambda disp, flux: flux
+
+    else:
+        weights = {}
+        for aperture, spectrum in model_spectra.iteritems():
+            if aperture not in configuration["weights"]:
+                weights[aperture] = lambda disp, flux: flux
+
+            else:
+                weights[aperture] = lambda disp, flux: eval(configuration["weights"][aperture], {"disp": disp, "flux": flux})
+
+    return weights
+
+
 def prepare_masks(model_spectra, configuration):
     """Returns pixel masks to apply to the model spectra
     based on the configuration provided.
@@ -579,13 +612,14 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
     masks = prepare_masks(model_spectra, configuration)
 
     # Any weighting functions?
-    #weights = prepare_weights(model_spectra, configuration)
+    weighting_functions = prepare_weights(model_spectra, configuration)
 
     # Calculate chi^2 difference
     chi_sq_i = {}
     for i, (aperture, observed_spectrum) in enumerate(zip(aperture_mapping, observed_spectra)):
 
-        chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2)/observed_spectrum.uncertainty
+        weighted_flux = weighting_functions[aperture](observed_spectrum.disp, observed_spectrum.flux)
+        chi_sq = ((weighted_flux - model_spectra[aperture].flux)**2)/observed_spectrum.uncertainty
 
         # Apply masks
         chi_sq *= masks[aperture]
