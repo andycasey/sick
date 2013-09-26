@@ -32,28 +32,44 @@ def animate_setup(num_spectra):
     for i in xrange(num_spectra):
         ax = fig.add_subplot(num_spectra, 1, i + 1)
         # One for model, and one for observed
-        ax.plot([], [], 'k', zorder=5)
-        ax.plot([], [], 'b', zorder=1)
+        ax.plot([], [], 'k', zorder=10)
+        ax.plot([], [], 'b', zorder=5)
+
+        # One for the mask
+        ax.scatter([], [], marker='|', linewidths=1, s=100, zorder=1)
 
     return fig
 
 
-def animate_callback(total_chi_sq, num_dof, parameters, observed_spectra, model_spectra):
+def animate_callback(total_chi_sq, num_dof, parameters, observed_spectra, model_spectra, masks):
     """Callback function that can be used during each iteration of analysis."""
 
     # Get the current figure
     fig = plt.gcf()
     
+    # Mask color order:
+    #> -2: Not interested in this region, and it was non-finite (not used).
+    #> -1: Interested in this region, but it was non-finite (not used).
+    #>  0: Not interested in this region, it was finite (not used).
+    #>  1: Interested in this region, it was finite (used for \chi^2 determination)
+    mask_colors = ["w", "#aa5f5f", "w", "#acacac"]
+
     # Plot the relevant spectra on each axes
-    for ax, observed_spectrum, model_spectrum in zip(fig.axes, observed_spectra, model_spectra):
+    for ax, observed_spectrum, model_spectrum, mask in zip(fig.axes, observed_spectra, model_spectra, masks):
 
         # Calculate the limits
         xlims = [observed_spectrum.disp[0], observed_spectrum.disp[-1]]
-        ylims = [0, np.max(observed_spectrum.flux)]
+        ylims = [0, np.max(list(observed_spectrum.flux) + [1.20])]
 
         # Update the model and observed data
         ax.lines[0].set_data(np.array([observed_spectrum.disp, observed_spectrum.flux]))
         ax.lines[1].set_data(np.array([model_spectrum.disp, model_spectrum.flux]))
+
+        if len(ax.collections[0].get_offsets()) == 0:
+            ax.collections[0].set_offsets(np.vstack([model_spectrum.disp, [1.10] * len(mask)]).T)
+
+        colors = [mask_colors[int(i + 2)] for i in mask]
+        ax.collections[0].set_edgecolors(colors)
 
         # Update the limits
         ax.set_xlim(xlims)
@@ -64,11 +80,13 @@ def animate_callback(total_chi_sq, num_dof, parameters, observed_spectra, model_
     plt.pause(0.01)
 
 
-def plot_result(chi_sq, num_dof, posteriors, observed_spectra, model_spectra):
+def plot_result(chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks):
     """Plots the SCOPE result and returns the figure canvas."""
 
     if posteriors is None:
         return None
+
+    mask_colors = ["w", "#aa5f5f", "w", "#acacac"]
 
     fig = plt.figure()
     num_spectra = len(observed_spectra)
@@ -83,11 +101,14 @@ def plot_result(chi_sq, num_dof, posteriors, observed_spectra, model_spectra):
 
     axis.text(0.05, 0.05, posteriors_formatted, fontsize='x-small', transform=axis.transAxes)
 
-    for i, (observed_spectrum, model_spectrum) in enumerate(zip(observed_spectra, model_spectra), start=2):
+    for i, (observed_spectrum, model_spectrum, mask) in enumerate(zip(observed_spectra, model_spectra, masks), start=2):
         axis = fig.add_subplot(num_spectra + 1, 1, i)
 
         axis.plot(model_spectrum.disp, model_spectrum.flux, 'b', zorder=1)
         axis.plot(observed_spectrum.disp, observed_spectrum.flux, 'k', zorder=5)
+
+        colors = [mask_colors[int(pixel + 2)] for pixel in mask]
+        axis.scatter(model_spectrum.disp, [1.1] * len(mask), marker='|', edgecolors=colors, linewidths=1, s=100, zorder=1)
 
         # Get the overlap
         xlim = [
@@ -101,7 +122,6 @@ def plot_result(chi_sq, num_dof, posteriors, observed_spectra, model_spectra):
         if i == num_spectra + 1:
             axis.set_xlabel('Wavelength (${\AA}$)')
         
-
     return fig
 
 

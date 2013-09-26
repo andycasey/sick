@@ -131,6 +131,9 @@ def analyze_star(observed_spectra, configuration, callback=None):
 
     if 0 in [len(spectrum.disp) for spectrum in observed_spectra]: return None
 
+    if isinstance(configuration, str) and os.path.exists(configuration):
+        configuration = config.load(configuration)
+
     # Check observed arms do not overlap
     observed_dispersions = [spectrum.disp for spectrum in observed_spectra]
     overlap = utils.find_spectral_overlap(observed_dispersions)
@@ -254,13 +257,13 @@ def analyze_star(observed_spectra, configuration, callback=None):
     chi_squared(parameters_final, parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, final_callback)
     
     try:
-        chi_sq, num_dof, posteriors, observed_spectra, model_spectra = output.data
+        chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks = output.data
 
     except AttributeError:
-        return (np.nan, np.nan, None, None, None)
+        return (np.nan, np.nan, None, None, None, None)
 
     else:
-        return (chi_sq, num_dof, posteriors, observed_spectra, model_spectra)
+        return (chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks)
 
 
 def prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration):
@@ -485,16 +488,21 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
         # Pearson's \chi^2:
         #chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2)/model_spectra[aperture].flux
 
-        # Add only finite values
-        finite_indices = np.isfinite(chi_sq)
-        chi_sq_i[aperture] = chi_sq[finite_indices]
+        # Add only finite, positive values
+        finite_chisq_indices = np.isfinite(chi_sq)
+        positive_finite_flux_indices = (observed_spectrum.flux > 0) * np.isfinite(observed_spectrum.flux)
+
+        # useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
+        useful_pixels = finite_chisq_indices * positive_finite_flux_indices
+
+        chi_sq_i[aperture] = chi_sq[useful_pixels]
 
         # Update the masks values:
         #> -2: Not interested in this region, and it was non-finite (not used).
         #> -1: Interested in this region, but it was non-finite (not used).
         #>  0: Not interested in this region, it was finite (not used).
         #>  1: Interested in this region, it was finite (used for \chi^2 determination)
-        masks[aperture][~finite_indices] -= 2
+        masks[aperture][~useful_pixels] -= 2
 
     num_pixels = sum(map(len, chi_sq_i.values()))
     total_chi_sq = np.sum(map(np.sum, chi_sq_i.values()))
@@ -511,7 +519,8 @@ def chi_squared(parameters, parameter_names, observed_spectra, aperture_mapping,
             num_dof,
             dict(zip(parameter_names, parameters)),
             observed_spectra,
-            [model_spectra[aperture] for aperture in aperture_mapping]
+            [model_spectra[aperture] for aperture in aperture_mapping],
+            [masks[aperture] for aperture in aperture_mapping]
             )
 
     logging.debug("Total \chi^2: {chi_sq}, n_dof: {ndof}".format(chi_sq=total_chi_sq, ndof=num_dof))
