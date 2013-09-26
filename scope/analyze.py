@@ -13,6 +13,7 @@ import os
 import multiprocessing
 import pickle
 import random
+import sys
 import time
 from ast import literal_eval
 
@@ -52,6 +53,9 @@ class Worker(multiprocessing.Process):
 
             except:
                 self.queue_out.put(False)
+                etype, value, tb = sys.exc_info()
+                logging.warn("Failed to analyse spectra:\n\tTraceback (most recent call last):\n{traceback}\n{etype}: {value}"
+                    .format(traceback=tb, etype=etype, value=value))
 
             else:
                 self.queue_out.put(result)
@@ -143,6 +147,7 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
                 
                 # Add in the observed headers to the line data.
                 if result not in (None, False) and len(result) > 3 and result[3] != None:
+                    observed_spectra = result[3]
                     line_data += [observed_spectra[0].headers[header] \
                         if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
                     
