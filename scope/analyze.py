@@ -456,6 +456,9 @@ def analyze_star(observed_spectra, configuration, chi_squared_fn_callback=None):
             # Save the state?
 
             mean_acceptance_fractions.append(mean_acceptance_fraction)
+            if mean_acceptance_fraction == 0:
+                logging.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
+                break
 
         # Convert state to posteriors
         logging.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fraction))
