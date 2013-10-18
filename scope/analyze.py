@@ -205,24 +205,25 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
     # Load the configuration
     configuration = config.load(configuration_filename)
 
-    # Check for parallelism
-    if 'parallelism' in configuration and configuration['parallelism'] > 1:
+    # Check for threads
+    if 'threads' in configuration and configuration['threads'] > 1 \
+    and configuration["solution_method"] != "emcee":
 
-        logging.info("Initializing {n} parallel workers".format(n=configuration['parallelism']))
+        logging.info("Initializing {n} parallel workers".format(n=configuration['threads']))
 
         # Do parallel
         queue_in = multiprocessing.Queue()
         queue_out = multiprocessing.Queue()
 
         # Initialise all the workers
-        for i in xrange(configuration['parallelism']):
+        for i in xrange(configuration['threads']):
             Worker(queue_in, queue_out).start()
 
         for star in stars:
             queue_in.put((star, configuration, callback))
 
         # Shut down all workers
-        [queue_in.put(None) for i in xrange(configuration['parallelism'])]
+        [queue_in.put(None) for i in xrange(configuration['threads'])]
 
         # Get all the results
         results = []
@@ -233,7 +234,8 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
 
     else:
 
-        logging.info("Performing analysis in serial mode")
+        if solution_method != "emcee":
+            logging.info("Performing analysis in serial mode")
 
         # Do serial
         results = [analyze_star(star, configuration, callback) for star in stars]
@@ -435,7 +437,8 @@ def analyze_star(observed_spectra, configuration, chi_squared_fn_callback=None):
             lnprob_fn_callback, chi_squared_fn_callback)   
 
         logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(nwalkers, ", ".join(parameter_names)))
-        sampler = emcee.EnsembleSampler(nwalkers, len(parameter_names), lnprob_fn, args=optimisation_args)
+        sampler = emcee.EnsembleSampler(nwalkers, len(parameter_names), lnprob_fn, args=optimisation_args,
+            threads=configuration["threads"] if hasattr(configuration, "threads") else 1)
         lnprob0, rstate0 = None, None
 
         mean_acceptance_fractions = []
@@ -463,7 +466,11 @@ def analyze_star(observed_spectra, configuration, chi_squared_fn_callback=None):
         
         logging.info("Most probable values with a $\chi^2$ = {0:.2f} and $L$ = {1:.4e}: {2}".format(
             chi_sq, log_likelihood,
-            ", ".join(["{0} = {1:.2e}".format(p, v) for p, v in zip(parameter_names, sample_data[most_probable_index, :-2])])))
+            ", ".join(["{0} = {1:.2e}".format(p, v) \
+                for p, v in zip(parameter_names, sample_data[most_probable_index, :-2])])))
+        
+        if not np.isfinite(log_likelihood):
+            return (None, -np.inf, np.inf, np.nan, np.nan, None, None, None, None, None, None, None)
         
         output = CallbackClass()
         final_callback = lambda *x: setattr(output, "data", x)
