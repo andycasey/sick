@@ -333,13 +333,13 @@ class Models(object):
         neighbour_indices = self.get_nearest_neighbours(point)
 
         if beams is 'all':
-            beams = self.flux_filenames.keys()
+            beams = self.dispersion.keys()
 
         elif not isinstance(beams, (list, tuple)):
             beams = [beams]
 
         for beam in beams:
-            if beam not in self.flux_filenames.keys():
+            if beam not in self.dispersion.keys():
                 raise ValueError("could not find '{beam}' beam".format(beam=beam))
 
         interpolated_flux = {}
@@ -352,8 +352,9 @@ class Models(object):
             beam_flux[:] = np.nan
 
             # Load the flux points
+            flux_data = self.flux_filenames if len(self.dispersion.keys()) == 1 else self.flux_filenames[beam]
             for i, index in enumerate(neighbour_indices):
-                beam_flux[i, :] = load_model_data(self.flux_filenames[beam][index])
+                beam_flux[i, :] = load_model_data(flux_data[index])
             
             try:
                 interpolated_flux[beam] = interpolate.griddata(

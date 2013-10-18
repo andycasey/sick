@@ -63,6 +63,7 @@ class Worker(multiprocessing.Process):
 
 
 def initialise_priors(configuration, model, observed_spectra, aperture_mapping, nwalkers=1):
+    """ Initialise the priors (or initial conditions) for the analysis """
 
     walker_priors = []
     measured_doppler_shifts = {}
@@ -81,6 +82,10 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
 
             try:
                 prior_value = float(prior_value)
+                if i == 0:
+                    logging_level = logging.info if nwalkers == 1 else logging.warn
+                    logging_level("Initialised {0} parameter as a single value: {1:.2e}".format(
+                        parameter_name, prior_value))
 
             except:
 
@@ -91,6 +96,9 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
                     index = model.colnames.index(parameter_name)
                     possible_points = model.grid_points[:, index]
 
+                    if i == 0:
+                        logging.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
+                            parameter_name, np.min(possible_points), np.max(possible_points)))
                     current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
 
                 elif prior_value.lower().startswith("cross_correlate") \
@@ -114,16 +122,25 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
                     # Get the mu and sigma
                     mu, sigma = measured_doppler_shifts[aperture]
 
+                    if i == 0:
+                        logging.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
+                            parameter_name, mu, sigma))
                     current_walker.append(random.normal(mu, sigma))
 
                 elif prior_value.lower().startswith("gaussian"):
                     mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
+                    if i == 0:
+                        logging.info("Initialised {0} parameter with a gaussian distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
+                            parameter_name, mu, sigma))
                     current_walker.append(random.normal(mu, sigma))
 
                 elif prior_value.lower().startswith("uniform"):
                     minimum, maximum = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
+                    if i == 0:
+                        logging.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
+                            parameter_name, minimum, maximum))
                     current_walker.append(random.uniform(minimum, maximum))
 
                 else:
@@ -142,8 +159,17 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
             if ordered_parameter_names[-1] != "jitter":
                 ordered_parameter_names.append("jitter")
 
+            if i == 0:
+                logging.info("Initialised jitter parameter with a uniform distribution between 0 and 1")
             current_walker.append(random.rand())
             walker_priors.append(current_walker)
+
+    walker_priors = np.array(walker_priors)
+
+    logging.info("Priors summary:")
+    for i, ordered_parameter_name in enumerate(ordered_parameter_names):
+        logging.info("\tParameter {0} - mean: {1:.2e}, min: {2:.2e}, max: {3:.2e}".format(
+            ordered_parameter_name, np.mean(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
 
     return (ordered_parameter_names, walker_priors)
 
@@ -325,7 +351,7 @@ def analyze_all(stars, configuration_filename, output_filename_prefix=None, clob
     return results
 
 
-def analyze_star(observed_spectra, configuration, callback=None):
+def analyze_star(observed_spectra, configuration, chi_squared_fn_callback=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
 
@@ -337,7 +363,7 @@ def analyze_star(observed_spectra, configuration, callback=None):
     configuration : dict
         The configuration settings for this analysis.
 
-    callback : function
+    chi_squared_fn_callback : function
         A callback to perform after every model comparison.
     """
 
@@ -379,34 +405,91 @@ def analyze_star(observed_spectra, configuration, callback=None):
             spectrum.uncertainty = spectrum.flux**(-0.5)
 
     
-    fail_value = 999
     
     # Make fmin_powell the default
     if "solution_method" not in configuration or configuration["solution_method"] == "fmin_powell":
 
+        fail_value = 999
         parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping)
-        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)   
+        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, chi_squared_fn_callback)   
+        parameters_final = scipy.optimize.fmin_powell(chi_squared_fn, p0, args=optimisation_args, xtol=0.001, ftol=0.001)
 
-        parameters_final = scipy.optimize.fmin_powell(chi_squared_fn, p0, args=optimisation_args, xtol=0.01, ftol=0.01)
+    elif configuration["solution_method"] == "leastsq":
+
+        fail_value = 999
+        parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping)
+        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, chi_squared_fn_callback)
+        parameters_final = scipy.optimize.leastsq(chi_squared_fn, p0, args=optimisation_args, xtol=1e-3, ftol=1e-3)
 
     elif configuration["solution_method"] == "emcee":
 
         nwalkers, nsteps = configuration["emcee"]["nwalkers"], configuration["emcee"]["nsteps"]
+        
+        sample_data = []
+        def lnprob_fn_callback(parameters, chi_squared, log_likelihood):
+            sample_point = list(parameters) + [chi_squared, log_likelihood]
+            sample_data.append(sample_point)
 
         parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping, nwalkers)
-        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, callback)   
+        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, 
+            lnprob_fn_callback, chi_squared_fn_callback)   
 
-        sampler = emcee.EnsembleSampler(nwalkers, len(parameter_names), lnprob_fn,
-            args=optimisation_args)
+        logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(nwalkers, ", ".join(parameter_names)))
+        sampler = emcee.EnsembleSampler(nwalkers, len(parameter_names), lnprob_fn, args=optimisation_args)
+        lnprob0, rstate0 = None, None
 
-        pos, prob, state = sampler.run_mcmc(p0, nsteps)
+        mean_acceptance_fractions = []
+        # Sample_data contains all the inputs, and the \chi^2 and L 
+        for i, (pos, lnprob, state) in enumerate(sampler.sample(
+            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=nsteps)):
 
-        raise a
+            fraction_complete = (i + 1)/nsteps
+            mean_acceptance_fraction = np.mean(sampler.acceptance_fraction)
 
+            # Announce progress
+            logging.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
+                fraction_complete * 100, i + 1, mean_acceptance_fraction))
+
+            # Save the state?
+
+            mean_acceptance_fractions.append(mean_acceptance_fraction)
+
+        # Convert state to posteriors
+        logging.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fraction))
+
+        sample_data = np.array(sample_data)
+        most_probable_index = np.argmax(sample_data[:, -1])
+        chi_sq, log_likelihood = sample_data[most_probable_index, -2:]
+        
+        logging.info("Most probable values with a $\chi^2$ = {0:.2f} and $L$ = {1:.4e}: {2}".format(
+            chi_sq, log_likelihood,
+            ", ".join(["{0} = {1:.2e}".format(p, v) for p, v in zip(parameter_names, sample_data[most_probable_index, :-2])])))
+        
+        output = CallbackClass()
+        final_callback = lambda *x: setattr(output, "data", x)
+        chi_squared_fn(sample_data[most_probable_index, :-2], parameter_names, observed_spectra,
+            aperture_mapping, model, configuration, -np.inf, final_callback)
+
+        try:
+            chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks = output.data
+
+        except AttributeError:
+            raise
+
+        else:
+
+            # log_likelihood, chi_sq, num_dof, mean_acceptance_fractions
+            # pos, lnprob, state, sample_data
+            # posteriors
+            # observed_spectra, model_spectra, masks
+
+            return (posteriors, log_likelihood, chi_sq, num_dof, mean_acceptance_fractions,
+                observed_spectra, model_spectra, masks, pos, lnprob, state, sample_data)
 
     else:
         raise NotImplementedError
 
+    # The following only occurs if we did not sample by MCMC!
     # We will need to sample the \chi^2 function again with a callback to save
     # the results
     output = CallbackClass()
@@ -456,9 +539,15 @@ def prepare_model_spectra(parameters, parameter_names, observed_spectra, apertur
     try:
         synthetic_fluxes = model.interpolate_flux(grid_point)
 
-    except: return None
+    except:
+        logging.warn("No model flux could be determined for {0}".format(
+            ", ".join(["{0} = {1:.2f}".format(parameter, value) for parameter, value in zip(stellar_parameters, grid_point)])
+            ))
+        return None
 
-    logging.debug("Interpolated model flux")
+    logging.debug("Interpolated model flux at {0}".format(
+        ", ".join(["{0} = {1:.2f}".format(parameter, value) for parameter, value in zip(stellar_parameters, grid_point)])
+        ))
 
     if synthetic_fluxes == {}: return None
     for aperture, flux in synthetic_fluxes.iteritems():
@@ -648,15 +737,19 @@ def chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mappi
         A callback to apply after completing the comparison.
     """
 
+    #print("chi_squared_fn({0}, {1}, {2}, {3}, {4}, ...)".format(parameters, parameter_names, observed_spectra, aperture_mapping, model))
+
     assert len(parameters) == len(parameter_names)
 
     # Prepare the observed spectra
     observed_spectra = prepare_observed_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, configuration)
-    if observed_spectra is None: return fail_value
+    if observed_spectra is None:
+        return fail_value
 
     # Get the synthetic spectra
     model_spectra = prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration)
-    if model_spectra is None: return fail_value
+    if model_spectra is None:
+        return fail_value
 
     # Any masks?
     masks = prepare_masks(model_spectra, configuration)
@@ -719,10 +812,13 @@ def chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mappi
 
 
 def lnprob_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
-    model, configuration, fail_value=999, callback=None, **kwargs):
+    model, configuration, lnprob_callback=None, chi_squared_fn_callback=None, **kwargs):
     """Calculates the log of the probability of the $\chi^2$ distribution function.
 
     Inputs the same as `chi_squared_fn_fn`"""
+
+    logging.debug("lnprob_fn({0}, {1}, {2}, {3}, {4}, ...)".format(
+        parameters, parameter_names, observed_spectra, aperture_mapping, model))
 
     # Check the jitter
     jitter_index = parameter_names.index("jitter")
@@ -737,8 +833,14 @@ def lnprob_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
     inverse_variance = 1 / np.array(variance)
 
     chi_sq = chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mapping,
-        model, configuration, fail_value=fail_value, callback=callback)
+        model, configuration, fail_value=np.inf, callback=chi_squared_fn_callback)
 
     log_likelihood = -0.5 * (chi_sq - np.sum(np.log(inverse_variance)))
+    print("Inputs: {0}, \n\tyields $\chi^2$ = {1:.2f}, log-likelihood: {2:.5e}".format(
+        ", ".join(["{0} = {1:.2f}".format(p, v) for p, v in zip(parameter_names, parameters)]),
+        chi_sq, log_likelihood))
+
+    if lnprob_callback is not None:
+        lnprob_callback(parameters, chi_sq, log_likelihood)
 
     return log_likelihood
