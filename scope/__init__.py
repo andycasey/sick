@@ -6,7 +6,7 @@ __author__ = "Andy Casey <acasey@mso.anu.edu.au>"
 
 
 import logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 # Module imports
 import config

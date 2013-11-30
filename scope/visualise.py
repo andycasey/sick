@@ -80,6 +80,91 @@ def animate_callback(total_chi_sq, num_dof, parameters, observed_spectra, model_
     plt.pause(0.005)
 
 
+def plot_mcmc_result(posteriors, maximum_log_likelihood, minimum_chi_sq, num_dof, mean_acceptance_fractions,
+    observed_spectra, model_spectra, masks, pos, lnprob, state, sampled_data):
+    """Plots the results from a MCMC simulation and returns the figure canvas."""
+
+    # posteriors: dict with parameters/best values as key/values
+    # log_likelihood: float of maximum likelihood
+    # minimum_chi_sq
+    # mean_acceptance_fractions: list of floats of length NSTEPS showing the mean acceptance fraction for each step
+    # observed_spectra: list of specutils.Spectrum1D
+    # model_spectra : list of specutils.Spectrum1D
+    # list (length same as model/observed_spectra) of arrays where the values correspond to each flux pixel:
+        #> -2: Not interested in this region, and it was non-finite (not used).
+        #> -1: Interested in this region, but it was non-finite (not used).
+        #>  0: Not interested in this region, it was finite (not used).
+        #>  1: Interested in this region, it was finite (used for \chi^2 determination)
+    # pos, lnprob, state of the data
+    # sampled_data: an array of length (N, M+2) where M is length of posteriors (plus chi_sq, log_likelihood), N is the number of finite samples
+
+    mask_colors = ["w", "#aa5f5f", "w", "#acacac"]
+
+    # Figures we want:
+    # 1) mean acceptance fraction over steps
+    # 1.1) log likelihood for each finite sampling
+    # 1.2) chi-squared for each finite sampling
+    # 2) model spectra/observed spectra with masks
+    # 3) triangle plot for all sampled parameters.
+    # 4) plot of all parameters for all finite samplings
+    fig = plt.figure()
+    acceptance_fraction_axes = fig.add_subplot(311)
+
+    x = np.arange(1, len(mean_acceptance_fractions) + 1)
+    acceptance_fraction_axes.plot(x, mean_acceptance_fractions, c="k", lw=2)
+    acceptance_fraction_axes.set_xlabel("Step")
+    acceptance_fraction_axes.set_ylabel("Mean acceptance fraction")
+    acceptance_fraction_axes.set_xlim(1, x[-1])
+
+    log_likelihood_axes = fig.add_subplot(312)
+
+    x = np.arange(1, len(sampled_data) + 1)
+    log_likelihood_axes.plot(x, sampled_data[:, -1], c="k", lw=2)
+    log_likelihood_axes.set_xlabel("Sampling")
+    log_likelihood_axes.set_ylabel("log(L)")
+    log_likelihood_axes.set_xlim(1, x[-1])
+
+    chi_sq_axes = fig.add_subplot(313)
+
+    chi_sq_axes.plot(x, sampled_data[:, -2], c="k", lw=2)
+    chi_sq_axes.set_xlabel("Sampling")
+    chi_sq_axes.set_ylabel("$\chi^2$")
+    chi_sq_axes.set_xlim(1, x[-1])
+    
+    # All sampled points
+    fig_sampled_points = plt.figure()
+    num_parameters = len(posteriors)
+    for i, parameter in enumerate(posteriors.keys()):
+        y = sampled_data[:, i]
+        axes = fig_sampled_points.add_subplot(num_parameters, 1, i + 1)
+        axes.plot(x, y, c="k", lw=1)
+        axes.set_ylabel(parameter)
+        axes.set_xlim(1, x[-1])
+
+    axes.set_xlabel("Sampling")
+
+    fig2 = plt.figure()
+    axes = [fig2.add_subplot(len(observed_spectra), 1, i) for i in xrange(1, len(observed_spectra) + 1)]
+    for axis, observed_spectrum, model_spectrum, mask in zip(axes, observed_spectra, model_spectra, masks):
+
+        # Model spectra
+        axis.plot(model_spectrum.disp, model_spectrum.flux, c="b")
+        axis.plot(observed_spectrum.disp, observed_spectrum.flux, "k")
+
+        colors = [mask_colors[int(pixel + 2)] for pixel in mask]
+        axis.scatter(model_spectrum.disp, [1.1] * len(mask), marker='|', edgecolors=colors, linewidths=1, s=100, zorder=1)
+
+        xlim = [max(observed_spectrum.disp[0], model_spectrum.disp[0]), min(observed_spectrum.disp[-1], model_spectrum.disp[-1])]
+        axis.set_xlim(xlim)
+        axis.set_ylim(0, 1.2)
+        axis.set_ylabel("Flux")
+
+    axis.set_xlabel("Wavelength")
+    axes[0].set_title(",".join(["{0}:{1:.2e}".format(key, value) for key, value in posteriors.iteritems()]), fontsize=7)
+
+    return (fig, fig2, fig_sampled_points)
+
+
 def plot_result(chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks):
     """Plots the SCOPE result and returns the figure canvas."""
 

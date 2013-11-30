@@ -16,6 +16,7 @@ import random
 import sys
 import time
 from ast import literal_eval
+from collections import OrderedDict
 
 # Third-party
 import emcee
@@ -70,6 +71,7 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
 
     ordered_parameter_names = configuration["priors"].keys()
 
+    # Jitter is a special parameter, and cannot be used as a name for any model parameters
     assert "jitter" not in ordered_parameter_names
 
     for i in xrange(nwalkers):
@@ -121,6 +123,9 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
 
                     # Get the mu and sigma
                     mu, sigma = measured_doppler_shifts[aperture]
+
+                    # Set mu to be negative so that it will correct for this doppler shift, not apply an additional shift
+                    mu = -mu
 
                     if i == 0:
                         logging.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
@@ -402,11 +407,12 @@ def analyze_star(observed_spectra, configuration, chi_squared_fn_callback=None):
                     wl_end=np.max(observed_dispersion)))
 
     # Do we have uncertainties in our spectra? If not we should estimate them.
-    for spectrum in observed_spectra:
-        if spectrum.uncertainty is None:
-            spectrum.uncertainty = spectrum.flux**(-0.5)
+    # This is estimated from the continuum flux now instead.
 
-    
+    #for spectrum in observed_spectra:
+    #    if spectrum.uncertainty is None:
+    #        spectrum.uncertainty = spectrum.flux**(-0.5)
+
     
     # Make fmin_powell the default
     if "solution_method" not in configuration or configuration["solution_method"] == "fmin_powell":
@@ -441,7 +447,7 @@ def analyze_star(observed_spectra, configuration, chi_squared_fn_callback=None):
             threads=configuration["threads"] if hasattr(configuration, "threads") else 1)
         lnprob0, rstate0 = None, None
 
-        mean_acceptance_fractions = []
+        mean_acceptance_fractions = np.zeros(nsteps)
         # Sample_data contains all the inputs, and the \chi^2 and L 
         for i, (pos, lnprob, state) in enumerate(sampler.sample(
             p0, lnprob0=lnprob0, rstate0=rstate0, iterations=nsteps)):
@@ -455,7 +461,7 @@ def analyze_star(observed_spectra, configuration, chi_squared_fn_callback=None):
 
             # Save the state?
 
-            mean_acceptance_fractions.append(mean_acceptance_fraction)
+            mean_acceptance_fractions[i] = mean_acceptance_fraction
             if mean_acceptance_fraction == 0:
                 logging.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
@@ -550,7 +556,7 @@ def prepare_model_spectra(parameters, parameter_names, observed_spectra, apertur
         synthetic_fluxes = model.interpolate_flux(grid_point)
 
     except:
-        logging.warn("No model flux could be determined for {0}".format(
+        logging.debug("No model flux could be determined for {0}".format(
             ", ".join(["{0} = {1:.2f}".format(parameter, value) for parameter, value in zip(stellar_parameters, grid_point)])
             ))
         return None
@@ -577,9 +583,14 @@ def prepare_model_spectra(parameters, parameter_names, observed_spectra, apertur
         # Is the smoothing a free parameter?
         if key in parameter_names:
             index = parameter_names.index(key)
+            # Ensure valid smoothing value
+            if parameters[index] < 0: return
             model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(parameters[index])
 
         elif configuration['smooth_model_flux'][aperture]['perform']:
+            # Ensure valid smoothing value
+            if configuration['smooth_model_flux'][aperture]['kernel'] < 0: return
+
             # It's a fixed value.
             model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(configuration['smooth_model_flux'][aperture]['kernel'])
             logging.debug("Smoothed model flux for '{aperture}' aperture".format(aperture=aperture))
@@ -643,6 +654,10 @@ def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aper
             return None
 
         else:
+
+            if spectrum.uncertainty is None:
+                normalised_spectrum.uncertainty = continuum.flux**(-0.5)
+            
             normalised_spectra.append(normalised_spectrum)
 
         logging.debug("Performed normalisation for aperture '{aperture}'".format(aperture=aperture))
@@ -721,10 +736,11 @@ def prepare_masks(model_spectra, configuration):
             else:
                 # We are required to build a mask.
                 mask = np.zeros(len(spectrum.disp))
-                for region in configuration["masks"][aperture]:
-                    index_start, index_end = np.searchsorted(spectrum.disp, region)
+                if configuration["masks"][aperture] is not None:
+                    for region in configuration["masks"][aperture]:
+                        index_start, index_end = np.searchsorted(spectrum.disp, region)
 
-                    mask[index_start:index_end] = 1
+                        mask[index_start:index_end] = 1
 
                 masks[aperture] = mask
 
@@ -811,7 +827,7 @@ def chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mappi
         callback(
             total_chi_sq,
             num_dof,
-            dict(zip(parameter_names, parameters)),
+            OrderedDict(zip(parameter_names, parameters)),
             observed_spectra,
             [model_spectra[aperture] for aperture in aperture_mapping],
             [masks[aperture] for aperture in aperture_mapping]
@@ -827,9 +843,6 @@ def lnprob_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
 
     Inputs the same as `chi_squared_fn_fn`"""
 
-    logging.debug("lnprob_fn({0}, {1}, {2}, {3}, {4}, ...)".format(
-        parameters, parameter_names, observed_spectra, aperture_mapping, model))
-
     # Check the jitter
     jitter_index = parameter_names.index("jitter")
     jitter = parameters[jitter_index]
@@ -838,7 +851,11 @@ def lnprob_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
 
     variance = []
     for spectrum in observed_spectra:
-        variance += list(spectrum.flux**2 + jitter)
+
+        new_flux = spectrum.flux.copy()
+        new_flux[~np.isfinite(new_flux)] = 1
+        new_flux[0 >= new_flux] = 1
+        variance += list(new_flux**(-0.5) + jitter)
 
     inverse_variance = 1 / np.array(variance)
 
@@ -846,8 +863,8 @@ def lnprob_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
         model, configuration, fail_value=np.inf, callback=chi_squared_fn_callback)
 
     log_likelihood = -0.5 * (chi_sq - np.sum(np.log(inverse_variance)))
-    print("Inputs: {0}, \n\tyields $\chi^2$ = {1:.2f}, log-likelihood: {2:.5e}".format(
-        ", ".join(["{0} = {1:.2f}".format(p, v) for p, v in zip(parameter_names, parameters)]),
+    logging.debug("lnprob_fn({0}), \n\tyields $\chi^2$ = {1:.2f}, log-likelihood: {2:.5e}".format(
+        ", ".join(["{0}: {1:.2f}".format(p, v) for p, v in zip(parameter_names, parameters)]),
         chi_sq, log_likelihood))
 
     if lnprob_callback is not None:
