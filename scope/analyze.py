@@ -181,7 +181,7 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
             logging.info("\tParameter {0} - mean: {1:.2e}, min: {2:.2e}, max: {3:.2e}".format(
                 ordered_parameter_name, np.mean(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
         else:
-            logging.info("\tParameter {0} - initial point: {1.2e}".format(
+            logging.info("\tParameter {0} - initial point: {1:.2e}".format(
                 ordered_parameter_name, walker_priors[i]))
 
     return (ordered_parameter_names, walker_priors)
@@ -436,6 +436,13 @@ def analyze_star(observed_spectra, configuration, lnprob_fn_callback=None, chi_s
         lnprob0, rstate0 = None, None
         mean_acceptance_fractions = np.zeros(nsteps)
         
+        # Use a callback if we are running in serial
+        if configuration.get("threads", 1) == 1:
+            sample_data = []
+            def lnprob_fn_callback(parameters, chi_squared, log_likelihood):
+                sample_point = list(parameters) + [chi_squared, log_likelihood]
+                sample_data.append(sample_point)
+
         # Initialise priors and set up arguments for optimization
         parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping, nwalkers)
         optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, 
@@ -446,7 +453,8 @@ def analyze_star(observed_spectra, configuration, lnprob_fn_callback=None, chi_s
             threads=configuration.get("threads", 1))
 
         # Sample_data contains all the inputs, and the \chi^2 and L 
-        for i, (pos, lnprob, state, blobs) in enumerate(sampler.sample(
+        # sampler_state = (pos, lnprob, state[, blobs])
+        for i, sampler_state in enumerate(sampler.sample(
             p0, lnprob0=lnprob0, rstate0=rstate0, iterations=nsteps)):
 
             fraction_complete = (i + 1)/nsteps
@@ -465,9 +473,16 @@ def analyze_star(observed_spectra, configuration, lnprob_fn_callback=None, chi_s
         logging.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fraction))
 
         # Blobs contain all the parameters sampled, chi_sq value and log-likelihood value
-        sampled_parameters = np.array(sampler.blobs)
-        sampled_parameters = sampled_parameters.reshape(
-            sampled_parameters.shape[0] * sampled_parameters.shape[1], sampled_parameters.shape[2])
+
+        if configuration.get("threads", 1) == 1:
+            sampled_parameters = np.array(sample_data)
+
+        else:
+            sampled_parameters = np.array(sampler.blobs)
+
+
+            sampled_parameters = sampled_parameters.reshape(
+                sampled_parameters.shape[0] * sampled_parameters.shape[1], sampled_parameters.shape[2])
 
         # Get the most probable sampled point
         most_probable_index = np.argmax(sampled_parameters[:, -1])
@@ -832,7 +847,7 @@ def chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mappi
         chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2/(observed_spectrum.uncertainty**2 + jitter)
         
         # Apply any weighting functions to the chi_sq values
-        chi_sq *= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
+        chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
 
         # Apply masks
         chi_sq *= masks[aperture]
