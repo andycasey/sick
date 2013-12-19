@@ -1,0 +1,129 @@
+# MODEL SPECTRA
+# This contains the information for where to find the synthetic spectra, and how to read their
+# parameters (teff, logg, feh) from the filename. Since all the synthetic spectra are assumed
+# to have the same dispersion map, we are referencing the dispersion filenames for each "beam"
+# (e.g., blue, red), and the folder and flux files for each beam. We can call beams anything
+# we want, but their names (e.g., blue) must be defined here in the models section.
+models:
+  dispersion_filenames:
+    blue: /Users/andycasey/thesis/old.scope/standards/UVES580_aao_wlmap.txt.cached
+    red: /Users/andycasey/thesis/old.scope/standards/HR21_aao_wlmap.txt.cached
+  flux_filenames:
+    blue:
+      folder: '/Users/andycasey/thesis/old.scope/standards/UVES580/GES_4600_alfa+0.4_fits/'
+      re_match: '[s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.+-]+).+fits.cached$'
+    red: 
+      folder: '/Users/andycasey/thesis/old.scope/standards/HR21/GES_HR21_alfa+0.4_fits/'
+      re_match: '[s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.+-]+).+fits.cached$'
+
+# Some general settings
+interpolation: linear
+parallelism: 2
+logging: debug
+
+# NORMALISATION SETTINGS
+normalise_observed:
+  blue:
+    function: spline
+    perform: yes
+    order: 4
+    knot_spacing: 150
+    scale: free
+    lower_clip: 0.5
+    upper_clip: 5
+  red:
+    function: spline
+    perform: true
+    order: 3
+    scale: free
+    lower_clip: 1.5
+    upper_clip: 5
+    knot_spacing: 150
+doppler_correct:
+  blue:
+    allow_shift: true
+  red:
+    allow_shift: true
+smooth_model_flux:
+  blue:
+    perform: yes
+    mode: gaussian
+    kernel: free
+  red:
+    perform: yes
+    mode: gaussian
+    kernel: free
+masks:
+  blue:
+#  - [4500.0, 6000]
+   - [4846.3, 4876.3]
+   - [5150.0, 5200.0]
+  red:
+  # ca t
+   - [8495.0, 8501.0]
+   - [8535.0, 8549.0]
+   - [8657.0, 8667.0]
+  # others
+   - [8401.0, 8411.0]
+   - [8413.0, 8416.0]
+   - [8418.0, 8425.0]
+   - [8429.0, 8433.0]
+   - [8436.0, 8445.0]
+   - [8446.8, 8449.0]
+   - [8452.5, 8466.0]
+   - [8467.5, 8472.2]
+   - [8476.5, 8486.0]
+   - [8503.0, 8516.0]
+   - [8520.0, 8530.0]
+   - [8553.0, 8555.5]
+   - [8559.5, 8594.0]
+   - [8598.0, 8600.0]
+   - [8602.0, 8634.0]
+   - [8640.0, 8645.0]
+   - [8651.5, 8657.5]
+   - [8671.0, 8673.0]
+   - [8673.8, 8676.0]
+   - [8679.0, 8680.0]
+   - [8687.5, 8691.0]
+   - [8696.0, 8700.5]
+   - [8709.5, 8711.5]
+   - [8712.5, 8714.5]
+   - [8720.0, 8725.0]
+   - [8728.5, 8730.0]
+   - [8746.0, 8749.0]
+   - [8755.0, 8759.0]
+   - [8763.0, 8765.0]
+   - [8769.0, 8771.0]
+   - [8792.0, 8795.0]
+   - [8795.5, 8798.5]
+   - [8783.0, 8786.0]
+   - [8803.5, 8805.5]
+   - [8808.5, 8811.0]
+   - [8816.0, 8818.0]
+priors:
+# normalise_observed.blue.lower_clip: gaussian(1.2, 0.3)
+  normalise_observed.blue.scale: gaussian(1.0, 0.02)
+# normalise_observed.red.lower_clip: gaussian(1.2, 0.3)
+  normalise_observed.red.scale: gaussian(1.0, 0.02)
+  teff: uniform
+  logg: uniform
+  feh: uniform
+  smooth_model_flux.blue.kernel: gaussian(1, 0.5)
+  smooth_model_flux.red.kernel: gaussian(0.1, 0.05)
+  doppler_correct.blue.allow_shift: cross_correlate("data/sun.ms.fits", [5150, 5200])
+  doppler_correct.red.allow_shift: cross_correlate("data/sun.ms.fits", [8450, 8700])
+solution_method: leastsq
+emcee:
+  nwalkers: 30
+  nsteps: 200
+
+# PRE-CACHE SETTINGS
+pre-cache:
+  blue:
+    kernel: 0.10
+    dispersion_filename: /Users/andycasey/thesis/old.scope/standards/UVES580_aao_wlmap.txt
+    oversample: true
+  red:
+    kernel: 0.10
+    dispersion_filename: /Users/andycasey/thesis/old.scope/standards/HR21_aao_wlmap.txt
+    oversample: true
