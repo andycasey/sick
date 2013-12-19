@@ -413,11 +413,6 @@ class Models(object):
         return mapped_apertures
 
 
-
-
-
-
-
 def load_model_data(filename, **kwargs):
     """Loads dispersion/flux values from a given filename. This can be either a 1-column ASCII
     file, or a single extension FITS file.
@@ -443,6 +438,11 @@ def load_model_data(filename, **kwargs):
         kwargs.setdefault('dtype', np.float32)
 
         data = np.memmap(filename, **kwargs)
+        if kwargs["mode"] == "r":
+            # Wrapping the data as a new array so that it is pickleable across
+            # multiprocessing without the need to share the memmap. See:
+            # http://stackoverflow.com/questions/15986133/why-does-a-memmap-need-a-filename-when-i-try-to-reshape-a-numpy-array
+            data = np.array(data)
 
     else:
         # Assume it must be ASCII.

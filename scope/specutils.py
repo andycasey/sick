@@ -42,6 +42,12 @@ class Spectrum1D(object):
         uncertainty : `np.array`
             Uncertainty in flux points for each dispersion point.
         """
+
+        if len(disp) != len(flux):
+            raise ValueError("dispersion and flux must have the same length")
+
+        if 0 in map(len, [disp, flux]):
+            raise ValueError("dispersion and flux cannot be empty arrays")
         
         self.disp = disp
         self.flux = flux
@@ -732,7 +738,10 @@ def load_aaomega_multispec(filename, fill_value=0):
             remaining_nans = ~np.isfinite(flux)
             flux[remaining_nans] = fill_value
             
-            spectrum = Spectrum1D(dispersion_copy, flux, headers=headers)
-            spectra.append(spectrum)
+            if len(flux) == 0:
+                spectra.append(None)
+            else:
+                spectrum = Spectrum1D(dispersion_copy, flux, headers=headers)
+                spectra.append(spectrum)
     
     return spectra
