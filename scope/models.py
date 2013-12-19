@@ -405,7 +405,7 @@ class Models(object):
                     .format(wl_start=observed_wlmin, wl_end=observed_wlmax))
 
             elif len(apertures_found) > 1:
-                raise ValueError("multiple model apertures found for observed dispersion map from {wl_start.1f} to {wl_end:.1f}"
+                raise ValueError("multiple model apertures found for observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
                     .format(wl_start=observed_wlmin, wl_end=observed_wlmax))
 
             mapped_apertures.append(apertures_found[0])

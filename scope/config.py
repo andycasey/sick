@@ -9,7 +9,6 @@ __author__ = "Andy Casey <acasey@mso.anu.edu.au>"
 # Standard library
 import logging
 import os
-
 from random import choice
 
 # Third-party
@@ -20,7 +19,7 @@ import yaml
 import models
 
 def load(configuration_filename):
-    """Loads a JSON-style configuration filename.
+    """Loads a YAML-style configuration filename.
 
     Inputs
     ------
@@ -29,7 +28,8 @@ def load(configuration_filename):
     """
 
     if not os.path.exists(configuration_filename):
-        raise IOError("no configuration filename '{filename}' exists".format(filename=configuration_filename))
+        raise IOError("no configuration filename '{filename}' exists".format(
+            filename=configuration_filename))
 
     with open(configuration_filename, 'r') as fp:
         configuration = yaml.load(fp)
@@ -38,7 +38,7 @@ def load(configuration_filename):
 
 
 def verify(configuration):
-    """Verifies a configuration.
+    """Verifies a SCOPE configuration dictionary that everything makes sense.
 
     Inputs
     ------
@@ -47,7 +47,7 @@ def verify(configuration):
     """
 
     # Check optional parameters
-    integer_types = ('parallelism', )
+    integer_types = ("threads", )
     for key in integer_types:
         if key in configuration:
             if not isinstance(configuration[key], (int, )):
@@ -85,15 +85,13 @@ def verify(configuration):
             raise ValueError("configuration setting 'solution_method' is expected to be "
                 "one of the following: {acceptable}".format(acceptable=", ".join(acceptable_methods)))
 
-        #if configuration["solution_method"] == "emcee":
-        #    # Check for emcee things
-
+        # TODO - solution-specific checks
 
     return True
 
 
 def verify_doppler(configuration):
-    """Verifies the doppler component of a configuration.
+    """ Verifies the doppler component of a configuration dictionary.
 
     Inputs
     ------
@@ -136,7 +134,16 @@ def verify_doppler(configuration):
 
 
 def verify_priors(configuration, expected_priors):
-    """Verifies that the priors in a configuration are valid."""
+    """ Verifies that the priors in a configuration are valid. 
+
+    Inputs
+    ------
+    configuration : dict
+        A dictionary configuration for SCOPE.
+
+    expected_priors : dict
+        A dictionary containing expected parameter names as keys.
+    """
 
     # Create a toy model. What parameters (from the model file names) are we solving for?
     toy_model = models.Models(configuration)
@@ -148,7 +155,6 @@ def verify_priors(configuration, expected_priors):
             raise KeyError("no prior found for '{parameter}' parameter".format(parameter=parameter))
 
     # Verify that these priors make sense.
-
     # What else can be a prior?
     for expected_prior in expected_priors:
         if expected_prior not in configuration['priors']:
