@@ -59,3 +59,136 @@ def find_spectral_overlap(dispersion_maps, interval_resolution=1):
     
     else:
         return None
+
+"""
+
+def pre_cache(model, new_dispersions, kernels, smoothing_mode):
+    Perform pre-caching: smooth the model fluxes and interpolate them onto a dispersion map
+    which is similar to the observations.
+
+
+    # TODO: get config to verify the pre-caching configuration options
+    for aperture, settings in self.configuration['pre-cache'].iteritems():
+
+        logging.info("Pre-caching '{aperture}' aperture with settings: {settings}"
+            .format(aperture=aperture, settings=settings))
+
+        # Load the dispersion map for this aperture
+        original_dispersion_map = self.dispersion[aperture]
+
+        # Load the new dispersion map that is requested
+        if 'dispersion_filename' in settings:
+
+            old_dispersion_filename = settings['dispersion_filename']
+            logging.debug("Dispersion filename to interpolate onto is {filename}"
+                .format(filename=old_dispersion_filename))
+            cached_dispersion_map = load_model_data(old_dispersion_filename)
+
+            # Over-sample the new dispersion map if necessary
+            if 'oversample' in settings and settings['oversample']:
+                
+                logging.debug("Performing oversampling to minimise interpolation losses")
+
+                num_pixels = len(cached_dispersion_map)
+                cached_dispersion_map = np.linspace(
+                    cached_dispersion_map[0],
+                    cached_dispersion_map[-1],
+                    num_pixels + num_pixels - 1)
+
+            else:
+                logging.debug("No oversampling performed")
+
+        else:
+            logging.debug("Using same dispersion map. No oversampling, just smoothing.")
+
+            old_dispersion_filename = self.configuration['models']['dispersion_filenames'][aperture]
+            cached_dispersion_map = original_dispersion_map
+   
+        if old_dispersion_filename.endswith('.cached'):
+            # This has already been cached once before. We should warn about this.
+            logging.warn("Dispersion filename '{filename}' looks like it may have been cached before."
+                " Continuing to cache to '{cached_filename}' anyways."
+                .format(filename=old_dispersion_filename, cached_filename=cached_dispersion_filename))
+
+        cached_dispersion_filename = self.configuration['models']['dispersion_filenames'][aperture] + '.cached'
+
+        # Go through all the filenames for that aperture
+        if isinstance(self.flux_filenames, dict):
+            # There is more than one aperture
+            flux_filenames = self.flux_filenames[aperture]
+
+        else:
+            flux_filenames = self.flux_filenames
+
+
+        num_flux_filenames = len(flux_filenames)
+        for i, flux_filename in enumerate(flux_filenames, 1):
+
+            logging.info("Working on model flux '{flux_filename}' ({i}/{num}).."
+                .format(flux_filename=flux_filename, i=i, num=num_flux_filenames))
+
+            model_flux = load_model_data(flux_filename)
+
+            # For each one: Load the flux, convolve it, and interpolate to the new dispersion
+            done_something = False
+
+            # Perform any smoothing
+            if 'kernel' in settings:
+                kernel_fwhm = settings['kernel']
+                logging.debug("Convolving with kernel {kernel_fwhm:.3f} Angstroms..".format(kernel_fwhm=kernel_fwhm))
+
+                # Convert kernel (Angstroms) to pixel size
+                kernel_sigma = kernel_fwhm / (2 * (2*np.log(2))**0.5)
+                
+                # The requested FWHM is in Angstroms, but the dispersion between each
+                # pixel is likely less than an Angstrom, so we must calculate the true
+                # smoothing value
+                
+                true_profile_sigma = kernel_sigma / np.mean(np.diff(original_dispersion_map))
+                model_flux = ndimage.gaussian_filter1d(model_flux, true_profile_sigma)
+                done_something = True
+
+            # Perform any interpolation
+            if not np.all(cached_dispersion_map == original_dispersion_map):
+
+                logging.debug("Interpolating onto new dispersion map..")
+                f = interpolate.interp1d(original_dispersion_map, model_flux, bounds_error=False)
+
+                done_something = True
+                model_flux = f(cached_dispersion_map)
+
+            # Let's do a sanity check to ensure we've actually *done* something
+            if not done_something:
+                logging.warn("Model flux has not been changed by the pre-caching method. Check your configuration file.")
+
+            # Remove non-finite values
+            finite_indices = np.isfinite(model_flux)
+            model_flux = model_flux[finite_indices]
+
+            # Save the cached dispersion map
+            if i == 0:
+                logging.debug("Saving cached dispersion map to {cached_dispersion_filename}".format(cached_dispersion_filename=cached_dispersion_filename))
+                fp = np.memmap(cached_dispersion_filename, dtype=np.float32, mode='w+', shape=cached_dispersion_map[finite_indices].shape)
+                fp[:] = cached_dispersion_map[finite_indices]
+                del fp
+
+            # Save the new flux to file
+            cached_flux_filename = flux_filename + '.cached'
+            if flux_filename.endswith('.cached'):
+                # Looks like it may have been cached before. We should warn about this.
+                logging.warn("Model flux filename '{filename}' looks like it may have been cached before."
+                    " Continuing to cache to '{cached_filename}' anyways."
+                    .format(filename=flux_filename, cached_filename=cached_flux_filename))
+
+            # Save cached flux to disk
+            logging.debug("Saving cached model flux to {cached_flux_filename}".format(cached_flux_filename=cached_flux_filename))
+            fp = np.memmap(cached_flux_filename, dtype=np.float32, mode='w+', shape=model_flux.shape)
+            fp[:] = model_flux[:]
+            del fp
+
+        # Info.log that shit to recommend altering the yaml file to use cache files instead.
+    logging.info("Caching complete. Model filenames for dispersion and flux have been amended to have a"
+        " '.cached' extension. You must alter your configuration file to use the cached filenames.")
+
+    return True
+"""

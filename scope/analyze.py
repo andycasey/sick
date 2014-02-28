@@ -75,7 +75,7 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
                     current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
 
                 elif prior_value.lower().startswith("cross_correlate") \
-                    and parameter_name.lower().startswith("doppler_correct.") and parameter_name.lower().endswith(".allow_shift"):
+                    and parameter_name.lower().startswith("doppler_correct.") and parameter_name.lower().endswith(".perform"):
 
                     # Do we need to measure the velocity?
                     aperture = parameter_name.split(".")[1]
@@ -108,11 +108,11 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
                             parameter_name, mu, sigma))
                     current_walker.append(random.normal(mu, sigma))
 
-                elif prior_value.lower().startswith("gaussian"):
+                elif prior_value.lower().startswith("normal"):
                     mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
                     if i == 0:
-                        logging.info("Initialised {0} parameter with a gaussian distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
+                        logging.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
                             parameter_name, mu, sigma))
                     current_walker.append(random.normal(mu, sigma))
 
@@ -159,7 +159,7 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
     return (ordered_parameter_names, walker_priors)
 
 
-def solve(observed_spectra, configuration):
+def solve(observed_spectra, configuration, initial_guess=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
 
@@ -171,8 +171,6 @@ def solve(observed_spectra, configuration):
     configuration : dict
         The configuration settings for this analysis.
 
-    chi_squared_fn_callback : function
-        A callback to perform after every model comparison.
     """
 
     if isinstance(configuration, str) and os.path.exists(configuration):
@@ -197,17 +195,11 @@ def solve(observed_spectra, configuration):
     # Make fmin_powell the default
     if "solution_method" not in configuration or configuration["solution_method"] == "fmin_powell":
 
-        fail_value = 999
         parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping)
-        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, chi_squared_fn_callback)   
-        parameters_final = scipy.optimize.fmin_powell(chi_squared_fn, p0, args=optimisation_args, xtol=0.001, ftol=0.001)
 
-    elif configuration["solution_method"] == "leastsq":
+        parameters_final = scipy.optimize.fmin_powell(chi_sq, p0,
+            args=(parameter_names, observed_spectra, model), xtol=0.001, ftol=0.001)
 
-        fail_value = 999
-        parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping)
-        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, chi_squared_fn_callback)
-        parameters_final = scipy.optimize.leastsq(chi_squared_fn, p0, args=optimisation_args, xtol=1e-3, ftol=1e-3)
 
     elif configuration["solution_method"] == "emcee":
 
@@ -341,12 +333,15 @@ def likelihood(parameters, parameter_names, observations, model, callback=None):
     callback : function
         A callback to apply after completing the comparison.
     """
-    assert len(parameters) == len(parameter_names)
 
-    jitter = parameters[parameter_names.index("jitter")] if "jitter" in parameter_names else 0
-    
-    if not (1 > jitter > 0):
-        return -np.inf
+    if "jitter" in parameter_names:
+        jitter = parameters[parameter_names.index("jitter")]
+
+        if not (1 > jitter > 0):
+            return -np.inf
+    else:
+        jitter = 0
+
 
     # Prepare the observed spectra
     observed_spectra = model.observed_spectra(parameters, parameter_names, observed_spectra)
@@ -364,7 +359,7 @@ def likelihood(parameters, parameter_names, observations, model, callback=None):
     
     # Calculate chi^2 difference
     chi_sq_i = {}
-    for i, (aperture, observed_spectrum) in enumerate(zip(aperture_mapping, observed_spectra)):
+    for i, (aperture, observed_spectrum) in enumerate(zip(model._mapped_apertures, observed_spectra)):
 
         chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2/(observed_spectrum.uncertainty**2 + jitter)
         
@@ -392,4 +387,4 @@ def likelihood(parameters, parameter_names, observations, model, callback=None):
 
     total_chi_sq = np.sum(map(np.sum, chi_sq_i.values()))
     
-    return -0.5 * total_chi_sq
+    return total_chi_sq
