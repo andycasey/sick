@@ -1,30 +1,28 @@
 # coding: utf-8
 
-""" Handles the loading and interpolation of flux models for SCOPE. """
+""" Handles the loading and interpolation of flux models for SCOPE """
 
 from __future__ import division, print_function
 
-__author__ = "Andy Casey <acasey@mso.anu.edu.au>"
+__author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 # Standard library
 import logging
 import os
 import re
-
 from glob import glob
 
 # Third-party
 import numpy as np
 import pyfits
-
 from scipy import interpolate, ndimage
 
 # Module
 from utils import human_readable_digit
 
-__all__ = ['Models', 'load_model_data']
+__all__ = ['Model', 'load_model_data']
 
-class Models(object):
+class Model(object):
     """Class for interpolating model fluxes for SCOPE."""
 
     def __init__(self, configuration):
@@ -410,7 +408,252 @@ class Models(object):
 
             mapped_apertures.append(apertures_found[0])
 
+        # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
+        for aperture, observed_dispersion in zip(mapped_apertures, observed_dispersions):
+
+            mean_observed_pixel_size = np.mean(np.diff(observed_dispersion))
+            mean_model_pixel_size = np.mean(np.diff(model.dispersion[aperture]))
+            if mean_model_pixel_size > mean_observed_pixel_size:
+                raise ValueError("the mean model pixel size in the {aperture} aperture is larger than the mean"
+                    " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
+                    .format(aperture=aperture, wl_start=np.min(observed_dispersion), wl_end=np.max(observed_dispersion)))
+
+        # Keep an internal reference of the aperture mapping
+        self._mapped_apertures = mapped_apertures
+
         return mapped_apertures
+
+
+    def model_spectra(self, parameters, parameter_names, observed_spectra=None):
+        """ Interpolates flux values for a set of stellar parameters and
+        applies any relevant smoothing or normalisation of the data. 
+
+        Inputs
+        ------
+        parameters : list of floats
+            The input parameters that were provdided to the `chi_squared_fn` function.
+
+        parameter_names : list of str, should be same length as `parameters`.
+            The names for the input parameters.
+        """
+
+        # Build the grid point
+        grid_point = [parameters[parameter_names.index(stellar_parameter)] for stellar_parameter in self.colnames]
+
+        # Interpolate the flux
+        try:
+            interpolated_flux = self.interpolate_flux(grid_point)
+
+        except:
+            logging.debug("No model flux could be determined for {0}".format(
+                ", ".join(["{0} = {1:.2f}".format(parameter, value) \
+                    for parameter, value in zip(stellar_parameters, grid_point)])))
+            return None
+
+        logging.debug("Interpolated model flux at {0}".format(
+            ", ".join(["{0} = {1:.2f}".format(parameter, value) \
+                for parameter, value in zip(stellar_parameters, grid_point)])))
+
+        if interpolated_flux == {}: return None
+        for aperture, flux in interpolated_flux.iteritems():
+            if np.all(~np.isfinite(flux)): return None
+
+        # Create spectra
+        model_spectra = {}
+        for aperture, interpolated_flux in interpolated_flux.iteritems():
+            model_spectra[aperture] = specutils.Spectrum1D(
+                disp=self.dispersion[aperture], flux=interpolated_flux)
+
+        # Any synthetic smoothing to apply?
+        for aperture in self._mapped_apertures:
+            key = 'smooth_model_flux.{aperture}.kernel'.format(aperture=aperture)
+
+            # Is the smoothing a free parameter?
+            if key in parameter_names:
+                index = parameter_names.index(key)
+                # Ensure valid smoothing value
+                if parameters[index] < 0: return
+                model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(parameters[index])
+
+            elif self.configuration['smooth_model_flux'][aperture]['perform']:
+
+                kernel = self.configuration['smooth_model_flux'][aperture]['kernel']
+                model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kernel)
+                logging.debug("Smoothed model flux for '{0}' aperture with kernel {1}".format(
+                    aperture, kernel))
+
+        # Perform normalisation if necessary
+        if "normalise_model" in self.configuration:
+            for aperture, observed_spectrum in zip(self._mapped_apertures, observed_spectra):
+                if  aperture in self.configuration["normalise_model"] \
+                and self.configuration["normalise_model"][aperture]["perform"]:
+                    
+                    # Perform normalisation here
+                    normalisation_kwargs = {}
+                    normalisation_kwargs.update(self.configuration["normalise_model"][aperture])
+
+                    # Now update these keywords with priors
+                    for parameter_name, parameter in zip(parameter_names, parameters):
+                        if parameter_name.startswith("normalise_model.{aperture}.".format(aperture=aperture)):
+
+                            parameter_name_sliced = '.'.join(parameter_name.split('.')[2:])
+                            normalisation_kwargs[parameter_name_sliced] = parameter
+
+                    # Normalise the spectrum
+                    logging.debug("Normalisation arguments for model '{aperture}' aperture: {kwargs}"
+                        .format(aperture=aperture, kwargs=normalisation_kwargs))
+
+                    try:
+                        normalised_spectrum, continuum = model_spectra[aperture].fit_continuum(**normalisation_kwargs)
+
+                    except:
+                        logging.debug("Normalisation of model spectra in {0} aperture failed".format(aperture))
+                        return None
+
+                    else:
+                        model_spectra[aperture] = normalised_spectrum
+
+        # Interpolate synthetic to observed dispersion map
+        if observed_spectra is not None:
+            for aperture, observed_spectrum in zip(self._mapped_apertures, observed_spectra):
+                model_spectra[aperture] = model_spectra[aperture].interpolate(observed_spectrum.disp)
+
+        return model_spectra
+
+
+    def observed_spectra(self, parameters, parameter_names, observed_spectra):
+        """ Prepares the observed spectra for comparison with model spectra
+        by performing normalisation and doppler shifts.
+
+        Inputs
+        ------
+        parameters : list of floats
+            The input parameters that were provdided to the `chi_squared_fn` function.
+
+        parameter_names : list of str, should be same length as `parameters`.
+            The names for the input parameters.
+
+        observed_spectra : list of `Spectrum1D` objects
+            The observed spectra.
+        """
+
+        logging.debug("Preparing observed spectra for comparison")
+
+        # Any normalisation to perform?
+        normalised_spectra = []
+        for aperture, spectrum in zip(self._mapped_apertures, observed_spectra):
+            if not self.configuration['normalise_observed'][aperture]['perform']:
+                normalised_spectra.append(spectrum)
+                continue
+
+            normalisation_kwargs = {}
+            normalisation_kwargs.update(self.configuration['normalise_observed'][aperture])
+
+            # Now update these keywords with priors
+            for parameter_name, parameter in zip(parameter_names, parameters):
+                if parameter_name.startswith('normalise_observed.{aperture}.'.format(aperture=aperture)):
+
+                    parameter_name_sliced = '.'.join(parameter_name.split('.')[2:])
+                    normalisation_kwargs[parameter_name_sliced] = parameter
+
+            # Normalise the spectrum
+            logging.debug("Normalisation arguments for '{aperture}' aperture: {kwargs}"
+                .format(aperture=aperture, kwargs=normalisation_kwargs))
+
+            try:
+                normalised_spectrum, continuum = spectrum.fit_continuum(**normalisation_kwargs)
+
+            except:
+                return None
+
+            else:
+
+                if spectrum.uncertainty is None:
+                    normalised_spectrum.uncertainty = continuum.flux**(-0.5)
+                
+                normalised_spectra.append(normalised_spectrum)
+
+            logging.debug("Performed normalisation for aperture '{aperture}'".format(aperture=aperture))
+
+        # Any doppler shift?
+        for i, aperture in enumerate(self._mapped_apertures):
+            key = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
+
+            if key in parameter_names:
+                index = parameter_names.index(key)
+                normalised_spectra[i] = normalised_spectra[i].doppler_shift(parameters[index])
+
+                logging.debug("Performed doppler shift of {velocity:.2f} km/s for aperture '{aperture}'"
+                    .format(aperture=aperture, velocity=parameters[index]))
+
+        return normalised_spectra
+
+
+    def masks(self, model_spectra):
+        """Returns pixel masks to apply to the model spectra
+        based on the configuration provided.
+
+        Inputs
+        ------
+        model_spectra : dict
+            A dictionary containing aperture names as keys and specutils.Spectrum1D objects
+            as values.
+        """
+
+        if "masks" not in self.configuration:
+            masks = {}
+            for aperture, spectrum in model_spectra.iteritems():
+                masks[aperture] = np.ones(len(spectrum.disp))
+
+        else:
+            masks = {}
+            for aperture, spectrum in model_spectra.iteritems():
+                if aperture not in self.configuration["masks"]:
+                    masks[aperture] = np.ones(len(spectrum.disp))
+                
+                else:
+                    # We are required to build a mask.
+                    mask = np.zeros(len(spectrum.disp))
+                    if self.configuration["masks"][aperture] is not None:
+                        for region in self.configuration["masks"][aperture]:
+                            index_start, index_end = np.searchsorted(spectrum.disp, region)
+                            mask[index_start:index_end] = 1
+
+                    masks[aperture] = mask
+
+        return masks
+
+
+    def weights(self, model_spectra):
+        """Returns callable weighting functions to apply to the \chi^2 comparison.
+
+        Inputs
+        ------
+        model_spectra : dict
+            A dictionary containing aperture names as keys and specutils.Spectrum1D objects
+            as values.
+        """
+
+        if "weights" not in self.configuration:
+            weights = {}
+            for aperture, spectrum in model_spectra.iteritems():
+                # Equal weighting to all pixels
+                weights[aperture] = lambda disp, flux: np.ones(len(flux))
+
+        else:
+            weights = {}
+            for aperture, spectrum in model_spectra.iteritems():
+                if aperture not in self.configuration["weights"]:
+                    # Equal weighting to all pixels
+                    weights[aperture] = lambda disp, flux: np.ones(len(flux))
+
+                else:
+                    # Evaluate the expression, providing numpy (as np), disp, and flux as locals
+                    weights[aperture] = lambda disp, flux: eval(self.configuration["weights"][aperture], 
+                        {"disp": disp, "np": np, "flux": flux})
+
+        return weights
+
 
 
 def load_model_data(filename, **kwargs):

@@ -1,25 +1,21 @@
 # coding: utf-8
 
-""" General utilities for SCOPE. """
+""" General utilities for SCOPE """
 
 from __future__ import division, print_function
 
-__author__ = "Andy Casey <acasey@mso.anu.edu.au>"
+__author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
-# Standard library
-import logging
-import os
-
-# Third-party
 import numpy as np
 
 __all__ = ["human_readable_digit", "find_spectral_overlap"]
 
+
 def human_readable_digit(number):
-    millnames = ['', 'thousand', 'million', 'billion', 'trillion']
+    millnames = ["", "thousand", "million", "billion", "trillion"]
     millidx = max(0, min(len(millnames)-1,
                       int(np.floor(np.log10(abs(number))/3.0))))
-    return '{digit:.1f} {multiple}'.format(
+    return "{digit:.1f} {multiple}".format(
         digit=number/10**(3*millidx),
         multiple=millnames[millidx])
 
@@ -44,13 +40,15 @@ def find_spectral_overlap(dispersion_maps, interval_resolution=1):
     all_min = np.min(map(np.min, dispersion_maps))
     all_max = np.max(map(np.max, dispersion_maps))
 
-    interval_tree_disp = np.arange(all_min, all_max + interval_resolution, interval_resolution)
+    interval_tree_disp = np.arange(all_min, 
+        all_max + interval_resolution, interval_resolution)
     interval_tree_flux = np.zeros(len(interval_tree_disp))
 
     for dispersion_map in dispersion_maps:
 
         wlstart, wlend = np.min(dispersion_map), np.max(dispersion_map)
-        idx = np.searchsorted(interval_tree_disp, [wlstart, wlend + interval_resolution])
+        idx = np.searchsorted(interval_tree_disp, 
+            [wlstart, wlend + interval_resolution])
         interval_tree_flux[idx[0]:idx[1]] += 1
 
     # Any overlap?
@@ -61,5 +59,3 @@ def find_spectral_overlap(dispersion_maps, interval_resolution=1):
     
     else:
         return None
-
-

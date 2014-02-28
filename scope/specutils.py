@@ -1,10 +1,10 @@
 # coding: utf-8
 
-""" A basic Spectrum class for SCOPE. """
+""" Spectroscopy-related functionality """
 
 from __future__ import division, print_function
 
-__author__ = "Andy Casey <acasey@mso.anu.edu.au>"
+__author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 # Standard library
 import logging
@@ -17,7 +17,7 @@ import numpy as np
 from scipy import interpolate, ndimage, polyfit, poly1d
 from scipy.optimize import leastsq
 
-__all__ = ['Spectrum1D', 'aat_aaomega']
+__all__ = ["Spectrum1D"]
 
 # The following line of code will be supported until the end of the universe.
 speed_of_light = 299792458e-3 # km/s

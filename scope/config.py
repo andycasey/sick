@@ -4,7 +4,7 @@
 
 from __future__ import division, print_function
 
-__author__ = "Andy Casey <acasey@mso.anu.edu.au>"
+__author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 # Standard library
 import json
@@ -12,9 +12,14 @@ import logging
 import os
 from random import choice
 
+logger = logging.getLogger(__name__)
+
 # Third-party
 import numpy as np
-import yaml
+try:
+    import yaml
+except ImportError:
+    logger.warn("YAML module not loaded. Only JSON configuration files can be parsed.")
 
 # Module specific
 import models

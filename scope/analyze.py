@@ -1,10 +1,10 @@
 # coding: utf-8
 
-""" Handles the analysis for SCOPE. """
+""" Handles the analysis for SCOPE """
 
 from __future__ import division, print_function
 
-__author__ = "Andy Casey <acasey@mso.anu.edu.au>"
+__author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 # Standard library
 import csv
@@ -28,37 +28,9 @@ import scipy.optimize
 # Module
 import config, models, utils, specutils
 
-__all__ = ['analyze', 'analyze_star', 'prepare_model_spectra', 'prepare_observed_spectra', 'chi_squared_fn']
+logger = logging.getLogger(__name__)
 
-class CallbackClass(object):
-    pass
-
-
-class Worker(multiprocessing.Process):
-    """A SCOPE worker to analyse stellar spectra."""
-
-    def __init__(self, queue_in, queue_out):
-        super(Worker, self).__init__()
-        self.queue_in = queue_in
-        self.queue_out = queue_out
-
-        logging.debug("Initialised a new Worker.")
-
-    def run(self):
-        logging.debug("Running new Worker process.")
-
-        for data in iter(self.queue_in.get, None):
-            try:
-                result = analyze_star(*data)
-
-            except:
-                self.queue_out.put(False)
-                etype, value, tb = sys.exc_info()
-                logging.warn("Failed to analyse spectra:\n\tTraceback (most recent call last):\n{traceback}\n{etype}: {value}"
-                    .format(traceback=tb, etype=etype, value=value))
-
-            else:
-                self.queue_out.put(result)
+__all__ = ['analyze', 'analyze_star', 'chi_squared_fn']
 
 
 def initialise_priors(configuration, model, observed_spectra, aperture_mapping, nwalkers=1):
@@ -187,186 +159,7 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
     return (ordered_parameter_names, walker_priors)
 
 
-def analyze_all(stars, configuration_filename, output_filename_prefix=None, clobber=False, 
-    callback=None, timeout=120):
-    """Analyse a number of stars according to the configuration provided.
-
-    Inputs
-    ------
-    stars : iterable of spectra
-        Each star can contain multiple spectra, but they must be in sub-lists.
-
-    configuration_filename : str
-        The configuration filename for this analysis.
-
-    output_filename_prefix : str, optional
-        The filename prefix to use for saving results. If this is specified, a summary file
-        will be produced, and individual results will be saved.
-
-    clobber : bool, default False
-        Whether to overwrite existing output files if they already exist. 
-
-    callback : function, optional
-        A callback to perform after every model comparison. If you're running
-        things in parallel, I hope you know what you're doing.
-
-    timout : int, default is 120
-        The number of seconds to wait for each parallel thread to send results
-        before killing the thread.
-    """
-
-    # Load the configuration
-    configuration = config.load(configuration_filename)
-
-    # Check for threading without emcee
-    if configuration.get("threads", 1) > 1 and configuration["solution_method"] != "emcee":
-
-        logging.info("Initializing {n} parallel workers".format(n=configuration['threads']))
-
-        # Do parallel
-        queue_in = multiprocessing.Queue()
-        queue_out = multiprocessing.Queue()
-
-        # Initialise all the workers
-        for i in xrange(configuration['threads']):
-            Worker(queue_in, queue_out).start()
-
-        for star in stars:
-            queue_in.put((star, configuration, callback))
-
-        # Shut down all workers
-        [queue_in.put(None) for i in xrange(configuration['threads'])]
-
-        # Get all the results
-        results = []
-        while len(results) < len(stars):
-            try:
-                results.append(queue_out.get(timeout=timeout))
-            except: continue
-
-    else:
-
-        if solution_method != "emcee":
-            logging.info("Performing analysis in serial mode")
-
-        # Do serial
-        results = [analyze_star(star, configuration, callback) for star in stars]
-
-    # Should we be saving the results?
-    if output_filename_prefix is not None:
-
-        summary_filename = output_filename_prefix + ".csv"
-
-
-        logging.info("Summarising results to {summary_filename}".format(summary_filename=summary_filename))
-
-        # What columns do we want in our summary file?
-        # star ID, pickle filename, ra, dec, object name, ut_date, ut_time, airmass, exposure time?, chi^2, 
-        # ndof, r_chi^2, S/N estimates? all the parameters solved for
-
-        summary_lines = []
-        sorted_posterior_keys = None
-        observed_headers_requested = ["RA", "DEC", "OBJECT", ]
-        
-        for i, result in enumerate(results, start=1):
-
-            if result in (None, False) or np.isnan(result[0]):
-                line_data = ["Star #{i}".format(i=i), ""]
-                
-                # Add in the observed headers to the line data.
-                if result not in (None, False) and len(result) > 3 and result[3] != None:
-                    observed_spectra = result[3]
-                    line_data += [observed_spectra[0].headers[header] \
-                        if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
-                    
-                else:
-                    line_data += [""] * len(observed_headers_requested)
-
-                # Fill the \chi^2, DOF, reduced \chi^2 with blanks
-                line_data += ["", "", ""]
-                
-            else:
-
-                # Create a pickle filename
-                pickle_filename = "{prefix}-star-{i}.pickle".format(prefix=output_filename_prefix, i=i)
-
-                # Save results to pickle
-                if os.path.exists(pickle_filename) and not clobber:
-                    logging.warn("Pickle filename {filename} already exists and we've been asked not to clobber it. Skipping.."
-                        .format(filename=pickle_filename))
-
-                else:
-                    with open(pickle_filename, "w") as fp:
-                        pickle.dump(result, fp, -1)
-            
-                    logging.info("Results for Star #{i} saved to {filename}".format(i=i, filename=pickle_filename))
-        
-                line_data = [
-                    "Star #{i}".format(i=i),
-                    pickle_filename,
-                ]
-
-                chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks = result
-
-                if sorted_posterior_keys is None:
-                    sorted_posterior_keys = sorted(posteriors.keys(), key=len)
-
-                # Add in observed headers to line data
-                [line_data.append(observed_spectra[0].headers[header]) 
-                    if header in observed_spectra[0].headers else "" for header in observed_headers_requested]
-
-                # Add in results information
-                line_data.extend([chi_sq, num_dof, chi_sq/num_dof])
-
-                # Add in the posteriors
-                line_data.extend([posteriors[key] for key in sorted_posterior_keys])
-
-            # Add this line in
-            summary_lines.append(line_data)
-            
-        column_headers = ["Name", "Results filename"] + observed_headers_requested \
-            + ["\chi^2", "DOF", "Reduced \chi^2"] + sorted_posterior_keys
-
-        # Fill in any 'non-results' with the appropriate number of blanks
-        summary_lines_formatted = []
-        for line in summary_lines:
-            if len(line) < len(column_headers):
-                line += [""] * (len(column_headers) - len(line))
-
-            summary_lines_formatted.append(line)
-
-        # Get max lengths
-        max_lengths = [0] * len(column_headers)
-        for line in summary_lines_formatted:
-            for i, length in enumerate(map(len, map(str, line))):
-                if length + 1 > max_lengths[i]:
-                    max_lengths[i] = length + 1
-
-        column_headers = [header.ljust(length) for header, length in zip(column_headers, max_lengths)]
-        summary_lines_formatted = [[item.ljust(length) for item, length in zip(line, max_lengths)] for line in summary_lines_formatted]
-
-        # Save the summary file
-        if os.path.exists(summary_filename) and not clobber:
-            logging.warn("Summary filename {filename} already exists and we've been asked not to clobber it. Logging summary results instead.")
-
-            logging.info(",".join(column_headers))
-            logging.info("\n".join([",".join(line) for line in summary_lines_formatted]))
-
-        else:
-
-            with open(summary_filename, "w") as fp:
-                fwriter = csv.writer(fp, delimiter=",")
-
-                fwriter.writerow(column_headers)
-                fwriter.writerows(summary_lines_formatted)
-
-            logging.info("Summary file saved to {filename}".format(filename=summary_filename))
-
-
-    return results
-
-
-def analyze_star(observed_spectra, configuration, lnprob_fn_callback=None, chi_squared_fn_callback=None):
+def solve(observed_spectra, configuration):
     """Analyse some spectra of a given star according to the configuration
     provided.
 
@@ -393,26 +186,13 @@ def analyze_star(observed_spectra, configuration, lnprob_fn_callback=None, chi_s
             .format(wavelength=overlap))
 
     # Load our model
-    model = models.Models(configuration)
+    model = models.Model(configuration)
 
     # Get the aperture mapping from observed spectra to model spectra
     # For example, which index in our list of spectra corresponds to
     # 'blue', or 'red' in our model 
     aperture_mapping = model.map_apertures(observed_dispersions)
 
-    # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
-    for aperture, observed_dispersion in zip(aperture_mapping, observed_dispersions):
-
-        mean_observed_pixel_size = np.mean(np.diff(observed_dispersion))
-        mean_model_pixel_size = np.mean(np.diff(model.dispersion[aperture]))
-
-        if mean_model_pixel_size > mean_observed_pixel_size:
-            raise ValueError("the mean model pixel size in the {aperture} aperture is larger than the mean"
-                " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
-                .format(
-                    aperture=aperture,
-                    wl_start=np.min(observed_dispersion),
-                    wl_end=np.max(observed_dispersion)))
     
     # Make fmin_powell the default
     if "solution_method" not in configuration or configuration["solution_method"] == "fmin_powell":
@@ -546,269 +326,10 @@ def analyze_star(observed_spectra, configuration, lnprob_fn_callback=None, chi_s
     return (posteriors, state, observed_spectra, model_spectra, masks)
 
 
-def prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration):
-    """Interpolates the flux for a set of stellar parameters and prepares the model spectra
-    for comparison. This includes any smoothing, resampling, and normalisation of the data.
 
-    Inputs
-    ------
-    parameters : list of floats
-        The input parameters that were provdided to the `chi_squared_fn` function.
-
-    parameter_names : list of str, should be same length as `parameters`.
-        The names for the input parameters.
-
-    observed_spectra : list of `Spectrum1D` objects
-        The observed spectra.
-
-    aperture_mapping : list of `str`, same length as `observed_spectra`
-        The names of the model apertures associated to each observed spectrum.
-
-    model : `models.Model` class
-        The model class containing the reference to the grid of model atmospheres.
-
-    configuration : `dict`
-        The configuration class.
-    """
-
-    # Build the grid point
-    stellar_parameters = model.colnames
-    grid_point = [parameters[parameter_names.index(stellar_parameter)] for stellar_parameter in stellar_parameters]
-
-    # Get interpolated flux
-    try:
-        synthetic_fluxes = model.interpolate_flux(grid_point)
-
-    except:
-        logging.debug("No model flux could be determined for {0}".format(
-            ", ".join(["{0} = {1:.2f}".format(parameter, value) for parameter, value in zip(stellar_parameters, grid_point)])
-            ))
-        return None
-
-    logging.debug("Interpolated model flux at {0}".format(
-        ", ".join(["{0} = {1:.2f}".format(parameter, value) for parameter, value in zip(stellar_parameters, grid_point)])
-        ))
-
-    if synthetic_fluxes == {}: return None
-    for aperture, flux in synthetic_fluxes.iteritems():
-        if np.all(~np.isfinite(flux)): return None
-
-    # Create spectra
-    model_spectra = {}
-    for aperture, synthetic_flux in synthetic_fluxes.iteritems():
-        model_spectra[aperture] = specutils.Spectrum1D(
-                                          disp=model.dispersion[aperture],
-                                          flux=synthetic_flux)
-
-    # Any synthetic smoothing to apply?
-    for aperture in aperture_mapping:
-        key = 'smooth_model_flux.{aperture}.kernel'.format(aperture=aperture)
-
-        # Is the smoothing a free parameter?
-        if key in parameter_names:
-            index = parameter_names.index(key)
-            # Ensure valid smoothing value
-            if parameters[index] < 0: return
-            model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(parameters[index])
-
-        elif configuration['smooth_model_flux'][aperture]['perform']:
-            # Ensure valid smoothing value
-            if configuration['smooth_model_flux'][aperture]['kernel'] < 0: return
-
-            # It's a fixed value.
-            model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(configuration['smooth_model_flux'][aperture]['kernel'])
-            logging.debug("Smoothed model flux for '{aperture}' aperture".format(aperture=aperture))
-
-    # Perform normalisation if necessary
-    if "normalise_model" in configuration:
-        for aperture, observed_spectrum in zip(aperture_mapping, observed_spectra):
-            if  aperture in configuration["normalise_model"] \
-            and configuration["normalise_model"][aperture]["perform"]:
-                
-                # Perform normalisation here
-                normalisation_kwargs = {}
-                normalisation_kwargs.update(configuration["normalise_model"][aperture])
-
-                # Now update these keywords with priors
-                for parameter_name, parameter in zip(parameter_names, parameters):
-                    if parameter_name.startswith("normalise_model.{aperture}.".format(aperture=aperture)):
-
-                        parameter_name_sliced = '.'.join(parameter_name.split('.')[2:])
-                        normalisation_kwargs[parameter_name_sliced] = parameter
-
-                # Normalise the spectrum
-                logging.debug("Normalisation arguments for model '{aperture}' aperture: {kwargs}"
-                    .format(aperture=aperture, kwargs=normalisation_kwargs))
-
-                try:
-                    normalised_spectrum, continuum = model_spectra[aperture].fit_continuum(**normalisation_kwargs)
-
-                except:
-                    logging.debug("Normalisation of model spectra in {0} aperture failed".format(aperture))
-                    return None
-
-                else:
-                    model_spectra[aperture] = normalised_spectrum
-
-    # Interpolate synthetic to observed dispersion map
-    for aperture, observed_spectrum in zip(aperture_mapping, observed_spectra):
-        model_spectra[aperture] = model_spectra[aperture].interpolate(observed_spectrum.disp)
-
-    return model_spectra
-
-
-def prepare_observed_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, configuration):
-    """Prepares the observed spectra for comparison against model spectra by performing
-    normalisation and doppler shifts to the spectra.
-
-    Inputs
-    ------
-    parameters : list of floats
-        The input parameters that were provdided to the `chi_squared_fn` function.
-
-    parameter_names : list of str, should be same length as `parameters`.
-        The names for the input parameters.
-
-    observed_spectra : list of `Spectrum1D` objects
-        The observed spectra.
-
-    aperture_mapping : list of `str`, same length as `observed_spectra`
-        The names of the model apertures associated to each observed spectrum.
-
-    configuration : `dict`
-        The configuration class.
-    """
-
-    logging.debug("Preparing observed spectra for comparison")
-
-    # Any normalisation to perform?
-    normalised_spectra = []
-    for aperture, spectrum in zip(aperture_mapping, observed_spectra):
-        if not configuration['normalise_observed'][aperture]['perform']:
-            normalised_spectra.append(spectrum)
-            continue
-
-        normalisation_kwargs = {}
-        normalisation_kwargs.update(configuration['normalise_observed'][aperture])
-
-        # Now update these keywords with priors
-        for parameter_name, parameter in zip(parameter_names, parameters):
-            if parameter_name.startswith('normalise_observed.{aperture}.'.format(aperture=aperture)):
-
-                parameter_name_sliced = '.'.join(parameter_name.split('.')[2:])
-                normalisation_kwargs[parameter_name_sliced] = parameter
-
-        # Normalise the spectrum
-        logging.debug("Normalisation arguments for '{aperture}' aperture: {kwargs}"
-            .format(aperture=aperture, kwargs=normalisation_kwargs))
-
-        try:
-            normalised_spectrum, continuum = spectrum.fit_continuum(**normalisation_kwargs)
-
-        except:
-            return None
-
-        else:
-
-            if spectrum.uncertainty is None:
-                normalised_spectrum.uncertainty = continuum.flux**(-0.5)
-            
-            normalised_spectra.append(normalised_spectrum)
-
-        logging.debug("Performed normalisation for aperture '{aperture}'".format(aperture=aperture))
-
-
-    # Any doppler shift?
-    for i, aperture in enumerate(aperture_mapping):
-        key = 'doppler_correct.{aperture}.allow_shift'.format(aperture=aperture)
-
-        if key in parameter_names:
-            index = parameter_names.index(key)
-            normalised_spectra[i] = normalised_spectra[i].doppler_shift(parameters[index])
-
-            logging.debug("Performed doppler shift of {velocity:.2f} km/s for aperture '{aperture}'"
-                .format(aperture=aperture, velocity=parameters[index]))
-
-    return normalised_spectra
-
-
-def prepare_weights(model_spectra, configuration):
-    """Returns callable weighting functions to apply to the \chi^2 comparison.
-
-    Inputs
-    ------
-    model_spectra : dict
-        A dictionary containing aperture names as keys and specutils.Spectrum1D objects
-        as values.
-
-    configuration_filename : dict
-        The configuration dictionary.
-    """
-
-    if "weights" not in configuration:
-        weights = {}
-        for aperture, spectrum in model_spectra.iteritems():
-            # Equal weighting to all pixels
-            weights[aperture] = lambda disp, flux: np.ones(len(flux))
-
-    else:
-        weights = {}
-        for aperture, spectrum in model_spectra.iteritems():
-            if aperture not in configuration["weights"]:
-                # Equal weighting to all pixels
-                weights[aperture] = lambda disp, flux: np.ones(len(flux))
-
-            else:
-                # Evaluate the expression, providing numpy (as np), disp, and flux as locals
-                weights[aperture] = lambda disp, flux: eval(configuration["weights"][aperture], 
-                    {"disp": disp, "np": np, "flux": flux})
-
-    return weights
-
-
-def prepare_masks(model_spectra, configuration):
-    """Returns pixel masks to apply to the model spectra
-    based on the configuration provided.
-
-    Inputs
-    ------
-    model_spectra : dict
-        A dictionary containing aperture names as keys and specutils.Spectrum1D objects
-        as values.
-
-    configuration : dict
-        The configuration dictionary.
-    """
-
-    if "masks" not in configuration:
-        masks = {}
-        for aperture, spectrum in model_spectra.iteritems():
-            masks[aperture] = np.ones(len(spectrum.disp))
-
-    else:
-        masks = {}
-        for aperture, spectrum in model_spectra.iteritems():
-            if aperture not in configuration["masks"]:
-                masks[aperture] = np.ones(len(spectrum.disp))
-            
-            else:
-                # We are required to build a mask.
-                mask = np.zeros(len(spectrum.disp))
-                if configuration["masks"][aperture] is not None:
-                    for region in configuration["masks"][aperture]:
-                        index_start, index_end = np.searchsorted(spectrum.disp, region)
-                        mask[index_start:index_end] = 1
-
-                masks[aperture] = mask
-
-
-    return masks
-
-
-def chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
-    model, configuration, fail_value=999, callback=None):
-    """Calculates the \chi^2 difference between observed and
-    synthetic spectra.
+def likelihood(parameters, parameter_names, observations, model, callback=None):
+    """Calculates the likelihood that a given set of observations
+    and parameters match the input models.
 
     parameters : list of `float`
         The free parameters to solve for. These are referenced in 
@@ -820,30 +341,31 @@ def chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mappi
     callback : function
         A callback to apply after completing the comparison.
     """
-
     assert len(parameters) == len(parameter_names)
 
+    jitter = parameters[parameter_names.index("jitter")] if "jitter" in parameter_names else 0
+    
+    if not (1 > jitter > 0):
+        return -np.inf
+
     # Prepare the observed spectra
-    observed_spectra = prepare_observed_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, configuration)
+    observed_spectra = model.observed_spectra(parameters, parameter_names, observed_spectra)
     if observed_spectra is None:
-        return fail_value
+        return -np.inf
 
     # Get the synthetic spectra
-    model_spectra = prepare_model_spectra(parameters, parameter_names, observed_spectra, aperture_mapping, model, configuration)
+    model_spectra = model.model_spectra(parameters, parameter_names, observed_spectra)
     if model_spectra is None:
-        return fail_value
+        return -np.inf
 
     # Any masks?
-    masks = prepare_masks(model_spectra, configuration)
-
-    # Any weighting functions?
-    weighting_functions = prepare_weights(model_spectra, configuration)
-
+    masks = model.masks(model_spectra)
+    weighting_functions = model.weights(model_spectra)
+    
     # Calculate chi^2 difference
     chi_sq_i = {}
     for i, (aperture, observed_spectrum) in enumerate(zip(aperture_mapping, observed_spectra)):
 
-        jitter = parameters[parameter_names.index("jitter")] if "jitter" in parameter_names else 0
         chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2/(observed_spectrum.uncertainty**2 + jitter)
         
         # Apply any weighting functions to the chi_sq values
@@ -868,68 +390,6 @@ def chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mappi
         #>  1: Interested in this region, it was finite (used for \chi^2 determination)
         masks[aperture][~useful_pixels] -= 2
 
-    num_pixels = sum(map(len, chi_sq_i.values()))
     total_chi_sq = np.sum(map(np.sum, chi_sq_i.values()))
     
-    num_dof = num_pixels - len(parameters) - 1
-
-    # Return likelihood
-    logging.debug((parameters, total_chi_sq, num_dof, total_chi_sq/num_dof))
-
-    if callback is not None:
-        # Perform the callback function
-        callback(
-            total_chi_sq,
-            num_dof,
-            OrderedDict(zip(parameter_names, parameters)),
-            observed_spectra,
-            [model_spectra[aperture] for aperture in aperture_mapping],
-            [masks[aperture] for aperture in aperture_mapping]
-            )
-
-    logging.debug("Total \chi^2: {chi_sq}, n_dof: {ndof}".format(chi_sq=total_chi_sq, ndof=num_dof))
-    return total_chi_sq
-
-
-def lnprob_fn(parameters, parameter_names, observed_spectra, aperture_mapping, \
-    model, configuration, lnprob_callback=None, chi_squared_fn_callback=None, **kwargs):
-    """Calculates the log of the probability of the $\chi^2$ distribution function.
-
-    Inputs the same as `chi_squared_fn_fn`"""
-
-    # Check the jitter
-    jitter = parameters[parameter_names.index("jitter")]
-    if not 0 <= jitter <= 1:
-
-        blobs = list(parameters) + [np.inf, -np.inf]
-        return (-np.inf, blobs)
-
-    # Need uncertainty for the pixels that we're actually sampling!
-    # We're going to piggy-back on any existing callback
-    pixel_uncertainty = []
-    def callback(*args):
-
-        observed_spectra, masks = args[-3], args[-1]
-        for observed_spectrum, mask in zip(observed_spectra, masks):
-            indices = np.where(mask == 1)[0]
-            pixel_uncertainty.extend(observed_spectrum.uncertainty[indices])
-
-        if chi_squared_fn_callback is not None:
-            chi_squared_fn_callback(*args)
-
-    chi_sq = chi_squared_fn(parameters, parameter_names, observed_spectra, aperture_mapping,
-        model, configuration, fail_value=np.inf, callback=callback)
-
-    pixel_uncertainty = np.array(pixel_uncertainty)
-    inverse_variance = 1 / (pixel_uncertainty**2 + jitter)
-    log_likelihood = -0.5 * (chi_sq - np.sum(np.log(inverse_variance)))
-    
-    logging.debug("lnprob_fn({0}), \n\tyields $\chi^2$ = {1:.2f}, log-likelihood: {2:.5e}".format(
-        ", ".join(["{0}: {1:.2f}".format(p, v) for p, v in zip(parameter_names, parameters)]),
-        chi_sq, log_likelihood))
-
-    if lnprob_callback is not None:
-        lnprob_callback(parameters, chi_sq, log_likelihood)
-
-    blobs = list(parameters) + [chi_sq, log_likelihood]
-    return (log_likelihood, blobs)
+    return -0.5 * total_chi_sq

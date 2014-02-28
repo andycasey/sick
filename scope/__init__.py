@@ -1,16 +1,5 @@
 # coding: utf-8
 
-""" Initial imports for SCOPE. """
+__all__ = ["config", "models", "specutils", "utils"]
 
-__author__ = "Andy Casey <acasey@mso.anu.edu.au>"
-
-
-import logging
-logging.basicConfig(level=logging.INFO)
-
-# Module imports
-import config
-import models
-import specutils
-import visualise
-from analyze import analyze_star, analyze_all
+from analyze import solve
