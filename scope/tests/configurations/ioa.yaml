@@ -1,0 +1,82 @@
+solver:
+  method: emcee
+  nwalkers: 20
+  burn: 500
+  sample: 250
+  threads: 8
+
+models:
+  dispersion_filenames:
+    blue: /media/WD/ges/synthetic-spectra/UVES580/
+    red:  /media/WD/ges/synthetic-spectra/HR21/
+  flux_filenames:
+    blue:
+      folder: /media/WD/ges/synthetic-spectra/UVES580/
+      re_match: [s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.+-]+).+fits
+    red: 
+      folder: /media/WD/ges/synthetic-spectra/HR21/
+      re_match: [s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.+-]+).+fits
+
+normalise_observed:
+  blue:
+    perform: true
+    function: spline 
+    order: 3
+    scale: free
+    lower_clip: 1
+    knot_spacing: 200
+    upper_clip: 0.2
+  red:
+    perform: true
+    function: poly 
+    order: 4
+    scale: free
+    lower_clip: 1
+    upper_clip: 5
+
+doppler_correct:
+  blue:
+    perform: true
+  red:
+    perform: true
+
+smooth_model_flux:
+  blue:
+    perform: true
+    mode: gaussian
+    kernel: free
+  red:
+    perform: true 
+    mode: gaussian
+    kernel: free
+
+priors:
+  teff: uniform 
+  logg: uniform 
+  feh: uniform
+  normalise_observed.blue.scale: normal(1.0, 0.02)
+  doppler_correct.blue.perform: normal(0, 100)
+  smooth_model_flux.blue.kernel: normal(3, 0.5)
+  normalise_observed.red.scale: normal(1.0, 0.02)
+  doppler_correct.red.perform: normal(0, 100)
+  smooth_model_flux.red.kernel: normal(0.4, 0.1)
+
+masks:
+  blue:
+    - [4500, 5300]
+  red:
+    - [8400, 8401]
+    - [8400, 8497]
+    - [8499, 8541]
+    - [8543, 8661]
+    - [8663, 8800]
+    - [8478, 8497]
+    - [8499, 8518]
+    - [8522, 8541]
+    - [8543, 8562]
+    - [8642, 8661]
+    - [8663, 8682]
+
+weights:
+  blue: 1 + 2*abs(1 - flux)
+  red: 1 + 2*abs(1 - flux)
