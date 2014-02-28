@@ -54,14 +54,6 @@ def verify(configuration):
         A dictionary configuration for SCOPE.
     """
 
-    # Check optional parameters
-    integer_types = ("threads", )
-    for key in integer_types:
-        if key in configuration:
-            if not isinstance(configuration[key], (int, )):
-                raise TypeError("configuration setting '{key}' is expected "
-                        "to be an integer-type".format(key=key))
-
     # Check the models
     verify_models(configuration)
 
@@ -86,14 +78,27 @@ def verify(configuration):
     verify_weights(configuration)
 
     # Verify solution setup
-    if "solution_method" in configuration:
-        acceptable_methods = ("fmin_powell", "emcee")
+    verify_solver(configuration)
 
-        if not configuration["solution_method"] in acceptable_methods:
-            raise ValueError("configuration setting 'solution_method' is expected to be "
-                "one of the following: {acceptable}".format(acceptable=", ".join(acceptable_methods)))
+    return True
 
-        # TODO - solution-specific checks
+
+def verify_solver(configuration):
+    """ Verifies the configuration settings for which solver to employ. """
+
+    if "solver" not in configuration:
+        raise KeyError("no solver information provided in configuration")
+
+    solver = configuration["solver"]
+    available_methods = ("fmin_powell", "emcee")
+
+    if solver["method"] not in available_methods:
+        raise ValueError("solver method '{0}' is unsupported. Available methods are: {1}".format(
+            solver["method"], ", ".join(available_methods)))
+
+    # Non-solver specific options
+    if "threads" in solver and not isinstance(solver["threads"], (float, int)):
+        raise TypeError("solver.threads must be an integer-like type")
 
     return True
 
@@ -112,13 +117,13 @@ def verify_doppler(configuration):
 
     priors_to_expect = []
     for aperture in apertures:
-        if 'allow_shift' not in configuration['doppler_correct'][aperture]:
-            raise KeyError("configuration setting 'doppler_correct.{aperture}.allow_shift' not found"
+        if 'perform' not in configuration['doppler_correct'][aperture]:
+            raise KeyError("configuration setting 'doppler_correct.{aperture}.perform' not found"
                 .format(aperture=aperture))
 
         # Radial velocity as a prior?
-        if configuration['doppler_correct'][aperture]['allow_shift']:
-            priors_to_expect.append('doppler_correct.{aperture}.allow_shift'.format(aperture=aperture))
+        if configuration['doppler_correct'][aperture]['perform']:
+            priors_to_expect.append('doppler_correct.{aperture}.perform'.format(aperture=aperture))
 
         # Should we be measuring radial velocity?
         if 'measure' in configuration['doppler_correct'][aperture] \
@@ -322,85 +327,60 @@ def verify_models(configuration):
         A dictionary configuration for SCOPE.
     """
 
-    if 'models' not in configuration.keys():
-        raise KeyError("no 'models' found in configuration")
+    if "models" not in configuration.keys():
+        raise KeyError("no models found in configuration")
 
-    model_configuration = configuration['models']
+    model_configuration = configuration["models"]
 
     # Check the aperture names
     aperture_names = get_aperture_names(configuration)
-    protected_aperture_names = ('perform_initial_measurement', 'initial_template')
-    
     for aperture in aperture_names:
-        if aperture in protected_aperture_names:
-            raise ValueError("aperture name '{aperture}' is protected and cannot be used"
-                .format(aperture=aperture))
-
         if '.' in aperture:
-            raise ValueError("aperture name '{aperture}' is invalid because aperture names cannot contain a full-stop character '.'"
-                .format(aperture=aperture))
+            raise ValueError("aperture name '{0}' cannot contain a full-stop character".format(aperture))
 
-
-
-    required_keys = ('dispersion_filenames', 'flux_filenames')
+    required_keys = ("dispersion_filenames", "flux_filenames")
     for key in required_keys:
         if key not in model_configuration.keys():
-            raise KeyError("no '{key}' found in configuration for models".format(key=key))
+            raise KeyError("no '{0}' found in configuration for models".format(key))
 
     # Check keys exist in both
-    missing_keys = [x for x in model_configuration['dispersion_filenames'].keys() if x not in model_configuration['flux_filenames']]
+    missing_keys = [x for x in model_configuration["dispersion_filenames"].keys() if x not in model_configuration["flux_filenames"]]
 
     if len(missing_keys) > 0:
-        raise KeyError("missing flux filenames for models in configuration")
+        raise KeyError("missing flux filenames for {0} aperture(s)".format(
+            ",".join(missing_keys)))
 
     # Check dispersion filenames exist
     dispersion_maps = {}
-    for key, dispersion_filename in model_configuration['dispersion_filenames'].iteritems():
+    for aperture, dispersion_filename in model_configuration["dispersion_filenames"].iteritems():
         if not os.path.exists(dispersion_filename):
-            raise IOError("dispersion filename for {key} arm does not exist: {filename}"
-                .format(key=key, filename=dispersion_filename))
+            raise IOError("dispersion filename for {0} aperture does not exist: {1}"
+                .format(aperture, dispersion_filename))
 
         # Load a dispersion map
         dispersion = models.load_model_data(dispersion_filename)
-        dispersion_maps[key] = [len(dispersion), np.min(dispersion), np.max(dispersion)]
+        dispersion_maps[key] = [np.min(dispersion), np.max(dispersion)]
 
     # Ensure dispersion maps of standards don't overlap
-    all_min = np.min([item[1] for item in dispersion_maps.values()])
-    all_max = np.max([item[2] for item in dispersion_maps.values()])
-
-    interval_tree_resolution = 1
-    interval_tree_disp = np.arange(all_min, all_max + interval_tree_resolution, interval_tree_resolution)
-    interval_tree_flux = np.zeros(len(interval_tree_disp))
-
-    for key, dispersion_map in dispersion_maps.iteritems():
-
-        N, wlstart, wlend = dispersion_map
-        idx = np.searchsorted(interval_tree_disp, [wlstart, wlend + interval_tree_resolution])
-
-        interval_tree_flux[idx[0]:idx[1]] += 1
-
-    if np.max(interval_tree_flux) > 1:
-        idx = np.where(interval_tree_flux > 1)[0]
-        wavelength = interval_tree_disp[idx[0]]
-
-        raise ValueError("dispersion maps overlap near {wavelength}".format(wavelength=wavelength))
+    overlap_wavelength = utils.find_spectral_overlap(dispersion_maps.values())
+    if overlap_wavelength is not None:
+        raise ValueError("dispersion maps overlap near {0}".format(overlap_wavelength))
 
     # Try actually loading a model
-    toy_model = models.Models(configuration)
+    model = models.Model(configuration)
 
     # Check the length of the dispersion map and some random point
-    for aperture, dispersion_map in toy_model.dispersion.iteritems():
+    for aperture, dispersion_map in model.dispersion.iteritems():
         n_dispersion_points = len(dispersion_map)
 
-        random_filename = choice(toy_model.flux_filenames[aperture])
+        random_filename = choice(model.flux_filenames[aperture])
         random_flux = models.load_model_data(random_filename)
         n_flux_points = len(random_flux)
 
         if n_dispersion_points != n_flux_points:
-            raise ValueError("number of dispersion points ({n_dispersion_points}) and flux points ({n_flux_points})"
-                " does not match for {aperture} aperture in randomly selected filename: {random_filename}"
-                .format(n_dispersion_points=n_dispersion_points, aperture=aperture, n_flux_points=n_flux_points,
-                    random_filename=random_filename))
+            raise ValueError("number of dispersion points ({0}) and flux points ({1})"
+                " does not match for {2} aperture in randomly selected filename: {3}".format(
+                n_dispersion_points, n_flux_points, aperture, random_filename))
 
     return True
 
@@ -417,7 +397,7 @@ def verify_masks(configuration):
 
     for mask_aperture_name in configuration["masks"]:
         if mask_aperture_name not in aperture_names:
-            raise ValueError("unrecognised aperture name '{aperture}' specified in masks".format(aperture=mask_aperture_name))
+            raise ValueError("unrecognised aperture name '{0}' specified in masks".format(mask_aperture_name))
 
         # We know nothing about the wavelength coverage, so all we can do is check
         # for float/ints
@@ -440,17 +420,19 @@ def verify_weights(configuration):
     """Verifies any (optional) pixel weighting functions specified in the input configuration."""
 
     if "weights" not in configuration.keys():
+        # Weighting functions are optional
         return True
 
     # Check the aperture names
     aperture_names = get_aperture_names(configuration)
 
-    for weight_aperture_name in configuration["weights"]:
-        if weight_aperture_name not in aperture_names:
-            raise ValueError("unrecognised aperture name '{0}' specified in weights".format(weight_aperture_name))
+    for aperture in configuration["weights"]:
+        if aperture not in aperture_names:
+            raise ValueError("unrecognised aperture name '{0}' specified in weights".format(
+                aperture))
 
         # Check is callable
-        test_weighting_func = lambda disp, flux: eval(configuration["weights"][weight_aperture_name],
+        test_weighting_func = lambda disp, flux: eval(configuration["weights"][aperture],
             {"disp": disp, "flux": flux, "np": np})
 
         try:
@@ -458,7 +440,7 @@ def verify_weights(configuration):
             test_weighting_func(np.arange(10), np.ones(10))
 
         except:
-            raise
+            raise ValueError("weighting function for {0} aperture is improper".format(aperture))
 
     return True
         
