@@ -7,6 +7,7 @@ from __future__ import division, print_function
 __author__ = "Andy Casey <acasey@mso.anu.edu.au>"
 
 # Standard library
+import json
 import logging
 import os
 from random import choice
@@ -19,7 +20,7 @@ import yaml
 import models
 
 def load(configuration_filename):
-    """Loads a YAML-style configuration filename.
+    """Loads a configuration filename (either YAML or JSON)
 
     Inputs
     ------
@@ -31,8 +32,10 @@ def load(configuration_filename):
         raise IOError("no configuration filename '{filename}' exists".format(
             filename=configuration_filename))
 
+    module = json if configuration_filename.endswith(".json") else yaml
+
     with open(configuration_filename, 'r') as fp:
-        configuration = yaml.load(fp)
+        configuration = module.load(fp)
 
     return configuration
 
