@@ -19,6 +19,8 @@ from scipy import interpolate, ndimage
 
 # Module
 from utils import human_readable_digit
+from specutils import Spectrum1D
+
 
 __all__ = ['Model', 'load_model_data']
 
@@ -304,7 +306,6 @@ class Model(object):
             interpolated_flux = self.interpolate_flux(grid_point)
 
         except:
-            raise
             logging.debug("No model flux could be determined for {0}".format(
                 ", ".join(["{0} = {1:.2f}".format(parameter, value) \
                     for parameter, value in zip(self.colnames, grid_point)])))
@@ -321,7 +322,7 @@ class Model(object):
         # Create spectra
         model_spectra = {}
         for aperture, interpolated_flux in interpolated_flux.iteritems():
-            model_spectra[aperture] = specutils.Spectrum1D(
+            model_spectra[aperture] = Spectrum1D(
                 disp=self.dispersion[aperture], flux=interpolated_flux)
 
         # Any synthetic smoothing to apply?
