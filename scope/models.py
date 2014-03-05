@@ -74,9 +74,8 @@ class Model(object):
         #self.grid_points = np.array(self.grid_points, dtype=dtype)
 
         # If it's just the one beam, it's easy!        
-        if len(configuration['models']['flux_filenames'].keys()) == 1:
+        if len(configuration['models']['dispersion_filenames'].keys()) == 1:
             self.flux_filenames = flux_filenames[first_beam]
-
             return None
 
         else:
@@ -272,7 +271,7 @@ class Model(object):
         for aperture, observed_dispersion in zip(mapped_apertures, observed_dispersions):
 
             mean_observed_pixel_size = np.mean(np.diff(observed_dispersion))
-            mean_model_pixel_size = np.mean(np.diff(model.dispersion[aperture]))
+            mean_model_pixel_size = np.mean(np.diff(self.dispersion[aperture]))
             if mean_model_pixel_size > mean_observed_pixel_size:
                 raise ValueError("the mean model pixel size in the {aperture} aperture is larger than the mean"
                     " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
@@ -305,14 +304,15 @@ class Model(object):
             interpolated_flux = self.interpolate_flux(grid_point)
 
         except:
+            raise
             logging.debug("No model flux could be determined for {0}".format(
                 ", ".join(["{0} = {1:.2f}".format(parameter, value) \
-                    for parameter, value in zip(stellar_parameters, grid_point)])))
+                    for parameter, value in zip(self.colnames, grid_point)])))
             return None
 
         logging.debug("Interpolated model flux at {0}".format(
             ", ".join(["{0} = {1:.2f}".format(parameter, value) \
-                for parameter, value in zip(stellar_parameters, grid_point)])))
+                for parameter, value in zip(self.colnames, grid_point)])))
 
         if interpolated_flux == {}: return None
         for aperture, flux in interpolated_flux.iteritems():
