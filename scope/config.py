@@ -12,17 +12,18 @@ import logging
 import os
 from random import choice
 
-logger = logging.getLogger(__name__)
-
 # Third-party
 import numpy as np
+
+# Module specific
+import models, utils
+
+# Is YAML available?
+logger = logging.getLogger(__name__)
 try:
     import yaml
 except ImportError:
     logger.warn("YAML module not loaded. Only JSON configuration files can be parsed.")
-
-# Module specific
-import models
 
 def load(configuration_filename):
     """Loads a configuration filename (either YAML or JSON)
@@ -37,7 +38,10 @@ def load(configuration_filename):
         raise IOError("no configuration filename '{filename}' exists".format(
             filename=configuration_filename))
 
-    module = json if configuration_filename.endswith(".json") else yaml
+    try:
+        module = json if configuration_filename.endswith(".json") else yaml
+    except NameError:
+        raise ValueError("non-json configuration file provided and yaml module unavailable")
 
     with open(configuration_filename, 'r') as fp:
         configuration = module.load(fp)
@@ -45,7 +49,7 @@ def load(configuration_filename):
     return configuration
 
 
-def verify(configuration):
+def verify(configuration, pedantic=False):
     """Verifies a SCOPE configuration dictionary that everything makes sense.
 
     Inputs
@@ -58,24 +62,24 @@ def verify(configuration):
     verify_models(configuration)
 
     # Check the normalisation
-    normalisation_priors = verify_normalisation(configuration)
+    normalisation_priors = verify_normalisation(configuration, pedantic)
 
     # Check the smoothing
-    smoothing_priors = verify_smoothing(configuration)
+    smoothing_priors = verify_smoothing(configuration, pedantic)
 
     # Check the doppler corrections
-    doppler_priors = verify_doppler(configuration)
+    doppler_priors = verify_doppler(configuration, pedantic)
 
     # Establish all of the priors    
     priors_to_expect = doppler_priors + smoothing_priors + normalisation_priors
 
     # Verify that we have priors established for all the priors
     # we expect, and the stellar parameters we plan to solve for
-    verify_priors(configuration, priors_to_expect)
+    verify_priors(configuration, priors_to_expect, pedantic)
 
     # Verify masks and weights (both are optional)
-    verify_masks(configuration)
-    verify_weights(configuration)
+    verify_masks(configuration, pedantic)
+    verify_weights(configuration, pedantic)
 
     # Verify solution setup
     verify_solver(configuration)
@@ -83,7 +87,7 @@ def verify(configuration):
     return True
 
 
-def verify_solver(configuration):
+def verify_solver(configuration, pedantic=False):
     """ Verifies the configuration settings for which solver to employ. """
 
     if "solver" not in configuration:
@@ -103,7 +107,7 @@ def verify_solver(configuration):
     return True
 
 
-def verify_doppler(configuration):
+def verify_doppler(configuration, pedantic=False):
     """ Verifies the doppler component of a configuration dictionary.
 
     Inputs
@@ -146,7 +150,7 @@ def verify_doppler(configuration):
     return priors_to_expect
 
 
-def verify_priors(configuration, expected_priors):
+def verify_priors(configuration, expected_priors, pedantic=False):
     """ Verifies that the priors in a configuration are valid. 
 
     Inputs
@@ -159,7 +163,7 @@ def verify_priors(configuration, expected_priors):
     """
 
     # Create a toy model. What parameters (from the model file names) are we solving for?
-    toy_model = models.Models(configuration)
+    toy_model = models.Model(configuration)
     parameters_to_solve = toy_model.colnames
 
     # Do priors for these values exist?
@@ -178,7 +182,7 @@ def verify_priors(configuration, expected_priors):
     return True
 
 
-def verify_smoothing(configuration):
+def verify_smoothing(configuration, pedantic=False):
     """Verifies the synthetic smoothing component of a configuration.
 
     Inputs
@@ -233,7 +237,7 @@ def verify_smoothing(configuration):
     return priors_to_expect
 
 
-def verify_normalisation(configuration):
+def verify_normalisation(configuration, pedantic=False):
     """Verifies the normalisation component of a configuration.
 
     Inputs
@@ -282,7 +286,7 @@ def verify_normalisation(configuration):
                         "to be an integer-type".format(aperture=aperture, key=key))
 
             elif key in ('knot_spacing', 'lower_clip', 'upper_clip'):
-                if not isinstance(value, (int, )):
+                if not isinstance(value, (int, float, )):
                     raise TypeError("configuration setting 'normalise_observed.{aperture}.{key}' is expected "
                         "to be a float-type".format(aperture=aperture, key=key))
 
@@ -318,7 +322,7 @@ def check_aperture_names(configuration, key):
     return True
 
 
-def verify_models(configuration):
+def verify_models(configuration, pedantic=False):
     """Verifies the model component of a given configuration.
 
     Inputs
@@ -385,7 +389,7 @@ def verify_models(configuration):
     return True
 
 
-def verify_masks(configuration):
+def verify_masks(configuration, pedantic=False):
     """Verifies any (optional) masks specified in the input configuration."""
 
     if "masks" not in configuration.keys():
@@ -396,7 +400,7 @@ def verify_masks(configuration):
     aperture_names = get_aperture_names(configuration)
 
     for mask_aperture_name in configuration["masks"]:
-        if mask_aperture_name not in aperture_names:
+        if pedantic and mask_aperture_name not in aperture_names:
             raise ValueError("unrecognised aperture name '{0}' specified in masks".format(mask_aperture_name))
 
         # We know nothing about the wavelength coverage, so all we can do is check
@@ -416,7 +420,7 @@ def verify_masks(configuration):
     return True
 
 
-def verify_weights(configuration):
+def verify_weights(configuration, pedantic=False):
     """Verifies any (optional) pixel weighting functions specified in the input configuration."""
 
     if "weights" not in configuration.keys():
@@ -427,7 +431,7 @@ def verify_weights(configuration):
     aperture_names = get_aperture_names(configuration)
 
     for aperture in configuration["weights"]:
-        if aperture not in aperture_names:
+        if pedantic and aperture not in aperture_names:
             raise ValueError("unrecognised aperture name '{0}' specified in weights".format(
                 aperture))
 
