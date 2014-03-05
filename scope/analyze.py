@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 __all__ = ['analyze', 'analyze_star', 'chi_squared_fn']
 
 
-def initialise_priors(configuration, model, observed_spectra, aperture_mapping, nwalkers=1):
+def initialise_priors(model, configuration, observations, nwalkers=1):
     """ Initialise the priors (or initial conditions) for the analysis """
 
     walker_priors = []
@@ -84,7 +84,7 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
                         # Measure the velocity
                         template_filename, region = literal_eval(prior_value.lstrip("cross_correlate"))
 
-                        velocity, velocity_err = observed_spectra[aperture_mapping.index(aperture)].cross_correlate(
+                        velocity, velocity_err = observations[model._mapped_apertures.index(aperture)].cross_correlate(
                             specutils.Spectrum1D.load(template_filename),
                             region
                             )
@@ -159,6 +159,84 @@ def initialise_priors(configuration, model, observed_spectra, aperture_mapping, 
     return (ordered_parameter_names, walker_priors)
 
 
+def likelihood(parameters, parameter_names, model, configuration, observed_spectra,
+    callback=None):
+    """Calculates the likelihood that a given set of observations
+    and parameters match the input models.
+
+    parameters : list of `float`
+        The free parameters to solve for. These are referenced in 
+        `parameter_names`.
+
+    observed_spectra : list of `Spectrum1D` objects
+        The observed spectra.
+
+    callback : function
+        A callback to apply after completing the comparison.
+    """
+
+    logger.info("PARAMETERS AND VALUES")
+    for parameter, name in zip(parameters, parameter_names):
+        logger.info("  {0} = {1}".format(name, parameter))
+
+    if "jitter" in parameter_names:
+        jitter = parameters[parameter_names.index("jitter")]
+
+        if not (1 > jitter > 0):
+            logger.info("returning -np.inf because jitter is outside the range")
+            return -np.inf
+    else:
+        jitter = 0
+
+    # Prepare the observed spectra
+    observed_spectra = model.observed_spectra(parameters, parameter_names, observed_spectra)
+    if observed_spectra is None:
+        logger.info("returning -np.inf because observed_spectra failed with parameters {0}".format(parameters))
+        return -np.inf
+
+    # Get the synthetic spectra
+    model_spectra = model.model_spectra(parameters, parameter_names, observed_spectra)
+    if model_spectra is None:
+        logger.info("returning -np.inf because model_spectra failed with parameters {0}".format(parameters))
+        return -np.inf
+
+    # Any masks?
+    masks = model.masks(model_spectra)
+    weighting_functions = model.weights(model_spectra)
+    
+    # Calculate chi^2 difference
+    chi_sq_i = {}
+    for i, (aperture, observed_spectrum) in enumerate(zip(model._mapped_apertures, observed_spectra)):
+
+        chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2/(observed_spectrum.uncertainty**2 + jitter)
+        
+        # Apply any weighting functions to the chi_sq values
+        chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
+
+        # Apply masks
+        chi_sq *= masks[aperture]
+
+        # Add only finite, positive values
+        positive_finite_chisq_indices = (chi_sq > 0) * np.isfinite(chi_sq)
+        positive_finite_flux_indices = (observed_spectrum.flux > 0) * np.isfinite(observed_spectrum.flux)
+
+        # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
+        useful_pixels = positive_finite_chisq_indices * positive_finite_flux_indices
+
+        chi_sq_i[aperture] = chi_sq[useful_pixels]
+
+        # Update the masks values:
+        #> -2: Not interested in this region, and it was non-finite (not used).
+        #> -1: Interested in this region, but it was non-finite (not used).
+        #>  0: Not interested in this region, it was finite (not used).
+        #>  1: Interested in this region, it was finite (used for \chi^2 determination)
+        masks[aperture][~useful_pixels] -= 2
+
+    total_chi_sq = np.sum(map(np.sum, chi_sq_i.values()))
+    print(parameters, total_chi_sq)
+    return total_chi_sq
+
+
 def solve(observed_spectra, configuration, initial_guess=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
@@ -172,6 +250,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
         The configuration settings for this analysis.
 
     """
+
 
     if isinstance(configuration, str) and os.path.exists(configuration):
         configuration = config.load(configuration)
@@ -193,36 +272,45 @@ def solve(observed_spectra, configuration, initial_guess=None):
 
     
     # Make fmin_powell the default
-    if "solution_method" not in configuration or configuration["solution_method"] == "fmin_powell":
+    if  configuration["solver"].get("method", "fmin_powell") == "fmin_powell":
 
-        parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping)
-
+        parameter_names, p0 = initialise_priors(model, configuration, observed_spectra)
         parameters_final = scipy.optimize.fmin_powell(chi_sq, p0,
             args=(parameter_names, observed_spectra, model), xtol=0.001, ftol=0.001)
 
 
-    elif configuration["solution_method"] == "emcee":
+    elif configuration["solver"]["method"] == "emcee":
 
         # Ensure we have the number of walkers and steps specified in the configuration
-        nwalkers, nsteps = configuration["emcee"]["nwalkers"], configuration["emcee"]["nsteps"]
+        nwalkers, nsteps = configuration["solver"]["nwalkers"], \
+            configuration["solver"]["burn"] + configuration["solver"]["sample"]
+
         lnprob0, rstate0 = None, None
+        threads = configuration["solver"].get("threads", 1)
+
         mean_acceptance_fractions = np.zeros(nsteps)
         
         # Use a callback if we are running in serial
-        if configuration.get("threads", 1) == 1:
+        if threads == 1:
             sample_data = []
             def lnprob_fn_callback(parameters, chi_squared, log_likelihood):
                 sample_point = list(parameters) + [chi_squared, log_likelihood]
                 sample_data.append(sample_point)
 
-        # Initialise priors and set up arguments for optimization
-        parameter_names, p0 = initialise_priors(configuration, model, observed_spectra, aperture_mapping, nwalkers)
-        optimisation_args = (parameter_names, observed_spectra, aperture_mapping, model, configuration, 
-            lnprob_fn_callback, chi_squared_fn_callback)   
+        else:
+            lnprob_fn_callback = None
 
-        logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(nwalkers, ", ".join(parameter_names)))
-        sampler = emcee.EnsembleSampler(nwalkers, len(parameter_names), lnprob_fn, args=optimisation_args,
-            threads=configuration.get("threads", 1))
+        # Initialise priors and set up arguments for optimization
+        parameter_names, p0 = initialise_priors(model, configuration, observed_spectra,
+            nwalkers=nwalkers)
+        logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(
+            nwalkers, ", ".join(parameter_names)))
+
+        # Initialise the sampler
+        num_parameters = len(parameter_names)
+        sampler = emcee.EnsembleSampler(nwalkers, num_parameters, likelihood,
+            args=(parameter_names, model, configuration, observed_spectra),
+            threads=threads)
 
         # Sample_data contains all the inputs, and the \chi^2 and L 
         # sampler_state = (pos, lnprob, state[, blobs])
@@ -246,7 +334,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
 
         # Blobs contain all the parameters sampled, chi_sq value and log-likelihood value
 
-        if configuration.get("threads", 1) == 1:
+        if threads == 1:
             sampled_parameters = np.array(sample_data)
 
         else:
@@ -299,7 +387,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
             return (posteriors, state, observed_spectra, model_spectra, masks)
             
     else:
-        raise NotImplementedError
+        raise NotImplementedError("well well well, how did we find ourselves here, Mr Bond?")
 
     # The following only occurs if we did not sample The Right Way(tm)
     # We will need to sample the \chi^2 function again with a callback to save
@@ -318,73 +406,3 @@ def solve(observed_spectra, configuration, initial_guess=None):
     return (posteriors, state, observed_spectra, model_spectra, masks)
 
 
-
-def likelihood(parameters, parameter_names, observations, model, callback=None):
-    """Calculates the likelihood that a given set of observations
-    and parameters match the input models.
-
-    parameters : list of `float`
-        The free parameters to solve for. These are referenced in 
-        `parameter_names`.
-
-    observed_spectra : list of `Spectrum1D` objects
-        The observed spectra.
-
-    callback : function
-        A callback to apply after completing the comparison.
-    """
-
-    if "jitter" in parameter_names:
-        jitter = parameters[parameter_names.index("jitter")]
-
-        if not (1 > jitter > 0):
-            return -np.inf
-    else:
-        jitter = 0
-
-
-    # Prepare the observed spectra
-    observed_spectra = model.observed_spectra(parameters, parameter_names, observed_spectra)
-    if observed_spectra is None:
-        return -np.inf
-
-    # Get the synthetic spectra
-    model_spectra = model.model_spectra(parameters, parameter_names, observed_spectra)
-    if model_spectra is None:
-        return -np.inf
-
-    # Any masks?
-    masks = model.masks(model_spectra)
-    weighting_functions = model.weights(model_spectra)
-    
-    # Calculate chi^2 difference
-    chi_sq_i = {}
-    for i, (aperture, observed_spectrum) in enumerate(zip(model._mapped_apertures, observed_spectra)):
-
-        chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2/(observed_spectrum.uncertainty**2 + jitter)
-        
-        # Apply any weighting functions to the chi_sq values
-        chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
-
-        # Apply masks
-        chi_sq *= masks[aperture]
-
-        # Add only finite, positive values
-        positive_finite_chisq_indices = (chi_sq > 0) * np.isfinite(chi_sq)
-        positive_finite_flux_indices = (observed_spectrum.flux > 0) * np.isfinite(observed_spectrum.flux)
-
-        # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
-        useful_pixels = positive_finite_chisq_indices * positive_finite_flux_indices
-
-        chi_sq_i[aperture] = chi_sq[useful_pixels]
-
-        # Update the masks values:
-        #> -2: Not interested in this region, and it was non-finite (not used).
-        #> -1: Interested in this region, but it was non-finite (not used).
-        #>  0: Not interested in this region, it was finite (not used).
-        #>  1: Interested in this region, it was finite (used for \chi^2 determination)
-        masks[aperture][~useful_pixels] -= 2
-
-    total_chi_sq = np.sum(map(np.sum, chi_sq_i.values()))
-    
-    return total_chi_sq
