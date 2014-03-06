@@ -55,6 +55,14 @@ class Spectrum1D(object):
         self.headers = headers
         
         return None
+
+    def copy(self):
+        """ Creates a copy of the object """
+
+        headers = None if self.headers is None else self.headers.copy()
+        uncertainty = None if self.uncertainty is None else self.uncertainty.copy()
+        return self.__class__(self.disp.copy(), self.flux.copy(),
+            uncertainty=uncertainty, headers=headers)
     
     @classmethod
     def load(cls, filename, **kwargs):
@@ -673,7 +681,7 @@ class Spectrum1D(object):
 
 
 
-def load_aaomega_multispec(filename, fill_value=0):
+def load_aaomega_multispec(filename, fill_value=-1):
     """
     Returns a list of Spectrum1D objects with headers from the main image
     and ones specific to that fibre (RA, DEC, X, Y, XERR, YERR, FIRE_NUM, etc)
@@ -708,40 +716,38 @@ def load_aaomega_multispec(filename, fill_value=0):
     spectra = []    
     columns = image[2].columns.names
 
-    for i, star in enumerate(image[2].data):
+    program_indices = np.where(image[2].data["TYPE"] == "P")[0]
+    
+    for i, index in enumerate(program_indices):
+    
+        headers = base_headers.copy()
+        headers['FIBRE_NUM'] = i + 1
         
-        if star['TYPE'] == 'P': # Program object
-            
-            headers = base_headers.copy()
-            headers['FIBRE_NUM'] = i + 1
-            
-            for header in req_fibre_headers:
-                headers[header] = star[header]
-            
-            flux = image[0].data[i]
-            
-            # Check if it's worthwhile having these
-            if all(~np.isfinite(flux)):
-                flux = np.array([fill_value] * len(flux))
+        for header in req_fibre_headers:
+            headers[header] = image[2].data[index][header]
+        
+        flux = image[0].data[index]
+        uncertainty = (1.0/flux)**2
+        
+        # Check if it's worthwhile having these
+        if all(~np.isfinite(flux)):
+            flux = np.array([fill_value] * len(flux))
 
-            # Remove off the edge nan's                
-            left_side = list(np.isfinite(flux)).index(True)
-            right_side = -list(np.isfinite(flux[::-1])).index(True)
+        # Remove off the edge nan's                
+        #left_side = list(np.isfinite(flux)).index(True)
+        #right_side = -list(np.isfinite(flux[::-1])).index(True)
 
-            dispersion_copy = dispersion.copy()
-            dispersion_copy = dispersion_copy[left_side:right_side]
-            flux = flux[left_side:right_side]
-            
-            #if len(dispersion_copy) == 0: continue
+        #dispersion_copy = dispersion.copy()
+        #dispersion_copy = dispersion_copy[left_side:right_side]
+        #flux = flux[left_side:right_side]
+        
+        #if len(dispersion_copy) == 0: continue
 
-            # Now fill any remaining values
-            remaining_nans = ~np.isfinite(flux)
-            flux[remaining_nans] = fill_value
-            
-            if len(flux) == 0:
-                spectra.append(None)
-            else:
-                spectrum = Spectrum1D(dispersion_copy, flux, headers=headers)
-                spectra.append(spectrum)
+        # Now fill any remaining values
+        #remaining_nans = ~np.isfinite(flux)
+        #flux[remaining_nans] = fill_value
+        
+        spectrum = Spectrum1D(dispersion, flux, uncertainty=uncertainty, headers=headers)
+        spectra.append(spectrum)
     
     return spectra
