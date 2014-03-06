@@ -159,8 +159,8 @@ def initialise_priors(model, configuration, observations, nwalkers=1):
     return (ordered_parameter_names, walker_priors)
 
 
-def likelihood(parameters, parameter_names, model, configuration, observed_spectra,
-    callback=None):
+def ln_likelihood(parameters, parameter_names, model, configuration,
+    observed_spectra, callback=None):
     """Calculates the likelihood that a given set of observations
     and parameters match the input models.
 
@@ -175,29 +175,19 @@ def likelihood(parameters, parameter_names, model, configuration, observed_spect
         A callback to apply after completing the comparison.
     """
 
-    logger.info("PARAMETERS AND VALUES")
-    for parameter, name in zip(parameters, parameter_names):
-        logger.info("  {0} = {1}".format(name, parameter))
-
-    if "jitter" in parameter_names:
-        jitter = parameters[parameter_names.index("jitter")]
-
-        if not (1 > jitter > 0):
-            logger.info("returning -np.inf because jitter is outside the range")
-            return -np.inf
-    else:
-        jitter = 0
-
-    # Prepare the observed spectra
-    observed_spectra = model.observed_spectra(parameters, parameter_names, observed_spectra)
-    if observed_spectra is None:
-        logger.info("returning -np.inf because observed_spectra failed with parameters {0}".format(parameters))
+    # Check the jitter
+    jitter = parameters[parameter_names.index("jitter")]
+    if not (1 > jitter > 0):
         return -np.inf
 
-    # Get the synthetic spectra
+    # Prepare the observed spectra: radial velocity shift? normalisation?
+    observed_spectra = model.observed_spectra(parameters, parameter_names, observed_spectra)
+    if observed_spectra is None:
+        return -np.inf
+
+    # Prepare the model spectra: smoothing? normalisation???? re-sample to observed dispersion?
     model_spectra = model.model_spectra(parameters, parameter_names, observed_spectra)
     if model_spectra is None:
-        logger.info("returning -np.inf because model_spectra failed with parameters {0}".format(parameters))
         return -np.inf
 
     # Any masks?
@@ -205,25 +195,28 @@ def likelihood(parameters, parameter_names, model, configuration, observed_spect
     weighting_functions = model.weights(model_spectra)
     
     # Calculate chi^2 difference
-    chi_sq_i = {}
+    differences = {}
     for i, (aperture, observed_spectrum) in enumerate(zip(model._mapped_apertures, observed_spectra)):
 
-        chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2/(observed_spectrum.uncertainty**2 + jitter)
+
+        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + model_spectra[aperture].flux**2 * np.exp(2*jitter))
+        difference = (observed_spectrum.flux - model_spectra[aperture].flux)**2 * inverse_variance - np.log(inverse_variance)
+
         
         # Apply any weighting functions to the chi_sq values
-        chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
+        #chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
 
         # Apply masks
-        chi_sq *= masks[aperture]
+        difference *= masks[aperture]
 
         # Add only finite, positive values
-        positive_finite_chisq_indices = (chi_sq > 0) * np.isfinite(chi_sq)
+        positive_finite_chisq_indices = (difference > 0) * np.isfinite(difference)
         positive_finite_flux_indices = (observed_spectrum.flux > 0) * np.isfinite(observed_spectrum.flux)
 
         # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
         useful_pixels = positive_finite_chisq_indices * positive_finite_flux_indices
 
-        chi_sq_i[aperture] = chi_sq[useful_pixels]
+        differences[aperture] = difference[useful_pixels]
 
         # Update the masks values:
         #> -2: Not interested in this region, and it was non-finite (not used).
@@ -232,9 +225,11 @@ def likelihood(parameters, parameter_names, model, configuration, observed_spect
         #>  1: Interested in this region, it was finite (used for \chi^2 determination)
         masks[aperture][~useful_pixels] -= 2
 
-    total_chi_sq = np.sum(map(np.sum, chi_sq_i.values()))
-    print(parameters, total_chi_sq)
-    return total_chi_sq
+    likelihood = -0.5 * np.sum(map(np.sum, differences.values()))
+
+    logger.info("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
+        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in zip(parameter_names, parameters)])))
+    return likelihood
 
 
 def solve(observed_spectra, configuration, initial_guess=None):
@@ -279,6 +274,8 @@ def solve(observed_spectra, configuration, initial_guess=None):
             args=(parameter_names, observed_spectra, model), xtol=0.001, ftol=0.001)
 
 
+        return parameters_final
+
     elif configuration["solver"]["method"] == "emcee":
 
         # Ensure we have the number of walkers and steps specified in the configuration
@@ -290,16 +287,6 @@ def solve(observed_spectra, configuration, initial_guess=None):
 
         mean_acceptance_fractions = np.zeros(nsteps)
         
-        # Use a callback if we are running in serial
-        if threads == 1:
-            sample_data = []
-            def lnprob_fn_callback(parameters, chi_squared, log_likelihood):
-                sample_point = list(parameters) + [chi_squared, log_likelihood]
-                sample_data.append(sample_point)
-
-        else:
-            lnprob_fn_callback = None
-
         # Initialise priors and set up arguments for optimization
         parameter_names, p0 = initialise_priors(model, configuration, observed_spectra,
             nwalkers=nwalkers)
@@ -308,7 +295,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
 
         # Initialise the sampler
         num_parameters = len(parameter_names)
-        sampler = emcee.EnsembleSampler(nwalkers, num_parameters, likelihood,
+        sampler = emcee.EnsembleSampler(nwalkers, num_parameters, ln_likelihood,
             args=(parameter_names, model, configuration, observed_spectra),
             threads=threads)
 
@@ -318,91 +305,38 @@ def solve(observed_spectra, configuration, initial_guess=None):
             p0, lnprob0=lnprob0, rstate0=rstate0, iterations=nsteps)):
 
             fraction_complete = (i + 1)/nsteps
-            mean_acceptance_fraction = np.mean(sampler.acceptance_fraction)
+            mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
 
             # Announce progress
             logging.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
-                fraction_complete * 100, i + 1, mean_acceptance_fraction))
+                fraction_complete * 100, i + 1, mean_acceptance_fractions[i]))
 
-            mean_acceptance_fractions[i] = mean_acceptance_fraction
-            if mean_acceptance_fraction == 0:
+            if mean_acceptance_fractions[i] == 0:
                 logging.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
 
         # Convert state to posteriors
-        logging.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fraction))
+        logging.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fractions[-1]))
 
-        # Blobs contain all the parameters sampled, chi_sq value and log-likelihood value
+        # Blobs contain all the sampled parameters and likelihoods        
+        sampled = np.array(sampler.blobs)
+        sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
 
-        if threads == 1:
-            sampled_parameters = np.array(sample_data)
-
-        else:
-            sampled_parameters = np.array(sampler.blobs)
-
-
-            sampled_parameters = sampled_parameters.reshape(
-                sampled_parameters.shape[0] * sampled_parameters.shape[1], sampled_parameters.shape[2])
-
-        # Get the most probable sampled point
-        most_probable_index = np.argmax(sampled_parameters[:, -1])
-        chi_sq, log_likelihood = sampled_parameters[most_probable_index, -2:]
+        # Get the maximum estimate
+        most_probable_index = np.argmax(sampled_log_likelihood)
         
-        if not np.isfinite(log_likelihood):
+
+        if not np.isfinite(sampled_log_likelihood[most_probable_index]):
             # TODO should we raise ModelError? or something?
             # You should probably check your configuration file for something peculiar
-            raise a
+            raise ValueError("most probable sampled point was non-finite")
         
-        output = CallbackClass()
-        final_callback = lambda *x: setattr(output, "data", x)
-        chi_squared_fn(sampled_parameters[most_probable_index, :-2], parameter_names, observed_spectra,
-            aperture_mapping, model, configuration, -np.inf, final_callback)
-
-        try:
-            chi_sq_returned, num_dof, posteriors, observed_spectra, model_spectra, masks = output.data
-
-        except AttributeError:
-            raise
-
-        else:
-
-            assert chi_sq == chi_sq_returned
-
-            logging.info("Most probable values with a $\chi^2$ = {0:.2f} (N_dof = {1}, $\chi_r^2$ = {2:.2f}) and $L$ = {3:.4e}: {4}".format(
-            chi_sq, num_dof, chi_sq/num_dof, log_likelihood,
-            ", ".join(["{0} = {1:.2e}".format(p, v) \
-                for p, v in zip(parameter_names, sampled_parameters[most_probable_index, :-2])])))
-
-            # Save the state information
-            state = {
-                "chi_sq": chi_sq,
-                "num_dof": num_dof,
-                "pos": pos,
-                "lnprob": lnprob,
-                "state": state,
-                "sampled_parameters": sampled_parameters,
-                "log_likelihood": log_likelihood,
-                "mean_acceptance_fractions": mean_acceptance_fractions,
-            }
-            return (posteriors, state, observed_spectra, model_spectra, masks)
+        # Calculate Maximum Likelihood values and their uncertainties
+        
+        # Send back the prepared observed spectra and prepared model spectra
+        return (posteriors, sampler, prepared_observed_spectra, prepared_model_spectra, masks)
             
     else:
         raise NotImplementedError("well well well, how did we find ourselves here, Mr Bond?")
 
-    # The following only occurs if we did not sample The Right Way(tm)
-    # We will need to sample the \chi^2 function again with a callback to save
-    # the results
-    output = CallbackClass()
-    final_callback = lambda *x: setattr(output, 'data', x)
-    chi_squared_fn(parameters_final, parameter_names, observed_spectra, aperture_mapping, model, configuration, fail_value, final_callback)
-    
-    chi_sq, num_dof, posteriors, observed_spectra, model_spectra, masks = output.data
-
-    # Create the state information
-    state = {
-        "chi_sq": chi_sq,
-        "num_dof": num_dof,
-    }
-    return (posteriors, state, observed_spectra, model_spectra, masks)
-
-
+    return None
