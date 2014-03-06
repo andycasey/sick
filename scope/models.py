@@ -142,6 +142,9 @@ class Model(object):
         for i, point_value in enumerate(point):
             difference = np.unique(self.grid_points[:, i] - point_value)
 
+            if sum(difference > 0) * sum(difference < 0) == 0:
+                return ValueError("point ({0}) outside of the grid boundaries".format(point_value))
+
             limit_min = difference[np.where(difference < 0)][-n:][0] + point_value
             limit_max = difference[np.where(difference > 0)][:n][-1] + point_value
     
