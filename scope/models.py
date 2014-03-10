@@ -27,7 +27,7 @@ __all__ = ['Model', 'load_model_data']
 class Model(object):
     """ Model class for SCOPE """
 
-    def __init__(self, configuration):
+    def __init__(self, configuration, internal_cache=False):
         self.configuration = configuration
 
         # Dispersions
@@ -74,17 +74,28 @@ class Model(object):
 
         #dtype = np.dtype({'names': tuple(self.colnames), 'formats': tuple(['<f8'] * len(self.colnames))})
         #self.grid_points = np.array(self.grid_points, dtype=dtype)
+        #self.flux_cache = {}
 
         # If it's just the one beam, it's easy!        
         if len(configuration['models']['dispersion_filenames'].keys()) == 1:
             self.flux_filenames = flux_filenames[first_beam]
             return None
+        #    if internal_cache:
+        #        self.flux_cache[first_beam] = np.zeros((len(self.flux_filenames), 
+        #                len(load_model_data(self.flux_filenames[0]))))
+        #        self.flux_cache[first_beam][:] = np.nan
 
         else:
             self.flux_filenames = {first_beam: flux_filenames[first_beam]}
 
+        #    if internal_cache:
+        #        self.flux_cache[first_beam] = np.zeros((len(self.flux_filenames[first_beam]), 
+        #                len(load_model_data(self.flux_filenames[first_beam][0]))))
+        #        self.flux_cache[first_beam][:] = np.nan
+            
+
         # Put all points and filenames on the one scale
-        for beam in configuration['models']['flux_filenames'].keys()[1:]:
+        for beam in configuration['models']['dispersion_filenames'].keys()[1:]:
             
             points = grid_points[beam]
             if len(points) != len(self.grid_points):
@@ -101,6 +112,11 @@ class Model(object):
 
             self.flux_filenames[beam] = [flux_filenames[beam][index] for index in sort_indices]
 
+        #    if internal_cache:
+        #        self.flux_cache[beam] = np.zeros((len(self.flux_filenames[beam]), 
+        #            len(load_model_data(self.flux_filenames[beam][0]))))
+        #        self.flux_cache[beam][:] = np.nan
+
         return None
 
 
@@ -109,8 +125,8 @@ class Model(object):
         num_models = len(self.grid_points) * num_apertures
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return 'Models({num_models} models, {num_apertures} apertures: "{apertures}", {num_parameters} parameters: "{parameters}", ~{num_pixels} pixels)'.format(
-            num_models=num_models, num_apertures=num_apertures, apertures=', '.join(self.dispersion.keys()),
+        return '{module}.Model({num_models} models, {num_apertures} apertures: "{apertures}", {num_parameters} parameters: "{parameters}", ~{num_pixels} pixels)'.format(
+            module=self.__module__, num_models=num_models, num_apertures=num_apertures, apertures=', '.join(self.dispersion.keys()),
             num_pixels=human_readable_digit(num_pixels), num_parameters=self.grid_points.shape[1],
             parameters=', '.join(self.colnames))
 
@@ -216,6 +232,11 @@ class Model(object):
             # Load the flux points
             flux_data = self.flux_filenames if len(self.dispersion.keys()) == 1 else self.flux_filenames[beam]
             for i, index in enumerate(neighbour_indices):
+                #if beam in self.flux_cache and not np.all(~np.isfinite(self.flux_cache[beam][index])):
+                #    beam_flux[i, :] = self.flux_cache[beam][index]
+                #    logger.info("CACHING")
+                #else:
+                #    self.flux_cache[beam][index] = load_model_data(flux_data[index])
                 beam_flux[i, :] = load_model_data(flux_data[index])
             
             try:
@@ -288,7 +309,7 @@ class Model(object):
         return mapped_apertures
 
 
-    def model_spectra(self, parameters, parameter_names, observed_spectra=None):
+    def model_spectra(self, observations=None, **kwargs):
         """ Interpolates flux values for a set of stellar parameters and
         applies any relevant smoothing or normalisation of the data. 
 
@@ -302,7 +323,7 @@ class Model(object):
         """
 
         # Build the grid point
-        grid_point = [parameters[parameter_names.index(stellar_parameter)] for stellar_parameter in self.colnames]
+        grid_point = [kwargs[stellar_parameter] for stellar_parameter in self.colnames]
 
         # Interpolate the flux
         try:
@@ -333,59 +354,27 @@ class Model(object):
             key = 'smooth_model_flux.{aperture}.kernel'.format(aperture=aperture)
 
             # Is the smoothing a free parameter?
-            if key in parameter_names:
-                index = parameter_names.index(key)
+            if key in kwargs:
                 # Ensure valid smoothing value
-                if parameters[index] < 0: return
-                model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(parameters[index])
+                if kwargs[key] < 0: return None
+                model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kwargs[key])
 
             elif self.configuration['smooth_model_flux'][aperture]['perform']:
-
+                # Apply a single smoothing value
                 kernel = self.configuration['smooth_model_flux'][aperture]['kernel']
                 model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kernel)
                 logging.debug("Smoothed model flux for '{0}' aperture with kernel {1}".format(
                     aperture, kernel))
-
-        # Perform normalisation if necessary
-        if "normalise_model" in self.configuration:
-            for aperture, observed_spectrum in zip(self._mapped_apertures, observed_spectra):
-                if  aperture in self.configuration["normalise_model"] \
-                and self.configuration["normalise_model"][aperture]["perform"]:
-                    
-                    # Perform normalisation here
-                    normalisation_kwargs = {}
-                    normalisation_kwargs.update(self.configuration["normalise_model"][aperture])
-
-                    # Now update these keywords with priors
-                    for parameter_name, parameter in zip(parameter_names, parameters):
-                        if parameter_name.startswith("normalise_model.{aperture}.".format(aperture=aperture)):
-
-                            parameter_name_sliced = '.'.join(parameter_name.split('.')[2:])
-                            normalisation_kwargs[parameter_name_sliced] = parameter
-
-                    # Normalise the spectrum
-                    logging.debug("Normalisation arguments for model '{aperture}' aperture: {kwargs}"
-                        .format(aperture=aperture, kwargs=normalisation_kwargs))
-
-                    try:
-                        normalised_spectrum, continuum = model_spectra[aperture].fit_continuum(**normalisation_kwargs)
-
-                    except:
-                        logging.debug("Normalisation of model spectra in {0} aperture failed".format(aperture))
-                        return None
-
-                    else:
-                        model_spectra[aperture] = normalised_spectrum
-
+        
         # Interpolate synthetic to observed dispersion map
-        if observed_spectra is not None:
-            for aperture, observed_spectrum in zip(self._mapped_apertures, observed_spectra):
+        if observations is not None:
+            for aperture, observed_spectrum in zip(self._mapped_apertures, observations):
                 model_spectra[aperture] = model_spectra[aperture].interpolate(observed_spectrum.disp)
 
         return model_spectra
 
 
-    def observed_spectra(self, parameters, parameter_names, observed_spectra):
+    def observed_spectra(self, observations, **kwargs):
         """ Prepares the observed spectra for comparison with model spectra
         by performing normalisation and doppler shifts.
 
@@ -397,60 +386,38 @@ class Model(object):
         parameter_names : list of str, should be same length as `parameters`.
             The names for the input parameters.
 
-        observed_spectra : list of `Spectrum1D` objects
+        observations : list of `Spectrum1D` objects
             The observed spectra.
         """
 
-        logging.debug("Preparing observed spectra for comparison")
+        logging.debug("Preparing observed spectra for comparison...")
 
-        # Any normalisation to perform?
-        normalised_spectra = []
-        for aperture, spectrum in zip(self._mapped_apertures, observed_spectra):
-            if not self.configuration['normalise_observed'][aperture]['perform']:
-                normalised_spectra.append(spectrum)
-                continue
+        modified_spectra = []
+        for aperture, spectrum in zip(self._mapped_apertures, observations):
+            
+            modified_spectrum = spectrum.copy()
 
-            normalisation_kwargs = {}
-            normalisation_kwargs.update(self.configuration['normalise_observed'][aperture])
+            # Any normalisation to perform?
+            if self.configuration["normalise_observed"][aperture]["perform"]:
+            
+                # Since we need to perform normalisation, the normalisation coefficients
+                # should be in kwargs
+                num_coefficients_expected = self.configuration["normalise_observed"][aperture]["order"] + 1
+                coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
+                    for n in xrange(num_coefficients_expected)]
 
-            # Now update these keywords with priors
-            for parameter_name, parameter in zip(parameter_names, parameters):
-                if parameter_name.startswith('normalise_observed.{aperture}.'.format(aperture=aperture)):
+                continuum = np.polyval(coefficients, modified_spectrum.disp)
+                modified_spectrum.flux /= continuum
 
-                    parameter_name_sliced = '.'.join(parameter_name.split('.')[2:])
-                    normalisation_kwargs[parameter_name_sliced] = parameter
+            # Any doppler shift to perform?
+            if self.configuration["doppler_shift"][aperture]["perform"]:
 
-            # Normalise the spectrum
-            logging.debug("Normalisation arguments for '{aperture}' aperture: {kwargs}"
-                .format(aperture=aperture, kwargs=normalisation_kwargs))
+                velocity = kwargs["doppler_shift.{0}".format(aperture)]
+                modified_spectrum.doppler_shift(velocity)
 
-            try:
-                normalised_spectrum, continuum = spectrum.fit_continuum(**normalisation_kwargs)
+            modified_spectra.append(modified_spectrum)
 
-            except:
-                return None
-
-            else:
-
-                if spectrum.uncertainty is None:
-                    normalised_spectrum.uncertainty = continuum.flux**(-0.5)
-                
-                normalised_spectra.append(normalised_spectrum)
-
-            logging.debug("Performed normalisation for aperture '{aperture}'".format(aperture=aperture))
-
-        # Any doppler shift?
-        for i, aperture in enumerate(self._mapped_apertures):
-            key = 'doppler_correct.{aperture}.perform'.format(aperture=aperture)
-
-            if key in parameter_names:
-                index = parameter_names.index(key)
-                normalised_spectra[i] = normalised_spectra[i].doppler_shift(parameters[index])
-
-                logging.debug("Performed doppler shift of {velocity:.2f} km/s for aperture '{aperture}'"
-                    .format(aperture=aperture, velocity=parameters[index]))
-
-        return normalised_spectra
+        return modified_spectra
 
 
     def masks(self, model_spectra):
@@ -529,9 +496,6 @@ def load_model_data(filename, **kwargs):
     filename : `str`
         The filename to load the values from.
     """
-
-    if not os.path.exists(filename):
-        raise IOError("filename '{filename}' does not exist".format(filename=filename))
 
     # Check the open mode
     if filename.endswith('.fits'):
