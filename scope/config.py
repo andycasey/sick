@@ -179,7 +179,7 @@ def verify_smoothing(configuration, pedantic=False):
     apertures = get_aperture_names(configuration)
     check_aperture_names(configuration, 'smooth_model_flux')
 
-    required_aperture_smooth_settings = ('mode', 'kernel')
+    required_aperture_smooth_settings = ('kernel', )
 
     # Verify the settings for each aperture
     priors_to_expect = []
@@ -209,11 +209,6 @@ def verify_smoothing(configuration, pedantic=False):
                 priors_to_expect.append('smooth_model_flux.{aperture}.{key}'
                     .format(aperture=aperture, key=key))
                 continue
-
-            available_modes = ('gaussian', )
-            if key == 'mode' and value not in available_modes:
-                raise ValueError("configuration setting 'smooth_model_flux.{aperture}.mode' is not valid. Available"
-                    " options are: {available_modes}".format(aperture=aperture, available_modes=', '.join(available_modes)))
 
             if key == 'kernel' and not isinstance(value, (int, float)):
                 raise TypeError("configuration setting 'smooth_model_flux.{aperture}.kernel' is expected to be a float-type"
