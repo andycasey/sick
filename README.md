@@ -1,15 +1,15 @@
-===================================================
+
 SCOPE: Spectral Comparison and Parameter Evaluation
-===================================================
+---------------------------------------------------
 
 [![Build Status](https://travis-ci.org/andycasey/a-new-scope.png?branch=master)](https://travis-ci.org/andycasey/a-new-scope) [![PyPi download count image](https://pypip.in/d/scope/badge.png)](https://pypi.python.org/pypi/scope/)
 
-:Info: See the `GitHub repository <http://github.com/andycasey/a-new-scope/tree/master>`_ for the latest source
-:Author: `Andy Casey <arc@ast.cam.ac.uk>`_ (arc@ast.cam.ac.uk)
-:License: `Academic License <http://github.com/dfm/license>`_: This project includes academic-research code and documents under development. You would be a fool to run any of the code. Any use of the content requires citation.
+**Author:** Andy Casey ([arc@ast.cam.ac.uk](mailto:arc@ast.cam.ac.uk))
+
+**License:** Modified [Academic License](http://github.com/dfm/license): This project includes academic-research code and documents under development. You would be a fool to run any of the code. Any use of the content requires citation.
 
 Principle
-=========
+---------
 Most (if not all) attempts to determine stellar parameters from a grid of
 spectra separate out the normalisation, radial velocity, and synthetic
 smoothing components. In reality these are all linked, and the reliability
@@ -18,12 +18,12 @@ You should have a single mathematical model that can incorporate all of these co
 That's what SCOPE does. It's flexible enough for use on any type of spectra.
 
 Installation
-============
+------------
 
 ``pip install scope`` (or [if you must](https://stackoverflow.com/questions/3220404/why-use-pip-over-easy-install), use ``easy_install scope``)
 
 Usage
-=====
+-----
 Check a configuration file:
 ``scope check config.yml``
 
