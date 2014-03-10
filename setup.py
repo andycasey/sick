@@ -38,7 +38,7 @@ setup(name="scope",
       url="http://www.github.com/andycasey/a-new-scope/",
       license="GPLv2",
       description="Probabilistically determine stellar parameters from spectra",
-      long_description=readfile(os.path.join(os.path.dirname(__file__), "README.rst")),
+      long_description=readfile(os.path.join(os.path.dirname(__file__), "README.md")),
       install_requires=readfile(
           os.path.join(os.path.dirname(__file__), "requirements.txt")).split("\n")
      )
