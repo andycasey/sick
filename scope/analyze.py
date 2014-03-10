@@ -18,6 +18,8 @@ import time
 
 from ast import literal_eval
 from collections import OrderedDict
+from glob import glob
+import matplotlib.pyplot as plt
 
 # Third-party
 import emcee
@@ -33,85 +35,116 @@ logger = logging.getLogger(__name__)
 __all__ = ['analyze', 'analyze_star', 'chi_squared_fn']
 
 
-def initialise_priors(model, configuration, observations, nwalkers=1):
+def dimensions(configuration):
+    """Returns all dimension names for a given configuration, which can
+    include both implicit and explicit priors."""
+
+    # Get the actual apertures we're going to use
+    useful_apertures = configuration["models"]["dispersion_filenames"].keys()
+
+    # Get explicit priors
+    dimensions = []
+    for dimension in configuration["priors"].keys():
+        if dimension.startswith("doppler_shift") \
+        or dimension.startswith("smooth_model_flux"):
+            aperture = dimension.split(".")[1]
+            if aperture not in useful_apertures:
+                continue
+        dimensions.append(dimension)
+
+    # Get implicit normalisation priors
+    for aperture in useful_apertures:     
+        if configuration["normalise_observed"][aperture]["perform"]:
+            dimensions.extend(
+                ["normalise_observed.{0}.a{1}".format(aperture, i) \
+                    for i in xrange(configuration["normalise_observed"][aperture]["order"] + 1)])
+
+    # Append jitter dimension
+    #if configuration["solver"].get("nwalkers", 1) > 1:
+    #    dimensions.append("jitter")
+
+    return dimensions
+
+
+
+def initialise_priors(model, configuration, observations):
     """ Initialise the priors (or initial conditions) for the analysis """
 
     walker_priors = []
-    measured_doppler_shifts = {}
+    parameter_names = dimensions(configuration)
+    initial_normalisation_coefficients = {}
 
-    ordered_parameter_names = configuration["priors"].keys()
-
-    # Jitter is a special parameter, and cannot be used as a name for any model parameters
-    if "jitter" in ordered_parameter_names:
-        raise ValueError("jitter cannot be used as a model parameter name as it is reserved for MCMC ensemble samplers")
+    nwalkers = configuration["solver"].get("nwalkers", 1)
 
     for i in xrange(nwalkers):
 
         current_walker = []
-        for j, parameter_name in enumerate(ordered_parameter_names):
-            if parameter_name == "jitter": continue
+        for j, parameter_name in enumerate(parameter_names):
 
+            if parameter_name == "jitter":
+                # Uniform prior between 0 and 1
+                current_walker.append(random.uniform(0, 1))
+                continue
+
+            # Implicit priors
+            if parameter_name.startswith("normalise_observed."):
+                aperture = parameter_name.split(".")[1]
+                coefficient_index = int(parameter_name.split(".")[-1].lstrip("a"))
+
+                if aperture not in initial_normalisation_coefficients:
+                    index = model._mapped_apertures.index(aperture)
+                    order = configuration["normalise_observed"][aperture]["order"]
+
+                    spectrum = observations[index]
+                    
+                    # Get the full range of spectra that will be normalised
+                    if "masks" in configuration and aperture in configuration["masks"]:
+                        
+                        ranges = np.array(configuration["masks"][aperture])
+                        min_range, max_range = np.min(ranges), np.max(ranges)
+                        range_indices = np.searchsorted(spectrum.disp, [min_range, max_range])
+
+                        flux_indices = np.zeros(len(spectrum.disp), dtype=bool)
+                        flux_indices[range_indices[0]:range_indices[1]] = True
+                        flux_indices *= np.isfinite(spectrum.flux) * (spectrum.flux > 0)
+                        
+                        logger.info("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
+                            aperture, np.min(spectrum.disp[flux_indices]), np.max(spectrum.disp[flux_indices])))
+                    else:
+                        flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
+
+                    # Fit the spectrum with a polynomial of order X
+                    coefficients = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices], order)
+
+                    # Save the coefficients
+                    initial_normalisation_coefficients[aperture] = coefficients
+
+                coefficient = initial_normalisation_coefficients[aperture][coefficient_index]
+                current_walker.append(random.normal(coefficient, 0.1 * abs(coefficient)))
+                continue
+
+            # Explicit priors
             prior_value = configuration["priors"][parameter_name]
-
             try:
                 prior_value = float(prior_value)
-                if i == 0:
-                    logging_level = logging.info if nwalkers == 1 else logging.warn
-                    logging_level("Initialised {0} parameter as a single value: {1:.2e}".format(
-                        parameter_name, prior_value))
 
             except:
 
                 # We probably need to evaluate this.
                 if prior_value.lower() == "uniform":
                     # Only works on stellar parameter values.
-
                     index = model.colnames.index(parameter_name)
                     possible_points = model.grid_points[:, index]
 
-                    if i == 0:
+                    if i == 0: # Only print initialisation for the first walker
                         logging.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
                             parameter_name, np.min(possible_points), np.max(possible_points)))
                     current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
 
-                elif prior_value.lower().startswith("cross_correlate") \
-                    and parameter_name.lower().startswith("doppler_correct.") and parameter_name.lower().endswith(".perform"):
-
-                    # Do we need to measure the velocity?
-                    aperture = parameter_name.split(".")[1]
-                    if aperture not in measured_doppler_shifts:
-
-                        # Measure the velocity
-                        template_filename, region = literal_eval(prior_value.lstrip("cross_correlate"))
-
-                        velocity, velocity_err = observations[model._mapped_apertures.index(aperture)].cross_correlate(
-                            specutils.Spectrum1D.load(template_filename),
-                            region
-                            )
-
-                        # Safeguards against bad velocity measurements?
-                        if np.abs(velocity) > 500:
-                            logging.warn("Measured absolute velocity in {0} aperture is larger than 500 km/s, assuming uniformed prior (0 km/s +/- 100 km/s)".format(aperture))
-                            measured_doppler_shifts[aperture] = (0, 100)
-
-                        else:
-                            measured_doppler_shifts[aperture] = (velocity, velocity_err)
-
-                    # Get the mu and sigma
-                    mu, sigma = measured_doppler_shifts[aperture]
-
-                    # Set mu to be negative so that it will correct for this doppler shift, not apply an additional shift
-                    mu = -mu
-
-                    if i == 0:
-                        logging.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
-                            parameter_name, mu, sigma))
-                    current_walker.append(random.normal(mu, sigma))
-
                 elif prior_value.lower().startswith("normal"):
                     mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
-                    if i == 0:
+                    if i == 0: # Only print initialisation for the first walker
                         logging.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
                             parameter_name, mu, sigma))
                     current_walker.append(random.normal(mu, sigma))
@@ -119,7 +152,7 @@ def initialise_priors(model, configuration, observations, nwalkers=1):
                 elif prior_value.lower().startswith("uniform"):
                     minimum, maximum = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
-                    if i == 0:
+                    if i == 0: # Only print initialisation for the first walker
                         logging.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
                             parameter_name, minimum, maximum))
                     current_walker.append(random.uniform(minimum, maximum))
@@ -128,6 +161,11 @@ def initialise_priors(model, configuration, observations, nwalkers=1):
                     raise TypeError("prior type not valid for {parameter_name}".format(parameter_name=parameter_name))
 
             else:
+                if i == 0: # Only print initialisation for the first walker
+                    logger_fn = logger.info if nwalkers == 1 else logger.warn
+                    logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(
+                        parameter_name, prior_value))
+
                 current_walker.append(prior_value)
 
         # Add the walker
@@ -135,32 +173,24 @@ def initialise_priors(model, configuration, observations, nwalkers=1):
             walker_priors = current_walker
         
         else:
-            
-            # Add jitter
-            if ordered_parameter_names[-1] != "jitter":
-                ordered_parameter_names.append("jitter")
-
-            if i == 0:
-                logging.info("Initialised jitter parameter with a uniform distribution between 0 and 1")
-            current_walker.append(random.rand())
             walker_priors.append(current_walker)
 
     walker_priors = np.array(walker_priors)
 
     logging.info("Priors summary:")
-    for i, ordered_parameter_name in enumerate(ordered_parameter_names):
+    for i, parameter_name in enumerate(parameter_names):
         if len(walker_priors.shape) > 1 and walker_priors.shape[1] > 1:
             logging.info("\tParameter {0} - mean: {1:.2e}, min: {2:.2e}, max: {3:.2e}".format(
-                ordered_parameter_name, np.mean(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
+                parameter_name, np.mean(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
         else:
             logging.info("\tParameter {0} - initial point: {1:.2e}".format(
-                ordered_parameter_name, walker_priors[i]))
+                parameter_name, walker_priors[i]))
 
-    return (ordered_parameter_names, walker_priors)
+    return (parameter_names, walker_priors)
 
 
-def ln_likelihood(parameters, parameter_names, model, configuration,
-    observed_spectra, callback=None):
+def log_likelihood(theta, parameter_names, model, configuration,
+    observations, callback=None):
     """Calculates the likelihood that a given set of observations
     and parameters match the input models.
 
@@ -168,39 +198,52 @@ def ln_likelihood(parameters, parameter_names, model, configuration,
         The free parameters to solve for. These are referenced in 
         `parameter_names`.
 
-    observed_spectra : list of `Spectrum1D` objects
+    observations : list of `Spectrum1D` objects
         The observed spectra.
 
     callback : function
         A callback to apply after completing the comparison.
     """
 
-    # Check the jitter
-    jitter = parameters[parameter_names.index("jitter")]
-    if not (1 > jitter > 0):
-        return -np.inf
+    parameters = dict(zip(parameter_names, theta))
+
+    #if not (1 > parameters["jitter"] > 0):
+    #    return -np.inf
 
     # Prepare the observed spectra: radial velocity shift? normalisation?
-    observed_spectra = model.observed_spectra(parameters, parameter_names, observed_spectra)
+    observed_spectra = model.observed_spectra(observations, **parameters)
     if observed_spectra is None:
         return -np.inf
 
-    # Prepare the model spectra: smoothing? normalisation???? re-sample to observed dispersion?
-    model_spectra = model.model_spectra(parameters, parameter_names, observed_spectra)
+    # Prepare the model spectra: smoothing? re-sample to observed dispersion?
+    model_spectra = model.model_spectra(observations=observed_spectra, **parameters)
     if model_spectra is None:
         return -np.inf
 
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.plot(model_spectra["blue"].disp/10., model_spectra["blue"].flux, 'b')
+    ax.plot(observed_spectra[0].disp/10., observed_spectra[0].flux, 'k')
+    ax.set_xlim(450, 530)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Wavelength [nm]")
+    ax.set_ylabel("Normalised Flux")
+
+    num = len(glob("progress*.png"))
+    plt.savefig("progress-{0}.png".format(num))
+    plt.close(fig)
+
     # Any masks?
     masks = model.masks(model_spectra)
-    weighting_functions = model.weights(model_spectra)
+    #weighting_functions = model.weights(model_spectra)
     
     # Calculate chi^2 difference
     differences = {}
     for i, (aperture, observed_spectrum) in enumerate(zip(model._mapped_apertures, observed_spectra)):
 
 
-        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + model_spectra[aperture].flux**2 * np.exp(2*jitter))
-        difference = (observed_spectrum.flux - model_spectra[aperture].flux)**2 * inverse_variance - np.log(inverse_variance)
+        #inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + model_spectra[aperture].flux**2 * np.exp(2*parameters["jitter"]))
+        difference = (observed_spectrum.flux - model_spectra[aperture].flux)**2 / observed_spectrum.uncertainty**2#* inverse_variance - np.log(inverse_variance)
 
         
         # Apply any weighting functions to the chi_sq values
@@ -215,6 +258,8 @@ def ln_likelihood(parameters, parameter_names, model, configuration,
 
         # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
         useful_pixels = positive_finite_chisq_indices * positive_finite_flux_indices
+        if sum(useful_pixels) == 0:
+            return -np.inf
 
         differences[aperture] = difference[useful_pixels]
 
@@ -228,7 +273,7 @@ def ln_likelihood(parameters, parameter_names, model, configuration,
     likelihood = -0.5 * np.sum(map(np.sum, differences.values()))
 
     logger.info("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
-        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in zip(parameter_names, parameters)])))
+        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))
     return likelihood
 
 
@@ -288,14 +333,14 @@ def solve(observed_spectra, configuration, initial_guess=None):
         mean_acceptance_fractions = np.zeros(nsteps)
         
         # Initialise priors and set up arguments for optimization
-        parameter_names, p0 = initialise_priors(model, configuration, observed_spectra,
-            nwalkers=nwalkers)
+        parameter_names, p0 = initialise_priors(model, configuration, observed_spectra)
+
         logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(
             nwalkers, ", ".join(parameter_names)))
 
         # Initialise the sampler
         num_parameters = len(parameter_names)
-        sampler = emcee.EnsembleSampler(nwalkers, num_parameters, ln_likelihood,
+        sampler = emcee.EnsembleSampler(nwalkers, num_parameters, log_likelihood,
             args=(parameter_names, model, configuration, observed_spectra),
             threads=threads)
 
@@ -304,6 +349,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
         for i, sampler_state in enumerate(sampler.sample(
             p0, lnprob0=lnprob0, rstate0=rstate0, iterations=nsteps)):
 
+            plt.close('all')
             fraction_complete = (i + 1)/nsteps
             mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
 
