@@ -62,7 +62,7 @@ def verify(configuration, pedantic=False):
     verify_models(configuration)
 
     # Check the normalisation
-    normalisation_priors = verify_normalisation(configuration, pedantic)
+    verify_normalisation(configuration, pedantic)
 
     # Check the smoothing
     smoothing_priors = verify_smoothing(configuration, pedantic)
@@ -71,7 +71,7 @@ def verify(configuration, pedantic=False):
     doppler_priors = verify_doppler(configuration, pedantic)
 
     # Establish all of the priors    
-    priors_to_expect = doppler_priors + smoothing_priors + normalisation_priors
+    priors_to_expect = doppler_priors + smoothing_priors
 
     # Verify that we have priors established for all the priors
     # we expect, and the stellar parameters we plan to solve for
@@ -117,35 +117,17 @@ def verify_doppler(configuration, pedantic=False):
     """
 
     apertures = get_aperture_names(configuration)
-    check_aperture_names(configuration, 'doppler_correct')
+    check_aperture_names(configuration, 'doppler_shift')
 
     priors_to_expect = []
     for aperture in apertures:
-        if 'perform' not in configuration['doppler_correct'][aperture]:
-            raise KeyError("configuration setting 'doppler_correct.{aperture}.perform' not found"
+        if 'perform' not in configuration['doppler_shift'][aperture]:
+            raise KeyError("configuration setting 'doppler_shift.{aperture}.perform' not found"
                 .format(aperture=aperture))
 
         # Radial velocity as a prior?
-        if configuration['doppler_correct'][aperture]['perform']:
-            priors_to_expect.append('doppler_correct.{aperture}.perform'.format(aperture=aperture))
-
-        # Should we be measuring radial velocity?
-        if 'measure' in configuration['doppler_correct'][aperture] \
-        and configuration['doppler_correct'][aperture]['measure']:
-
-            # Check the template and wavelength range
-            if 'template' not in configuration['doppler_correct'][aperture]:
-                raise KeyError("configuration setting 'doppler_correct.{aperture}.template' not found"
-                    ", and is needed because doppler_correct.{aperture}.measure is true".format(aperture=aperture))
-
-            if 'wavelength_region' not in configuration['doppler_correct'][aperture]:
-                raise KeyError("configuration setting 'doppler_correct.{aperture}.wavelength_region' not found"
-                    ", and is needed becasue doppler_correct.{aperture}.measure is true".format(aperture=aperture))
-
-            # Check the template filename exists
-            if not os.path.exists(configuration['doppler_correct'][aperture]['template']):
-                raise IOError("doppler correct template filename for {aperture} arm does not exist: {filename}"
-                    .format(aperture=aperture, filename=configuration['doppler_correct'][aperture]['template']))
+        if configuration['doppler_shift'][aperture]['perform']:
+            priors_to_expect.append('doppler_shift.{aperture}'.format(aperture=aperture))
 
     return priors_to_expect
 
@@ -165,6 +147,9 @@ def verify_priors(configuration, expected_priors, pedantic=False):
     # Create a toy model. What parameters (from the model file names) are we solving for?
     toy_model = models.Model(configuration)
     parameters_to_solve = toy_model.colnames
+
+    if "jitter" in parameters_to_solve:
+        raise ValueError("'jitter' is a reserved parameter name and cannot be used")
 
     # Do priors for these values exist?
     for parameter in parameters_to_solve:
@@ -248,11 +233,8 @@ def verify_normalisation(configuration, pedantic=False):
 
     apertures = get_aperture_names(configuration)
     check_aperture_names(configuration, 'normalise_observed')
-    
-    required_aperture_normalisation_settings = ('order', 'knot_spacing', 'upper_clip', 'lower_clip')
 
     # Verify the settings for each aperture.
-    priors_to_expect = []
     for aperture in apertures:
 
         aperture_normalisation_settings = configuration['normalise_observed'][aperture]
@@ -262,36 +244,24 @@ def verify_normalisation(configuration, pedantic=False):
             raise KeyError("configuration setting 'normalise_observed.{aperture}.perform' not found"
                 .format(aperture=aperture))
 
-        else:
-            for required_setting in required_aperture_normalisation_settings:
-                if required_setting not in aperture_normalisation_settings:
-                    raise KeyError("configuration setting 'normalise_observed.{aperture}.{required_setting}' not found"
-                        .format(aperture=aperture, required_setting=required_setting))
+        # If perform is false then we don't need order
+        if aperture_normalisation_settings["perform"]:
 
-        # Check setting value types
-        for key, value in aperture_normalisation_settings.iteritems():
-            if key == 'perform' and not value:
-                # No normalisation necessary for this aperture
-                break
+            if "order" not in aperture_normalisation_settings:
+                raise KeyError("configuration setting 'normalise_observed.{aperture}.{required_setting}' not found"
+                    .format(aperture=aperture, required_setting=required_setting))
 
-            # Is this going to be a free parameter?
-            if value == 'free':
-                priors_to_expect.append('normalise_observed.{aperture}.{key}'
-                    .format(aperture=aperture, key=key))
-                continue
+            elif not isinstance(aperture_normalisation_settings["order"], (float, int)):
+                raise TypeError("configuration setting 'normalise_observed.{aperture}.order'"
+                    " is expected to be an integer-like object".format(aperture=aperture))
 
-            if key in ('order', ):
-                if not isinstance(value, (int, )):
-                    raise TypeError("configuration setting 'normalise_observed.{aperture}.{key}' is expected "
-                        "to be an integer-type".format(aperture=aperture, key=key))
+            #num_coefficients_expected = int(aperture_normalisation_settings["order"])
+            #priors_to_expect.extend(
+            #    ["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=i) \
+            #        for i in xrange(num_coefficients_expected + 1)])
 
-            elif key in ('knot_spacing', 'lower_clip', 'upper_clip'):
-                if not isinstance(value, (int, float, )):
-                    raise TypeError("configuration setting 'normalise_observed.{aperture}.{key}' is expected "
-                        "to be a float-type".format(aperture=aperture, key=key))
 
-    return priors_to_expect
-
+    return True 
 
 def get_aperture_names(configuration):
     """Returns the aperture names specified in the configuration."""
