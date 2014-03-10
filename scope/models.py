@@ -72,6 +72,13 @@ class Model(object):
         first_beam = configuration['models']['flux_filenames'].keys()[0]
         self.grid_points = np.array(grid_points[first_beam])
 
+        self.grid_boundaries = {}
+        for i, colname in enumerate(self.colnames):
+            self.grid_boundaries[colname] = np.array([
+                np.min(self.grid_points[:, i]),
+                np.max(self.grid_points[:, i])
+                ])
+
         #dtype = np.dtype({'names': tuple(self.colnames), 'formats': tuple(['<f8'] * len(self.colnames))})
         #self.grid_points = np.array(self.grid_points, dtype=dtype)
         #self.flux_cache = {}

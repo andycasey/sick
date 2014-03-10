@@ -189,6 +189,32 @@ def initialise_priors(model, configuration, observations):
     return (parameter_names, walker_priors)
 
 
+def log_prior(theta, parameter_names, model):
+    
+    parameters = dict(zip(parameter_names, theta))
+
+    for parameter, value in parameters.iteritems():
+        # Check doppler shifts. Anything more than 500 km/s is considered implausible
+        #if parameter.startswith("doppler_shift.") and abs(value) > 500:
+        #    return -np.inf
+
+        # Check smoothing values. Any negative value is considered unrealistic
+        if parameter.startswith("smooth_model_flux.") and 0 > value:
+            return -np.inf
+
+        # Check for jitter
+        if parameter == "jitter" and not (1 > value > 0):
+            return -np.inf
+
+        # Check if point is within the grid boundaries?
+        if parameter in model.grid_boundaries:
+            min_value, max_value = model.grid_boundaries[parameter]
+            if value > max_value or min_value > value:
+                return -np.inf
+
+    return 0
+
+
 def log_likelihood(theta, parameter_names, model, configuration,
     observations, callback=None):
     """Calculates the likelihood that a given set of observations
@@ -205,6 +231,10 @@ def log_likelihood(theta, parameter_names, model, configuration,
         A callback to apply after completing the comparison.
     """
 
+    blob = list(theta)
+    if not np.isfinite(log_prior(theta, parameter_names, model)):
+        return (-np.inf, blob + [-np.inf])
+
     parameters = dict(zip(parameter_names, theta))
 
     #if not (1 > parameters["jitter"] > 0):
@@ -213,25 +243,12 @@ def log_likelihood(theta, parameter_names, model, configuration,
     # Prepare the observed spectra: radial velocity shift? normalisation?
     observed_spectra = model.observed_spectra(observations, **parameters)
     if observed_spectra is None:
-        return -np.inf
+        return (-np.inf, blob + [-np.inf])
 
     # Prepare the model spectra: smoothing? re-sample to observed dispersion?
     model_spectra = model.model_spectra(observations=observed_spectra, **parameters)
     if model_spectra is None:
-        return -np.inf
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.plot(model_spectra["blue"].disp/10., model_spectra["blue"].flux, 'b')
-    ax.plot(observed_spectra[0].disp/10., observed_spectra[0].flux, 'k')
-    ax.set_xlim(450, 530)
-    ax.set_ylim(0, 1)
-    ax.set_xlabel("Wavelength [nm]")
-    ax.set_ylabel("Normalised Flux")
-
-    num = len(glob("progress*.png"))
-    plt.savefig("progress-{0}.png".format(num))
-    plt.close(fig)
+        return (-np.inf, blob + [-np.inf])
 
     # Any masks?
     masks = model.masks(model_spectra)
@@ -259,7 +276,7 @@ def log_likelihood(theta, parameter_names, model, configuration,
         # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
         useful_pixels = positive_finite_chisq_indices * positive_finite_flux_indices
         if sum(useful_pixels) == 0:
-            return -np.inf
+            return (-np.inf, blob + [-np.inf])
 
         differences[aperture] = difference[useful_pixels]
 
@@ -274,7 +291,27 @@ def log_likelihood(theta, parameter_names, model, configuration,
 
     logger.info("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))
-    return likelihood
+    
+
+    fig = plt.figure(figsize=(10, 4))
+    ax = fig.add_subplot(111)
+    ax.plot(model_spectra["blue"].disp/10., model_spectra["blue"].flux, 'b', zorder=10)
+    
+    ax.errorbar(observed_spectra[0].disp/10., observed_spectra[0].flux, fmt=None, ecolor="#666666",
+        yerr=observed_spectra[0].uncertainty, zorder=-1)
+    ax.plot(observed_spectra[0].disp/10., observed_spectra[0].flux, 'k', zorder=100)
+
+    ax.set_xlim(450, 530)
+    ax.set_ylim(0.6, 1.1)
+
+    ax.set_xlabel("Wavelength [nm]")
+    ax.set_ylabel("Normalised Flux")
+
+    num = len(glob("progress*.png"))
+    plt.savefig("progress-{0}.png".format(num))
+    plt.close(fig)
+
+    return (likelihood, blob + [likelihood])
 
 
 def solve(observed_spectra, configuration, initial_guess=None):
@@ -365,13 +402,12 @@ def solve(observed_spectra, configuration, initial_guess=None):
         logging.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fractions[-1]))
 
         # Blobs contain all the sampled parameters and likelihoods        
-        sampled = np.array(sampler.blobs)
+        sampled = np.array(sampler.blobs).reshape((-1, num_parameters + 1))
         sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
 
         # Get the maximum estimate
         most_probable_index = np.argmax(sampled_log_likelihood)
         
-
         if not np.isfinite(sampled_log_likelihood[most_probable_index]):
             # TODO should we raise ModelError? or something?
             # You should probably check your configuration file for something peculiar
@@ -379,10 +415,8 @@ def solve(observed_spectra, configuration, initial_guess=None):
         
         # Calculate Maximum Likelihood values and their uncertainties
         
-        # Send back the prepared observed spectra and prepared model spectra
-        return (posteriors, sampler, prepared_observed_spectra, prepared_model_spectra, masks)
+        return (posteriors, sampler, mean_acceptance_fractions) 
+
             
     else:
         raise NotImplementedError("well well well, how did we find ourselves here, Mr Bond?")
-
-    return None
