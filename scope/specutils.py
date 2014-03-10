@@ -727,26 +727,15 @@ def load_aaomega_multispec(filename, fill_value=-1):
             headers[header] = image[2].data[index][header]
         
         flux = image[0].data[index]
-        uncertainty = (1.0/flux)**2
+        uncertainty = 1.0/np.sqrt(flux)
         
         # Check if it's worthwhile having these
         if all(~np.isfinite(flux)):
             flux = np.array([fill_value] * len(flux))
 
-        # Remove off the edge nan's                
-        #left_side = list(np.isfinite(flux)).index(True)
-        #right_side = -list(np.isfinite(flux[::-1])).index(True)
+        # Negative fluxes are considered unphysical
+        flux[0 >= flux] = np.nan
 
-        #dispersion_copy = dispersion.copy()
-        #dispersion_copy = dispersion_copy[left_side:right_side]
-        #flux = flux[left_side:right_side]
-        
-        #if len(dispersion_copy) == 0: continue
-
-        # Now fill any remaining values
-        #remaining_nans = ~np.isfinite(flux)
-        #flux[remaining_nans] = fill_value
-        
         spectrum = Spectrum1D(dispersion, flux, uncertainty=uncertainty, headers=headers)
         spectra.append(spectrum)
     
