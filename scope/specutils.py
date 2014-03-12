@@ -11,8 +11,8 @@ import logging
 import os
 
 # Third-party
-import pyfits
 import numpy as np
+import pyfits
 
 from scipy import interpolate, ndimage, polyfit, poly1d
 from scipy.optimize import leastsq
@@ -109,10 +109,10 @@ class Spectrum1D(object):
                 #li = a.headers['LTM1_1'] * np.arange(a.headers['NAXIS1']) + a.headers['LTV1']
                 #a.headers['CRVAL1'] + a.headers['CD1_1'] * (li - a.headers['CRPIX1'])
 
-                if np.all([header.has_key(key) for key in ('CDELT1', 'NAXIS1', 'CRVAL1')]):
+                if np.all([key in header.keys() for key in ('CDELT1', 'NAXIS1', 'CRVAL1')]):
                     disp = header['CRVAL1'] + np.arange(header['NAXIS1']) * header['CDELT1']
             
-                if header.has_key('LTV1'):
+                if "LTV1" in header.keys():
                     disp -= header['LTV1'] * header['CDELT1']
 
                 #disp -= header['LTV1'] if header.has_key('LTV1') else 0
@@ -133,7 +133,7 @@ class Spectrum1D(object):
 
                 if len(key) == 0 or len(str(value)) == 0: continue
                 
-                if headers.has_key(key):
+                if key in headers.keys():
                     if not isinstance(headers[key], list):
                         headers[key] = [headers[key]]
                     
