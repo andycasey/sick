@@ -5,9 +5,10 @@
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 __version__ = "0.01"
 
-__all__ = ["config", "models", "specutils", "utils"]
+__all__ = ["config", "Model", "specutils", "utils"]
 
 import logging
 from analyze import solve
+from models import Model
 
 logger = logging.basicConfig(level=logging.INFO)
