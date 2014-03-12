@@ -38,8 +38,8 @@ class Model(object):
         grid_points = {}
         flux_filenames = {}
 
-        # Read the points from filenames
-        for beam in configuration['models']['flux_filenames']:
+        # Read the points from dispersion filenames
+        for beam in configuration['models']['dispersion_filenames']:
             folder = configuration['models']['flux_filenames'][beam]['folder']
             re_match = configuration['models']['flux_filenames'][beam]['re_match']
 
@@ -69,7 +69,7 @@ class Model(object):
             grid_points[beam] = points
             flux_filenames[beam] = matched_filenames
 
-        first_beam = configuration['models']['flux_filenames'].keys()[0]
+        first_beam = configuration['models']['dispersion_filenames'].keys()[0]
         self.grid_points = np.array(grid_points[first_beam])
 
         self.grid_boundaries = {}
@@ -187,12 +187,12 @@ class Model(object):
             The point of interest.
         """
 
-        index = np.where(np.all(np.equal(self.grid_points - point, np.zeros(len(point))), 1))[0]
+        index = np.all(self.grid_points == point, axis=-1)
 
-        if len(index) > 0:
-            return index[0]
-
-        return False
+        if not any(index):
+            return False
+        
+        return np.where(index)[0][0]
 
 
     def interpolate_flux(self, point, beams='all', kind='linear', **kwargs):
@@ -254,8 +254,7 @@ class Model(object):
                     **kwargs).flatten()
 
             except:
-                # Return all nans!
-                continue
+                raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
 
         return interpolated_flux
 
@@ -346,9 +345,14 @@ class Model(object):
             ", ".join(["{0} = {1:.2f}".format(parameter, value) \
                 for parameter, value in zip(self.colnames, grid_point)])))
 
-        if interpolated_flux == {}: return None
+        if interpolated_flux == {}:
+            logging.debug("No beams of interpolated flux found")
+            return None
+
         for aperture, flux in interpolated_flux.iteritems():
-            if np.all(~np.isfinite(flux)): return None
+            if np.all(~np.isfinite(flux)):
+                logging.debug("{0} beam returned all non-finite values for interpolated flux".format(aperture))
+                return None
 
         # Create spectra
         model_spectra = {}
@@ -416,11 +420,14 @@ class Model(object):
                 continuum = np.polyval(coefficients, modified_spectrum.disp)
                 modified_spectrum.flux /= continuum
 
+                if np.all(modified_spectrum.flux < 0):
+                    return None
+
             # Any doppler shift to perform?
             if self.configuration["doppler_shift"][aperture]["perform"]:
 
                 velocity = kwargs["doppler_shift.{0}".format(aperture)]
-                modified_spectrum.doppler_shift(velocity)
+                modified_spectrum = modified_spectrum.doppler_shift(velocity)
 
             modified_spectra.append(modified_spectrum)
 
@@ -529,5 +536,11 @@ def load_model_data(filename, **kwargs):
     return data
 
 
+def cache_model_data(filename, new_filename=None):
+    """Creates a cached copy of the data in `filename` and
+    saves to a new filename. If `new_filename` is None (default)
+    then the new filename is just the original filename with a .cached extension"""
 
-        
+    if new_filename is None:
+        new_filename = ".".join(filename.split(".")[:-1]) + ".cached"
+

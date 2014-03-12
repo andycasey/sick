@@ -14,16 +14,12 @@ from random import choice
 
 # Third-party
 import numpy as np
+import yaml
 
 # Module specific
 import models, utils
 
-# Is YAML available?
-logger = logging.getLogger(__name__)
-try:
-    import yaml
-except ImportError:
-    logger.warn("YAML module not loaded. Only JSON configuration files can be parsed.")
+
 
 def load(configuration_filename):
     """Loads a configuration filename (either YAML or JSON)
