@@ -11,11 +11,13 @@ import logging
 import os
 import re
 from glob import glob
+import multiprocessing
 
 # Third-party
 import numpy as np
 import pyfits
 from scipy import interpolate, ndimage
+import yaml
 
 # Module
 from utils import human_readable_digit
@@ -24,24 +26,88 @@ from specutils import Spectrum1D
 
 __all__ = ['Model', 'load_model_data']
 
+
+def load_model_data(filename, **kwargs):
+    """Loads dispersion/flux values from a given filename. This can be either a 1-column ASCII
+    file, or a single extension FITS file.
+
+    Inputs
+    ------
+    filename : `str`
+        The filename to load the values from.
+    """
+
+    # Check the open mode
+    if filename.endswith('.fits'):
+        with pyfits.open(filename, **kwargs) as image:
+            data = image[0].data
+
+    elif filename.endswith('.cached'):
+
+        # Put in our preferred keyword arguments
+        kwargs.setdefault('mode', 'r')
+        kwargs.setdefault('dtype', np.float32)
+
+        # Wrapping the data as a new array so that it is pickleable across
+        # multiprocessing without the need to share the memmap. See:
+        # http://stackoverflow.com/questions/15986133/why-does-a-memmap-need-a-filename-when-i-try-to-reshape-a-numpy-array
+        data = np.array(np.memmap(filename, **kwargs))
+
+    else:
+        # Assume it must be ASCII.
+        data = np.loadtxt(filename, **kwargs)
+
+    return data
+
+
+def convolve_model_data(filename, sigma):
+
+    # Get the new filename
+    basename, extension = os.path.splitext(filename)
+    if extension == "cached":
+            raise ValueError("previously cached models cannot be re-convolved")
+
+    # Load and smooth the data
+    data = load_model_data(filename)
+    new_filename = basename + ".cached"
+
+    # Smooth the data and save it to disk
+    with np.memmap(new_filename, dtype="float32", mode="w+", shape=data.shape) as fp:
+        fp[:] = ndimage.gaussian_filter1d(data, sigma)
+    return new_filename
+
+
+def mapper(*x):
+    print("Mapping", x)
+    return apply(x[0], x[1:])
+
+
 class Model(object):
     """ Model class for SCOPE """
 
-    def __init__(self, configuration, internal_cache=False):
-        self.configuration = configuration
+    def __init__(self, filename):
+
+        if not os.path.exists(filename):
+            raise IOError("no model filename '{0}' exists".format(filename))
+
+        parse_filename = json.load if filename.endswith(".json") else yaml.load
+        
+        # Load the model filename
+        with open(filename, "r") as fp:
+            self.configuration = parse_filename(fp)
 
         # Dispersions
         self.dispersion = {}
-        for beam, dispersion_filename in configuration['models']['dispersion_filenames'].iteritems():
+        for beam, dispersion_filename in self.configuration['models']['dispersion_filenames'].iteritems():
             self.dispersion[beam] = load_model_data(dispersion_filename)
 
         grid_points = {}
         flux_filenames = {}
 
         # Read the points from dispersion filenames
-        for beam in configuration['models']['dispersion_filenames']:
-            folder = configuration['models']['flux_filenames'][beam]['folder']
-            re_match = configuration['models']['flux_filenames'][beam]['re_match']
+        for beam in self.configuration['models']['dispersion_filenames']:
+            folder = self.configuration['models']['flux_filenames'][beam]['folder']
+            re_match = self.configuration['models']['flux_filenames'][beam]['re_match']
 
             all_filenames = glob(os.path.join(folder, '*'))
 
@@ -69,7 +135,7 @@ class Model(object):
             grid_points[beam] = points
             flux_filenames[beam] = matched_filenames
 
-        first_beam = configuration['models']['dispersion_filenames'].keys()[0]
+        first_beam = self.configuration['models']['dispersion_filenames'].keys()[0]
         self.grid_points = np.array(grid_points[first_beam])
 
         self.grid_boundaries = {}
@@ -79,30 +145,16 @@ class Model(object):
                 np.max(self.grid_points[:, i])
                 ])
 
-        #dtype = np.dtype({'names': tuple(self.colnames), 'formats': tuple(['<f8'] * len(self.colnames))})
-        #self.grid_points = np.array(self.grid_points, dtype=dtype)
-        #self.flux_cache = {}
-
         # If it's just the one beam, it's easy!        
-        if len(configuration['models']['dispersion_filenames'].keys()) == 1:
+        if len(self.configuration['models']['dispersion_filenames'].keys()) == 1:
             self.flux_filenames = flux_filenames[first_beam]
             return None
-        #    if internal_cache:
-        #        self.flux_cache[first_beam] = np.zeros((len(self.flux_filenames), 
-        #                len(load_model_data(self.flux_filenames[0]))))
-        #        self.flux_cache[first_beam][:] = np.nan
-
+        
         else:
             self.flux_filenames = {first_beam: flux_filenames[first_beam]}
 
-        #    if internal_cache:
-        #        self.flux_cache[first_beam] = np.zeros((len(self.flux_filenames[first_beam]), 
-        #                len(load_model_data(self.flux_filenames[first_beam][0]))))
-        #        self.flux_cache[first_beam][:] = np.nan
-            
-
         # Put all points and filenames on the one scale
-        for beam in configuration['models']['dispersion_filenames'].keys()[1:]:
+        for beam in self.configuration['models']['dispersion_filenames'].keys()[1:]:
             
             points = grid_points[beam]
             if len(points) != len(self.grid_points):
@@ -119,11 +171,6 @@ class Model(object):
 
             self.flux_filenames[beam] = [flux_filenames[beam][index] for index in sort_indices]
 
-        #    if internal_cache:
-        #        self.flux_cache[beam] = np.zeros((len(self.flux_filenames[beam]), 
-        #            len(load_model_data(self.flux_filenames[beam][0]))))
-        #        self.flux_cache[beam][:] = np.nan
-
         return None
 
 
@@ -136,6 +183,42 @@ class Model(object):
             module=self.__module__, num_models=num_models, num_apertures=num_apertures, apertures=', '.join(self.dispersion.keys()),
             num_pixels=human_readable_digit(num_pixels), num_parameters=self.grid_points.shape[1],
             parameters=', '.join(self.colnames))
+
+
+    def pre_convolve_models(self, kernel, threads=None, **kwargs):
+        """ Pre-convolve the model fluxes and save their convolved flux to memory-mapped
+        files for faster read access. 
+
+        """
+
+        threads = 1 if threads is None else threads
+        profile_sigma = lambda k, d: (k / (2 * (2*np.log(2))**0.5))/np.mean(np.diff(d))
+
+        pool = multiprocessing.Pool(threads)
+
+        if isinstance(self.flux_filenames, dict):
+            for aperture in self.flux_filenames.keys():
+                if aperture not in kernel.keys():
+                    pool.close()
+                    raise ValueError("no kernel provided for '{0}' aperture".format(aperture))
+
+            # For each beam, load all the spectra, convolve it, get a new filename, write cached file to disk
+            for beam, flux_filenames in self.flux_filenames.iteritems():
+                
+                sigma = profile_sigma(kernel[beam], self.dispersion[beam])
+                for flux_filename in flux_filenames:
+                    pool.apply_async(mapper, args=(convolve_model_data, flux_filename, sigma))
+
+        else:
+
+            sigma = profile_sigma(kernel[beam], self.dispersion)
+            for flux_filename in self.flux_filenames:
+                pool.apply_async(mapper, args=(convolve_model_data, flux_filename, sigma))
+
+        pool.close()
+        pool.join()
+
+        return True
 
 
     def get_nearest_neighbours(self, point, n=1):
@@ -283,10 +366,10 @@ class Model(object):
                 model_wlmax = np.max(model_dispersion)
 
                 # Is there overlap?
-                if (model_wlmin < observed_wlmin and observed_wlmax < model_wlmax) \
-                or (observed_wlmin < model_wlmin and model_wlmax < observed_wlmax) \
-                or (model_wlmin < observed_wlmin and (observed_wlmin < model_wlmax and model_wlmax < observed_wlmax)) \
-                or ((observed_wlmin < model_wlmin and model_wlmin < observed_wlmax) and observed_wlmax < model_wlmax):
+                if (model_wlmin <= observed_wlmin and observed_wlmax <= model_wlmax) \
+                or (observed_wlmin <= model_wlmin and model_wlmax <= observed_wlmax) \
+                or (model_wlmin <= observed_wlmin and (observed_wlmin <= model_wlmax and model_wlmax <= observed_wlmax)) \
+                or ((observed_wlmin <= model_wlmin and model_wlmin <= observed_wlmax) and observed_wlmax <= model_wlmax):
                     apertures_found.append(model_aperture)
 
             if len(apertures_found) == 0:
@@ -498,49 +581,4 @@ class Model(object):
                         {"disp": disp, "np": np, "flux": flux})
 
         return weights
-
-
-
-def load_model_data(filename, **kwargs):
-    """Loads dispersion/flux values from a given filename. This can be either a 1-column ASCII
-    file, or a single extension FITS file.
-
-    Inputs
-    ------
-    filename : `str`
-        The filename to load the values from.
-    """
-
-    # Check the open mode
-    if filename.endswith('.fits'):
-        with pyfits.open(filename, **kwargs) as image:
-            data = image[0].data
-
-    elif filename.endswith('.cached'):
-
-        # Put in our preferred keyword arguments
-        kwargs.setdefault('mode', 'r')
-        kwargs.setdefault('dtype', np.float32)
-
-        data = np.memmap(filename, **kwargs)
-        if kwargs["mode"] == "r":
-            # Wrapping the data as a new array so that it is pickleable across
-            # multiprocessing without the need to share the memmap. See:
-            # http://stackoverflow.com/questions/15986133/why-does-a-memmap-need-a-filename-when-i-try-to-reshape-a-numpy-array
-            data = np.array(data)
-
-    else:
-        # Assume it must be ASCII.
-        data = np.loadtxt(filename, **kwargs)
-
-    return data
-
-
-def cache_model_data(filename, new_filename=None):
-    """Creates a cached copy of the data in `filename` and
-    saves to a new filename. If `new_filename` is None (default)
-    then the new filename is just the original filename with a .cached extension"""
-
-    if new_filename is None:
-        new_filename = ".".join(filename.split(".")[:-1]) + ".cached"
 

@@ -28,7 +28,7 @@ import numpy.random as random
 import scipy.optimize
 
 # Module
-import config, models, utils, specutils
+import models, utils, specutils
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +67,15 @@ def dimensions(configuration):
 
 
 
-def initialise_priors(model, configuration, observations):
+def initialise_priors(model, observations):
     """ Initialise the priors (or initial conditions) for the analysis """
 
     walker_priors = []
-    parameter_names = dimensions(configuration)
+    parameter_names = dimensions(model.configuration)
     initial_normalisation_coefficients = {}
     initial_normalisation_variances = {}
 
-    nwalkers = configuration["solver"].get("nwalkers", 1)
+    nwalkers = model.configuration["solver"].get("nwalkers", 1)
 
     for i in xrange(nwalkers):
 
@@ -94,14 +94,14 @@ def initialise_priors(model, configuration, observations):
 
                 if aperture not in initial_normalisation_coefficients:
                     index = model._mapped_apertures.index(aperture)
-                    order = configuration["normalise_observed"][aperture]["order"]
+                    order = model.configuration["normalise_observed"][aperture]["order"]
 
                     spectrum = observations[index]
                     
                     # Get the full range of spectra that will be normalised
-                    if "masks" in configuration and aperture in configuration["masks"]:
+                    if "masks" in model.configuration and aperture in model.configuration["masks"]:
                         
-                        ranges = np.array(configuration["masks"][aperture])
+                        ranges = np.array(model.configuration["masks"][aperture])
                         min_range, max_range = np.min(ranges), np.max(ranges)
                         range_indices = np.searchsorted(spectrum.disp, [min_range, max_range])
 
@@ -158,7 +158,7 @@ def initialise_priors(model, configuration, observations):
                 continue
 
             # Explicit priors
-            prior_value = configuration["priors"][parameter_name]
+            prior_value = model.configuration["priors"][parameter_name]
             try:
                 prior_value = float(prior_value)
 
@@ -291,8 +291,7 @@ def log_prior(theta, parameter_names, model):
 
     return 0
 
-def log_likelihood(theta, parameter_names, model, configuration,
-    observations, callback=None):
+def log_likelihood(theta, parameter_names, model, observations, callback=None):
     """Calculates the likelihood that a given set of observations
     and parameters match the input models.
 
@@ -422,7 +421,7 @@ def log_likelihood(theta, parameter_names, model, configuration,
     return (likelihood, blob + [likelihood])
 
 
-def solve(observed_spectra, configuration, initial_guess=None):
+def solve(observed_spectra, model_filename, initial_guess=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
 
@@ -431,14 +430,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
     observed_spectra : list of `Spectrum1D` objects
         Non-overlapping spectral beams of a single star.
 
-    configuration : dict
-        The configuration settings for this analysis.
-
     """
-
-
-    if isinstance(configuration, str) and os.path.exists(configuration):
-        configuration = config.load(configuration)
 
     # Check observed arms do not overlap
     observed_dispersions = [spectrum.disp for spectrum in observed_spectra]
@@ -448,7 +440,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
             .format(wavelength=overlap))
 
     # Load our model
-    model = models.Model(configuration)
+    model = models.Model(model_filename)
 
     # Get the aperture mapping from observed spectra to model spectra
     # For example, which index in our list of spectra corresponds to
@@ -457,8 +449,9 @@ def solve(observed_spectra, configuration, initial_guess=None):
 
     
     # Make fmin_powell the default
-    if  configuration["solver"].get("method", "fmin_powell") == "fmin_powell":
+    if   model.configuration["solver"].get("method", "fmin_powell") == "fmin_powell":
 
+        raise NotImplementedError
         parameter_names, p0 = initialise_priors(model, configuration, observed_spectra)
         parameters_final = scipy.optimize.fmin_powell(chi_sq, p0,
             args=(parameter_names, observed_spectra, model), xtol=0.001, ftol=0.001)
@@ -466,19 +459,19 @@ def solve(observed_spectra, configuration, initial_guess=None):
 
         return parameters_final
 
-    elif configuration["solver"]["method"] == "emcee":
+    elif model.configuration["solver"]["method"] == "emcee":
 
         # Ensure we have the number of walkers and steps specified in the configuration
-        nwalkers, nsteps = configuration["solver"]["nwalkers"], \
-            configuration["solver"]["burn"] + configuration["solver"]["sample"]
+        nwalkers, nsteps = model.configuration["solver"]["nwalkers"], \
+            model.configuration["solver"]["burn"] + model.configuration["solver"]["sample"]
 
         lnprob0, rstate0 = None, None
-        threads = configuration["solver"].get("threads", 1)
+        threads = model.configuration["solver"].get("threads", 1)
 
         mean_acceptance_fractions = np.zeros(nsteps)
         
         # Initialise priors and set up arguments for optimization
-        parameter_names, p0 = initialise_priors(model, configuration, observed_spectra)
+        parameter_names, p0 = initialise_priors(model, observed_spectra)
 
         logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(
             nwalkers, ", ".join(parameter_names)))
@@ -486,14 +479,14 @@ def solve(observed_spectra, configuration, initial_guess=None):
         # Initialise the sampler
         num_parameters = len(parameter_names)
         sampler = emcee.EnsembleSampler(nwalkers, num_parameters, log_likelihood,
-            args=(parameter_names, model, configuration, observed_spectra),
+            args=(parameter_names, model, observed_spectra),
             threads=threads)
 
         # BURN BABY BURN
         # Sample_data contains all the inputs, and the \chi^2 and L 
         # sampler_state = (pos, lnprob, state[, blobs])
         for i, sampler_state in enumerate(sampler.sample(
-            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=configuration["solver"]["burn"])):
+            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=model.configuration["solver"]["burn"])):
 
             fraction_complete = (i + 1)/nsteps
             mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
@@ -510,7 +503,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
 
         # SAMPLE ALL THE THINGS
         for j, sampler_state in enumerate(sampler.sample(
-            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=configuration["solver"]["sample"])):
+            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=model.configuration["solver"]["sample"])):
 
             fraction_complete = (i + j + 1)/nsteps
             mean_acceptance_fractions[i + j] = np.mean(sampler.acceptance_fraction)
@@ -544,7 +537,7 @@ def solve(observed_spectra, configuration, initial_guess=None):
             map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), zip(*np.percentile(sampled, [16, 50, 84], axis=0)))):
             posteriors[parameter_name] = (me_value, pos_quantile, neg_quantile)
 
-        return (posteriors, sampler, model, configuration, mean_acceptance_fractions) 
+        return (posteriors, sampler, model, mean_acceptance_fractions) 
 
             
     else:
