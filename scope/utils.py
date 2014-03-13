@@ -8,7 +8,44 @@ __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 import numpy as np
 
-__all__ = ["human_readable_digit", "find_spectral_overlap"]
+__all__ = ["human_readable_digit", "find_spectral_overlap", "latexify"]
+
+
+def latexify(labels, overwrite_common_labels=None):
+
+    common_labels = {
+        "teff": "$T_{eff}$ [K]",
+        "feh": "[Fe/H]",
+        "logg": "$\log{g}$",
+        "jitter": "$\delta$"
+    }
+
+    if overwrite_common_labels is not None:
+        common_labels.update(overwrite_common_labels)
+
+    latex_labels = []
+    for label in labels:
+
+        if label in common_labels.keys():
+            latex_labels.append(common_labels[label])
+          
+        elif label.startswith("doppler_shift."):
+            aperture = label.split(".")[1]
+            latex_labels.append("$V_{{{0}}}$ [km/s$]".format(aperture))
+
+        elif label.startswith("smooth_model_flux."):
+            aperture = label.split(".")[1]
+            latex_labels.append("$\sigma_{{{0}}} [$\AA$]".format(aperture))
+
+        elif label.startswith("normalise_observed."):
+            aperture, coefficient = label.split(".")[1:]
+            latex_labels.append("${0}_{1}$".format(aperture[0], coefficient[1:]))
+
+        else:
+            latex_labels.append(label)
+
+    return latex_labels
+
 
 
 def human_readable_digit(number):
