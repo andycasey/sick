@@ -45,7 +45,7 @@ def load_model_data(filename, **kwargs):
     elif filename.endswith('.cached'):
 
         # Put in our preferred keyword arguments
-        kwargs.setdefault('mode', 'r')
+        kwargs.setdefault('mode', 'c')
         kwargs.setdefault('dtype', np.float32)
 
         # Wrapping the data as a new array so that it is pickleable across
@@ -60,7 +60,7 @@ def load_model_data(filename, **kwargs):
     return data
 
 
-def convolve_model_data(filename, sigma):
+def cache_model_point(filename, sigma=None, indices=None):
 
     # Get the new filename
     basename, extension = os.path.splitext(filename)
@@ -71,14 +71,22 @@ def convolve_model_data(filename, sigma):
     data = load_model_data(filename)
     new_filename = basename + ".cached"
 
-    # Smooth the data and save it to disk
-    with np.memmap(new_filename, dtype="float32", mode="w+", shape=data.shape) as fp:
-        fp[:] = ndimage.gaussian_filter1d(data, sigma)
+    if sigma is not None:
+        data = ndimage.gaussian_filter1d(data, sigma)
+
+    if indices is not None:
+        data = data[indices[0]:indices[1]]
+
+    # Save it to disk
+    fp = np.memmap(new_filename, dtype="float32", mode="w+",
+        shape=data.shape)
+    fp[:] = data[:]
+    del fp
+
     return new_filename
 
 
 def mapper(*x):
-    print("Mapping", x)
     return apply(x[0], x[1:])
 
 
@@ -90,11 +98,11 @@ class Model(object):
         if not os.path.exists(filename):
             raise IOError("no model filename '{0}' exists".format(filename))
 
-        parse_filename = json.load if filename.endswith(".json") else yaml.load
+        parse = json.load if filename.endswith(".json") else yaml.load
         
         # Load the model filename
         with open(filename, "r") as fp:
-            self.configuration = parse_filename(fp)
+            self.configuration = parse(fp)
 
         # Dispersions
         self.dispersion = {}
@@ -131,6 +139,12 @@ class Model(object):
 
                     points.append(map(float, match.groups()))
                     matched_filenames.append(filename)
+
+            # Check the first model flux to ensure it's the same length as the dispersion array
+            first_point_flux = load_model_data(matched_filenames[0])
+            if len(first_point_flux) != len(self.dispersion[beam]):
+                raise ValueError("number of dispersion ({0}) and flux ({1}) points in {2} aperture do not match".format(
+                    len(self.dispersion[beam]), len(first_point_flux), beam))
 
             grid_points[beam] = points
             flux_filenames[beam] = matched_filenames
@@ -185,7 +199,239 @@ class Model(object):
             parameters=', '.join(self.colnames))
 
 
-    def pre_convolve_models(self, kernel, threads=None, **kwargs):
+    @property
+    def apertures(self):
+        return self.configuration['models']['dispersion_filenames'].keys()
+
+    def validate(self):
+
+        self._validate_models()
+        self._validate_solver()
+        self._validate_normalisation()
+        self._validate_solver()
+        self._validate_doppler()
+        self._validate_masks()
+        self._validate_weights()
+    
+        return True
+
+
+    def _check_apertures(self, key):
+
+        for aperture in self.apertures:
+            if aperture not in self.configuration[key]:
+                raise KeyError("no aperture '{aperture}' listed in {key}, but"
+                " it's specified in the models".format(aperture=aperture, key=key))
+        return True
+
+
+    def _validate_normalisation(self):
+
+        self._check_apertures("normalisation")
+
+        # Verify the settings for each aperture.
+        for aperture in self.apertures:
+
+            settings = configuration['normalise_observed'][aperture]
+
+            # Check that settings exist
+            if 'perform' not in settings:
+                raise KeyError("configuration setting 'normalise_observed.{aperture}.perform' not found".format(aperture=aperture))
+
+            # If perform is false then we don't need order
+            if settings["perform"]:
+                if "order" not in settings:
+                    raise KeyError("configuration setting 'normalise_observed.{aperture}.{required_setting}' not found".format(
+                        aperture=aperture, required_setting=required_setting))
+
+                elif not isinstance(settings["order"], (float, int)):
+                    raise TypeError("configuration setting 'normalise_observed.{aperture}.order'"
+                        " is expected to be an integer-like object".format(aperture=aperture))
+
+        return True
+
+
+    def _validate_solver(self):
+
+        if "solver" not in self.configuration.keys():
+            raise KeyError("no solver information provided in configuration")
+
+        solver = self.configuration["solver"]
+        available_methods = ("fmin_powell", "emcee")
+
+        if solver["method"] not in available_methods:
+            raise ValueError("solver method '{0}' is unsupported. Available methods are: {1}".format(
+                solver["method"], ", ".join(available_methods)))
+
+        if "threads" in solver and not isinstance(solver["threads"], (float, int)):
+            raise TypeError("solver.threads must be an integer-like type")
+
+        return True
+
+
+    def _validate_doppler(self):
+
+        self._check_apertures("doppler_shift")
+
+        priors_to_expect = []
+        for aperture in self.apertures:
+            if 'perform' not in self.configuration['doppler_shift'][aperture]:
+                raise KeyError("configuration setting 'doppler_shift.{aperture}.perform' not found".format(aperture=aperture))
+
+        return True
+
+
+    def _validate_smoothing(self):
+
+        self._check_apertures("smooth_model_flux")
+
+        for aperture in self.apertures:
+
+            settings = self.configuration["smooth_model_flux"][aperture]
+            if "perform" not in settings:
+                raise KeyError("configuration setting 'smooth_model_flux.{0}.perform' not found".format(
+                    aperture))
+
+            for setting, value in settings.iteritems():
+                if setting == "perform" and not value:
+                    break
+                if setting == "kernel" and not isinstance(value, (int, float)):
+                    raise TypeError("configuration setting 'smooth_model_flux.{0}.kernel' is"
+                        " expected to be a float-type".format(aperture))
+        return True
+
+
+    def _validate_models(self):
+
+        if "models" not in self.configuration.keys():
+            raise KeyError("no `models` attribute found in model file")
+
+        settings = self.configuration["models"]
+
+        for aperture in self.apertures:
+            if "." in aperture:
+                raise ValueError("aperture name '{0}' cannot contain a full-stop character".format(aperture))
+
+        required_keys = ("dispersion_filenames", "flux_filenames")
+        for key in required_keys:
+            if key not in settings.keys():
+                raise KeyError("required 'models.{0}' attribute not found in model".format(key))
+
+        # Check for missing keys
+        missing_keys = [x for x in settings["dispersion_filenames"].keys() if x not in settings["flux_filenames"]]
+        if len(missing_keys) > 0:
+            raise KeyError("missing flux filenames for {0} aperture(s)".format(", ".join(missing_keys)))
+
+        # Check dispersion maps of standards don't overlap
+        overlap_wavelength = utils.find_spectral_overlap(self.dispersions.values())
+        if overlap_wavelength is not None:
+            raise ValueError("dispersion maps overlap near {0:.0f}".format(overlap_wavelength))
+
+
+    def _validate_masks(self):
+
+        if "masks" not in self.configuration.keys():
+            return True
+
+        for aperture in self.configuration["masks"].keys():
+            if aperture not in self.apertures: continue
+
+            if not isinstance(self.configuration["masks"][aperture], (tuple, list)):
+                raise TypeError("masks must be a list of regions (e.g., [start, stop])")
+
+            for region in self.configuration["masks"][aperture]:
+                if not isinstance(region, (list, tuple)) or len(region) != 2:
+                    raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
+
+                try:
+                    map(float, region)
+                except TypeError:
+                    raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
+
+        return True
+
+
+    def _validate_weights(self):
+
+        if "weights" not in self.configuration.keys():
+            return True
+
+        for aperture in self.configuration["weights"]:
+            if aperture not in self.apertures: continue
+
+            test_weighting_func = lambda disp, flux: eval(self.configuration["weights"][aperture],
+                {"disp": disp, "flux": flux, "np": np})
+
+            try:
+                test_weighting_func(1, 1)
+                test_weighting_func(np.arange(10), np.ones(10))
+
+            except:
+                raise ValueError("weighting function for {0} aperture is improper".format(aperture))
+
+        return True
+
+
+    @property
+    def apertures(self):
+        """Returns the aperture names specified in the configuration."""
+        return configuration['models']['dispersion_filenames'].keys()
+
+
+    def check_aperture_names(configuration, key):
+        """Checks that all the apertures specified in the models
+        exist in the given sub-config `key`.
+
+        Inputs
+        ------
+        `configuration` : dict
+            A dictionary configuration for SCOPE.
+
+        `key` : str
+            The sub-key to check (e.g. 'normalise_observed')
+        """
+
+        for aperture in self.apertures:
+            if aperture not in configuration[key]:
+                raise KeyError("no aperture '{aperture}' listed in {key}, but"
+                " it's specified in the models".format(aperture=aperture, key=key))
+        return True
+
+
+    @property
+    def dimensions(self):
+        """Returns all dimension names for a given configuration, which can
+        include both implicit and explicit priors."""
+
+        # Get the actual apertures we're going to use
+        useful_apertures = self.configuration["models"]["dispersion_filenames"].keys()
+
+        # Get explicit priors
+        dimensions = []
+        for dimension in self.configuration["priors"].keys():
+            if dimension.startswith("doppler_shift") \
+            or dimension.startswith("smooth_model_flux"):
+                aperture = dimension.split(".")[1]
+                if aperture not in useful_apertures:
+                    continue
+            dimensions.append(dimension)
+
+        # Get implicit normalisation priors
+        for aperture in useful_apertures:     
+            if self.configuration["normalise_observed"][aperture]["perform"]:
+                dimensions.extend(
+                    ["normalise_observed.{0}.a{1}".format(aperture, i) \
+                        for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
+
+        # Append jitter dimension
+        if self.configuration["solver"].get("nwalkers", 1) > 1:
+            dimensions.append("jitter")
+
+        return dimensions
+
+
+
+    def cache(self, kernel, threads=None, **kwargs):
         """ Pre-convolve the model fluxes and save their convolved flux to memory-mapped
         files for faster read access. 
 
@@ -206,14 +452,26 @@ class Model(object):
             for beam, flux_filenames in self.flux_filenames.iteritems():
                 
                 sigma = profile_sigma(kernel[beam], self.dispersion[beam])
+                
+                if beam in self.configuration["masks"]:
+                    min_wl, max_wl = np.min(self.configuration["masks"][beam]), np.max(self.configuration["masks"][beam])
+                    indices = self.dispersion[beam].searchsorted([min_wl, max_wl])
+
+                else:
+                    indices = None
+
+                # Cache the dispersion filename
+                pool.apply_async(mapper, args=(cache_model_point, self.configuration["models"]["dispersion_filenames"][beam], None, indices))
+
                 for flux_filename in flux_filenames:
-                    pool.apply_async(mapper, args=(convolve_model_data, flux_filename, sigma))
+                    pool.apply_async(mapper, args=(cache_model_point, flux_filename, sigma, indices))
 
         else:
+            raise NotImplementedError
 
             sigma = profile_sigma(kernel[beam], self.dispersion)
             for flux_filename in self.flux_filenames:
-                pool.apply_async(mapper, args=(convolve_model_data, flux_filename, sigma))
+                pool.apply_async(mapper, args=(cache_model_point, flux_filename, sigma))
 
         pool.close()
         pool.join()

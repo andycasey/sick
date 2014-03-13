@@ -32,46 +32,12 @@ import models, utils, specutils
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['analyze', 'analyze_star', 'chi_squared_fn']
-
-
-def dimensions(configuration):
-    """Returns all dimension names for a given configuration, which can
-    include both implicit and explicit priors."""
-
-    # Get the actual apertures we're going to use
-    useful_apertures = configuration["models"]["dispersion_filenames"].keys()
-
-    # Get explicit priors
-    dimensions = []
-    for dimension in configuration["priors"].keys():
-        if dimension.startswith("doppler_shift") \
-        or dimension.startswith("smooth_model_flux"):
-            aperture = dimension.split(".")[1]
-            if aperture not in useful_apertures:
-                continue
-        dimensions.append(dimension)
-
-    # Get implicit normalisation priors
-    for aperture in useful_apertures:     
-        if configuration["normalise_observed"][aperture]["perform"]:
-            dimensions.extend(
-                ["normalise_observed.{0}.a{1}".format(aperture, i) \
-                    for i in xrange(configuration["normalise_observed"][aperture]["order"] + 1)])
-
-    # Append jitter dimension
-    if configuration["solver"].get("nwalkers", 1) > 1:
-        dimensions.append("jitter")
-
-    return dimensions
-
 
 
 def initialise_priors(model, observations):
     """ Initialise the priors (or initial conditions) for the analysis """
 
     walker_priors = []
-    parameter_names = dimensions(model.configuration)
     initial_normalisation_coefficients = {}
     initial_normalisation_variances = {}
 
@@ -80,17 +46,17 @@ def initialise_priors(model, observations):
     for i in xrange(nwalkers):
 
         current_walker = []
-        for j, parameter_name in enumerate(parameter_names):
+        for j, dimension in enumerate(model.dimensions):
 
-            if parameter_name == "jitter":
+            if dimension == "jitter":
                 # Uniform prior between 0 and 1
                 current_walker.append(random.uniform(0, 1))
                 continue
 
             # Implicit priors
-            if parameter_name.startswith("normalise_observed."):
-                aperture = parameter_name.split(".")[1]
-                coefficient_index = int(parameter_name.split(".")[-1].lstrip("a"))
+            if dimension.startswith("normalise_observed."):
+                aperture = dimension.split(".")[1]
+                coefficient_index = int(dimension.split(".")[-1].lstrip("a"))
 
                 if aperture not in initial_normalisation_coefficients:
                     index = model._mapped_apertures.index(aperture)
@@ -131,7 +97,7 @@ def initialise_priors(model, observations):
                 sigma = 100./(np.mean(spectrum.disp[flux_indices])**(n - coefficient_index - 1))
                 val = np.random.normal(coefficient, sigma)
                 current_walker.append(val)
-                print("coefficient", n -coefficient_index - 1, parameter_name, coefficient, val)
+                print("coefficient", n -coefficient_index - 1, dimension, coefficient, val)
                 print("original flux", np.mean(spectrum.flux[flux_indices]))
 
                 #current_walker.append(np.random.normal(coefficient,
@@ -158,7 +124,7 @@ def initialise_priors(model, observations):
                 continue
 
             # Explicit priors
-            prior_value = model.configuration["priors"][parameter_name]
+            prior_value = model.configuration["priors"][dimension]
             try:
                 prior_value = float(prior_value)
 
@@ -167,12 +133,12 @@ def initialise_priors(model, observations):
                 # We probably need to evaluate this.
                 if prior_value.lower() == "uniform":
                     # Only works on stellar parameter values.
-                    index = model.colnames.index(parameter_name)
+                    index = model.colnames.index(dimension)
                     possible_points = model.grid_points[:, index]
 
                     if i == 0: # Only print initialisation for the first walker
                         logging.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
-                            parameter_name, np.min(possible_points), np.max(possible_points)))
+                            dimension, np.min(possible_points), np.max(possible_points)))
                     current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
 
                 elif prior_value.lower().startswith("normal"):
@@ -180,7 +146,7 @@ def initialise_priors(model, observations):
 
                     if i == 0: # Only print initialisation for the first walker
                         logging.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
-                            parameter_name, mu, sigma))
+                            dimension, mu, sigma))
                     current_walker.append(random.normal(mu, sigma))
 
                 elif prior_value.lower().startswith("uniform"):
@@ -188,7 +154,7 @@ def initialise_priors(model, observations):
 
                     if i == 0: # Only print initialisation for the first walker
                         logging.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
-                            parameter_name, minimum, maximum))
+                            dimension, minimum, maximum))
                     current_walker.append(random.uniform(minimum, maximum))
 
                 elif prior_value.lower().startswith("cross_correlate"):
@@ -196,13 +162,13 @@ def initialise_priors(model, observations):
                     raise NotImplementedError
 
                 else:
-                    raise TypeError("prior type not valid for {parameter_name}".format(parameter_name=parameter_name))
+                    raise TypeError("prior type not valid for {dimension}".format(dimension=dimension))
 
             else:
                 if i == 0: # Only print initialisation for the first walker
                     logger_fn = logger.info if nwalkers == 1 else logger.warn
                     logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(
-                        parameter_name, prior_value))
+                        dimension, prior_value))
 
                 current_walker.append(prior_value)
 
@@ -217,12 +183,12 @@ def initialise_priors(model, observations):
 
 
     """
-    print("PARAMETER NAMES", parameter_names)
+    print("PARAMETER NAMES", dimensions)
     import matplotlib.pyplot as plt
     fig = plt.figure()
     ax = fig.add_subplot(111)
 
-    red_indices = np.array([parameter_names.index(name) for name in ["normalise_observed.red.a0","normalise_observed.red.a1","normalise_observed.red.a2","normalise_observed.red.a3"] if name in parameter_names])
+    red_indices = np.array([dimensions.index(name) for name in ["normalise_observed.red.a0","normalise_observed.red.a1","normalise_observed.red.a2","normalise_observed.red.a3"] if name in dimensions])
 
     fluxes = []
     for walker in walker_priors:
@@ -238,7 +204,7 @@ def initialise_priors(model, observations):
     fig = plt.figure()
     ax = fig.add_subplot(111)
 
-    blue_indices = np.array([parameter_names.index(name) for name in ["normalise_observed.blue.a0","normalise_observed.blue.a1","normalise_observed.blue.a2"]])
+    blue_indices = np.array([dimensions.index(name) for name in ["normalise_observed.blue.a0","normalise_observed.blue.a1","normalise_observed.blue.a2"]])
     fluxes = []
     for walker in walker_priors:
         coefficients = walker[blue_indices]
@@ -255,15 +221,15 @@ def initialise_priors(model, observations):
     """
 
     logging.info("Priors summary:")
-    for i, parameter_name in enumerate(parameter_names):
+    for i, dimension in enumerate(model.dimensions):
         if len(walker_priors.shape) > 1 and walker_priors.shape[1] > 1:
             logging.info("\tParameter {0} - mean: {1:.2e}, min: {2:.2e}, max: {3:.2e}".format(
-                parameter_name, np.mean(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
+                dimension, np.mean(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
         else:
             logging.info("\tParameter {0} - initial point: {1:.2e}".format(
-                parameter_name, walker_priors[i]))
+                dimension, walker_priors[i]))
 
-    return (parameter_names, walker_priors)
+    return (model.dimensions, walker_priors)
 
 
 def log_prior(theta, parameter_names, model):
@@ -500,6 +466,7 @@ def solve(observed_spectra, model_filename, initial_guess=None):
                 break
 
         sampler.reset()
+        p0, lnpro0, state0 = sampler_state[0], None, None
 
         # SAMPLE ALL THE THINGS
         for j, sampler_state in enumerate(sampler.sample(
@@ -522,6 +489,8 @@ def solve(observed_spectra, model_filename, initial_guess=None):
 
         # Blobs contain all the sampled parameters and likelihoods        
         sampled = np.array(sampler.blobs).reshape((-1, num_parameters + 1))
+
+        sampled = sampled[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"] * 0.5):]
         sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
 
         # Get the maximum estimate
