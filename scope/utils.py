@@ -31,11 +31,11 @@ def latexify(labels, overwrite_common_labels=None):
           
         elif label.startswith("doppler_shift."):
             aperture = label.split(".")[1]
-            latex_labels.append("$V_{{{0}}}$ [km/s$]".format(aperture))
+            latex_labels.append("$V_{{{0}}}$ [km/s]".format(aperture))
 
         elif label.startswith("smooth_model_flux."):
             aperture = label.split(".")[1]
-            latex_labels.append("$\sigma_{{{0}}} [$\AA$]".format(aperture))
+            latex_labels.append("$\sigma_{{{0}}}$ [$\AA$]".format(aperture))
 
         elif label.startswith("normalise_observed."):
             aperture, coefficient = label.split(".")[1:]
