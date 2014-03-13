@@ -8,7 +8,7 @@ __version__ = "0.01"
 __all__ = ["config", "Model", "specutils", "utils"]
 
 import logging
-from analyze import solve
+from analysis import solve
 from models import Model
 
 logger = logging.basicConfig(level=logging.INFO)

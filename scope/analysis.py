@@ -7,17 +7,8 @@ from __future__ import division, print_function
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 # Standard library
-import csv
 import logging
 import os
-import multiprocessing
-import pickle
-import random
-import sys
-import time
-
-from ast import literal_eval
-from glob import glob
 
 # Third-party
 import emcee
@@ -331,55 +322,7 @@ def log_likelihood(theta, parameter_names, model, observations, callback=None):
 
     logger.info("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
-    """
-    fig = plt.figure(figsize=(10, 10))
-    fig.subplots_adjust(left=0.10, bottom=0.10, top=0.95, right=0.95)
-
-    ax = fig.add_subplot(211)
-    ax.plot(model_spectra["blue"].disp/10., model_spectra["blue"].flux, 'b', zorder=10)
-    ax.errorbar(observed_spectra[0].disp/10., observed_spectra[0].flux, fmt=None, ecolor="#666666",
-        yerr=observed_spectra[0].uncertainty, zorder=-1)
-    ax.plot(observed_spectra[0].disp/10., observed_spectra[0].flux, 'k', zorder=100)
-
-    ax.set_xlim(450, 530)
-    ax.set_ylim(0.6, 1.1)
-    ax.set_xlabel("Wavelength [nm]")
-    ax.set_ylabel("Normalised Flux")
-
-    logger.debug("a")
-    fig = plt.figure(figsize=(10, 10))
-    logger.debug("a1")
-    fig.subplots_adjust(left=0.10, bottom=0.10, top=0.95, right=0.95)
-    logger.debug("b")
-    ax = fig.add_subplot(211)
-    ax.plot(model_spectra["red"].disp/10., model_spectra["red"].flux, 'b', zorder=10)
-    
-
-    logger.debug("c", observed_spectra[0].disp, observed_spectra[0].flux, observed_spectra[0].uncertainty)
-    ax.errorbar(observed_spectra[0].disp/10., observed_spectra[0].flux, fmt=None, ecolor="#666666",
-        yerr=observed_spectra[0].uncertainty, zorder=-1)
-    logger.debug("c1")
-    ax.plot(observed_spectra[0].disp/10., observed_spectra[0].flux, 'k', zorder=100)
-
-
-    logger.debug("d")
-    ax.set_xlim(840, 885)
-    ax.set_ylim(0.6, 1.1)
-    ax.set_xlabel("Wavelength [nm]")
-    ax.set_ylabel("Normalised Flux")
-    
-    logger.debug("e")
-
-    num = len(glob("progress-*.png"))
-    
-    logger.debug("f")
-    plt.savefig("progress-{0}.png".format(num))
-    
-    logger.debug("g")
-    plt.close("all")
-    
-    logger.debug("h")
-    """
+   
     return (likelihood, blob + [likelihood])
 
 
