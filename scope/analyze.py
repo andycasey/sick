@@ -17,7 +17,6 @@ import sys
 import time
 
 from ast import literal_eval
-from collections import OrderedDict
 from glob import glob
 
 # Third-party
@@ -301,10 +300,7 @@ def log_likelihood(theta, parameter_names, model, observations, callback=None):
 
 
         inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter"])
-        #chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2 * inverse_variance
-        #chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2 * inverse_variance
         chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2 * inverse_variance
-
         
         # Apply any weighting functions to the chi_sq values
         #chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
@@ -490,7 +486,7 @@ def solve(observed_spectra, model_filename, initial_guess=None):
         # Blobs contain all the sampled parameters and likelihoods        
         sampled = np.array(sampler.blobs).reshape((-1, num_parameters + 1))
 
-        sampled = sampled[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"] * 0.5):]
+        sampled = sampled[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"]):]
         sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
 
         # Get the maximum estimate
