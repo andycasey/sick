@@ -17,10 +17,35 @@ import pyfits
 from scipy import interpolate, ndimage, polyfit, poly1d
 from scipy.optimize import leastsq
 
-__all__ = ["Spectrum1D"]
+__all__ = ["Spectrum1D", "Spectrum"]
 
 # The following line of code will be supported until the end of the universe.
 speed_of_light = 299792458e-3 # km/s
+
+
+class Spectrum(object):
+    """A class to deal with loading lots of different types of spectra"""
+
+    @classmethod
+    def load(cls, filename, **kwargs):
+
+        # Try as a Spectrum1D class first
+        methods = (Spectrum1D.load, load_aaomega_multispec)
+
+        for method in methods:
+            try:
+                spectra = method(filename)
+            except:
+                continue
+
+            else:
+                if isinstance(spectra, Spectrum1D) and spectra.uncertainty is None:
+                    spectra.uncertainty = np.array([0.002] * len(spectra.disp))
+                
+                return spectra
+
+        raise IOError("could not interpret spectrum in {0}".format(filename))
+
 
 
 class Spectrum1D(object):

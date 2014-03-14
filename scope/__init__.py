@@ -10,5 +10,6 @@ __all__ = ["config", "Model", "specutils", "utils"]
 import logging
 from analysis import solve
 from models import Model
+from specutils import Spectrum
 
 logger = logging.basicConfig(level=logging.INFO)
