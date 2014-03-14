@@ -38,7 +38,7 @@ def initialise_priors(model, observations):
         current_walker = []
         for j, dimension in enumerate(model.dimensions):
 
-            if dimension == "jitter":
+            if dimension.startswith("jitter."):
                 # Uniform prior between 0 and 1
                 current_walker.append(random.uniform(0, 1))
                 continue
@@ -236,7 +236,7 @@ def log_prior(theta, parameter_names, model):
             return -np.inf
 
         # Check for jitter
-        if parameter == "jitter" and not (1 > value > 0):
+        if parameter.startswith("jitter.") and not (1 > value > 0):
             return -np.inf
 
         # Check if point is within the grid boundaries?
@@ -290,9 +290,12 @@ def log_likelihood(theta, parameter_names, model, observations, callback=None):
     for i, (aperture, observed_spectrum) in enumerate(zip(model._mapped_apertures, observed_spectra)):
 
 
-        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter"])
-        chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2 * inverse_variance
-        
+        #inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter"])
+        #chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2 * inverse_variance
+
+        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter.{0}".format(aperture)]**2)
+        chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2) * inverse_variance
+
         # Apply any weighting functions to the chi_sq values
         #chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
 
@@ -439,11 +442,16 @@ def solve(observed_spectra, model_filename, initial_guess=None):
             # You should probably check your configuration file for something peculiar
             raise ValueError("most probable sampled point was non-finite")
         
-        # Get Maximum Likelihood values and their quantiles
+        # Get Maximum Likelihood values
+        me_parameters = {}
+        for parameter_name, value in zip(model.dimensions, sampled_theta[most_probable_index]):
+            me_parameters[parameter_name] = value
+
+        # Get the quantiles
         posteriors = {}
-        for parameter_name, (me_value, pos_quantile, neg_quantile) in zip(parameter_names, 
+        for parameter_name, (quantile_50, quantile_16, quantile_84) in zip(parameter_names, 
             map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), zip(*np.percentile(sampled, [16, 50, 84], axis=0)))):
-            posteriors[parameter_name] = (me_value, pos_quantile, neg_quantile)
+            posteriors[parameter_name] = (me_parameters[parameter_name], quantile_16, quantile_84)
 
         return (posteriors, sampler, model, mean_acceptance_fractions) 
 
