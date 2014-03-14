@@ -3,9 +3,9 @@
 """ Spectral Comparison and Parameter Evaluation """
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
-__version__ = "0.06-alpha"
+__version__ = "0.07-alpha"
 
-__all__ = ["config", "Model", "specutils", "utils"]
+__all__ = ["config", "Model", "specutils", "Spectrum", "utils"]
 
 import logging
 from analysis import solve
