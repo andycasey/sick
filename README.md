@@ -28,16 +28,19 @@ Running SCOPE should be as easy as:
 
 ``scope model.yml blue_spectrum.fits red_spectrum.fits``
 
-Or you can run it directly from Python:
+If ``blue_spectrum.fits`` and ``red_spectrum.fits`` have multiple apertures (e.g., multiplexing) then all spectra will be analysed. Or you can analyse spectra directly within Python:
 
 ````
 import scope
+
+# A single spectrum:
 posteriors, sampler, model, mean_acceptance_fractions = \
-    scope.solve(["blue_spectrum.fits", "red_spectrum.fits"], "model.yml")
+    scope.solve("sun.ms.fits", "model.yml")
+
+# Multiple spectra of the same star:
+posteriors, sampler, model, mean_acceptance_fractions = \
+    scope.solve(["blue.fits", "red.fits"], "model.yml")
 ````
-
-If ``blue_spectrum.fits`` and ``red_spectrum.fits`` have multiple apertures (e.g., multiplexing) then all spectra will be analysed.
-
 
 Model Example
 -------------
