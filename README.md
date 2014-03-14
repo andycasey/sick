@@ -131,7 +131,8 @@ priors:
 # spectral region overlapping the model and observed spectra is used.
 masks:
   blue:
-    - [4500, 5300]
+    - [4500, 5775]
+    - [5880, 6000]
   red:
     - [8450, 8750]
 ````
