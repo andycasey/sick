@@ -38,8 +38,9 @@ posteriors, sampler, model, mean_acceptance_fractions = \
     scope.solve("sun.ms.fits", "model.yml")
 
 # Multiple spectra of the same star:
+# (As long as your model apertures are defined, the order of input spectra does not matter..)
 posteriors, sampler, model, mean_acceptance_fractions = \
-    scope.solve(["blue.fits", "red.fits"], "model.yml")
+    scope.solve(["red.fits", "blue.fits"], "model.yml")
 ````
 
 Model Example
@@ -110,13 +111,15 @@ priors:
   # For any star, the a priori heliocentric velocity probability is a
   # Gaussian centered on 0 km/s with a dispersion around 100 km/s
   doppler_shift.blue: normal(0, 100)
-  doppler_shift.red: normal(0, 100)
+  doppler_shift.red:  normal(0, 100)
 
   # The synthetic spectra have been pre-convolved to a lower resolution,
   # but not the exact resolution of our data. This is because the exact
   # amount of smoothing can vary slightly depending on the star.
-  smooth_model_flux.blue.kernel: normal(3, 0.1)  # For original data
-  smooth_model_flux.red.kernel: normal(0.4, 0.1) # For original data
+  # The a priori values of these parameters can be estimated from the
+  # spectral resolution.
+  smooth_model_flux.blue.kernel: normal(3, 0.1)  
+  smooth_model_flux.red.kernel:  normal(0.4, 0.1)
 
   # Note that we have not specified any explicit priors for our
   # normalisation coefficients (normalise_observed.blue.a0, etc).
