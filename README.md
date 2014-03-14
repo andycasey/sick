@@ -28,7 +28,16 @@ Running SCOPE should be as easy as:
 
 ``scope model.yml blue_spectrum.fits red_spectrum.fits``
 
+Or you can run it directly from Python:
+
+````
+import scope
+
+posteriors, sampler, model, mean_acceptance_fractions = scope.solve(["blue_spectrum.fits", "red_spectrum.fits"], "model.yml")
+````
+
 If ``blue_spectrum.fits`` and ``red_spectrum.fits`` have multiple apertures (e.g., multiplexing) then all spectra will be analysed.
+
 
 Model Example
 -------------
