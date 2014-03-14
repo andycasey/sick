@@ -41,7 +41,7 @@ class Spectrum(object):
             else:
                 if isinstance(spectra, Spectrum1D) and spectra.uncertainty is None:
                     spectra.uncertainty = np.array([0.002] * len(spectra.disp))
-                
+
                 return spectra
 
         raise IOError("could not interpret spectrum in {0}".format(filename))
@@ -751,12 +751,12 @@ def load_aaomega_multispec(filename, fill_value=-1):
         for header in req_fibre_headers:
             headers[header] = image[2].data[index][header]
         
-        flux = image[0].data[index]
+        flux = np.array(image[0].data[index], dtype=np.float)
         uncertainty = 1.0/np.sqrt(flux)
         
         # Check if it's worthwhile having these
         if all(~np.isfinite(flux)):
-            flux = np.array([fill_value] * len(flux))
+            flux = np.array([fill_value] * len(flux), dtype=np.float)
 
         # Negative fluxes are considered unphysical
         flux[0 >= flux] = np.nan
