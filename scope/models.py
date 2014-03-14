@@ -425,8 +425,9 @@ class Model(object):
 
         # Append jitter dimension
         if self.configuration["solver"].get("nwalkers", 1) > 1:
-            dimensions.append("jitter")
-
+            for aperture in useful_apertures:
+                dimensions.append("jitter.{0}".format(aperture))
+                
         return dimensions
 
 
