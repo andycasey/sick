@@ -4,9 +4,7 @@ SPECTROSCOPE
 
 [![Build Status](https://travis-ci.org/andycasey/spectroscope.png?branch=master)](https://travis-ci.org/andycasey/spectroscope) [![PyPi download count image](https://pypip.in/d/scope/badge.png)](https://pypi.python.org/pypi/spectroscope/)
 
-**Author:** Andy Casey ([arc@ast.cam.ac.uk](mailto:arc@ast.cam.ac.uk))
-
-**License:** Modified [Academic License](http://github.com/dfm/license): This project includes academic-research code and documents under development. You would be a fool to run any of the code. Please contact the author before using this code. 
+Written by Andy Casey ([arc@ast.cam.ac.uk](mailto:arc@ast.cam.ac.uk))
 
 Principle
 ---------
