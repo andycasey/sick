@@ -30,12 +30,12 @@ contents = readfile(os.path.join(
 version = version_regex.findall(contents)[0]
 
 
-setup(name="scope",
+setup(name="spectroscope",
       version=version,
       author="Andrew R. Casey",
       author_email="arc@ast.cam.ac.uk",
       packages=["scope"],
-      url="http://www.github.com/andycasey/a-new-scope/",
+      url="http://www.github.com/andycasey/spectroscope/",
       license="GPLv2",
       description="Probabilistically determine stellar parameters from spectra",
       long_description=readfile(os.path.join(os.path.dirname(__file__), "README.md")),
