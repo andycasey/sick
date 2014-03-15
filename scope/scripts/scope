@@ -29,6 +29,12 @@ def main():
 
 	args = parser.parse_args()
 
+	if args.plotting:
+		# Import plotting dependencies 
+		import matplotlib.pyplot as plt
+		import triangle
+
+
 
 	all_spectra = [scope.Spectrum.load(filename) for filename in args.spectra]
 
@@ -77,6 +83,7 @@ def main():
 			posteriors, sampler, model, mean_acceptance_fractions = scope.solve(spectra, args.model)
 
 		except:
+			raise
 			logger.exception("Failed to analyse #{0}:".format(i))
 
 			# Update the metadata with the model information, as well as NaN's for posteriors
@@ -113,11 +120,58 @@ def main():
 				names=model.dimensions + ["ln L"],
 				formats=["f8"] * (1 + len(model.dimensions)))
 
-			with open(os.path.join(args.output_dir, "{0}.chain".format(i)), "wb") as fp:
+			filename_prefix = "scope-{0}".format(i)
+
+			with open(os.path.join(args.output_dir, filename_prefix + ".chain", "wb")) as fp:
 				pickle.dump(chain, fp)
 
 			# Plot results
-			if not args.plotting: continue
+			if not args.plotting:
+				continue
+
+			# Make a corner plot
+			fig = plt.figure()
+			ax = fig.add_subplot(111)
+			ax.plot(acceptance_fractions)
+			ax.set_xlabel("Iterations")
+			ax.set_ylabel("$\langle{}f_a\rangle$")
+			fig.savefig(filename_prefix + "-acceptance.pdf")
+
+			ndim = sampler.chain.shape[-1]
+			fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"] * 0.5):, :],
+				labels=scope.utils.latexify(model.dimensions))
+			fig.savefig(filename_prefix + "-corner.pdf")
+
+			# Get the most probable spectra
+			me_index = np.argmax(chain[:, -1])
+			me_parameters = dict(zip(model.dimensions, chain[me_index, :-1]))
+
+			me_observed_spectra = model.observed_spectra(spectra, **me_parameters)
+			me_model_spectra = model.model_spectra(observations=me_observed_spectra, **me_parameters)
+
+			fig = plt.figure()
+			for i, (aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, me_observed_spectra)):
+
+				ax = fig.add_subplot(len(spectra), 1, i+1)
+
+				modelled_aperture = me_model_spectra[aperture]
+				ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b')
+				ax.plot(observed_aperture.disp, observed_aperture.flux, 'k')
+
+				# Get the full boundaries
+				if "masks" in model.configuration and aperture in model.configuration["masks"]:
+					full_extent = \
+						(np.min(model.configuration["masks"][aperture]), np.max(model.configuration["masks"][aperture]))
+
+					ax.set_xlim(full_extent)
+
+				ax.set_ylim(0.6, 1.2)
+
+			fig.savefig(filename_prefix + "-spectra.pdf")
+
+			# Closing the figures isn't enough; matplotlib leaks memory
+			plt.close("all")
+
 
 		finally:
 			# Save the metadata to the results list
