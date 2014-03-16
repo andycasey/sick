@@ -22,7 +22,7 @@ import models, utils, specutils
 
 logger = logging.getLogger(__name__)
 
-
+__all__ = ["initialise_priors", "log_likelihood", "solve"]
 
 def initialise_priors(model, observations):
     """ Initialise the priors (or initial conditions) for the analysis """
@@ -83,8 +83,8 @@ def initialise_priors(model, observations):
                 sigma = 100./(np.mean(spectrum.disp[flux_indices])**(n - coefficient_index - 1))
                 val = np.random.normal(coefficient, sigma)
                 current_walker.append(val)
-                print("coefficient", n -coefficient_index - 1, dimension, coefficient, val)
-                print("original flux", np.mean(spectrum.flux[flux_indices]))
+                #print("coefficient", n -coefficient_index - 1, dimension, coefficient, val)
+                #print("original flux", np.mean(spectrum.flux[flux_indices]))
 
                 #current_walker.append(np.random.normal(coefficient,
                 #    0.1 * abs(coefficient) / np.mean(disp[flux_indices])**(coefficient_index)
@@ -341,8 +341,8 @@ def solve(observed_spectra, model_filename, initial_guess=None):
     observed_dispersions = [spectrum.disp for spectrum in observed_spectra]
     overlap = utils.find_spectral_overlap(observed_dispersions)
     if overlap is not None:
-        raise ValueError("observed apertures cannot overlap in wavelength, but they do near {wavelength} Angstroms"
-            .format(wavelength=overlap))
+        raise ValueError("observed apertures cannot overlap in wavelength, but"
+            " they do near {wavelength} Angstroms".format(wavelength=overlap))
 
     # Load our model
     model = models.Model(model_filename)
@@ -354,13 +354,13 @@ def solve(observed_spectra, model_filename, initial_guess=None):
 
     
     # Make fmin_powell the default
-    if   model.configuration["solver"].get("method", "fmin_powell") == "fmin_powell":
+    if model.configuration["solver"].get("method", "fmin_powell") == "fmin_powell":
 
         p0 = initialise_priors(model, configuration, observed_spectra)
-        posteriors = scipy.optimize.fmin_powell(chi_sq, p0,
-            args=(model, observed_spectra), xtol=0.001, ftol=0.001)
+        posteriors = scipy.optimize.fmin_powell(chi_sq, p0, args=(model,
+            observed_spectra), xtol=0.001, ftol=0.001)
 
-        return parameters_final
+        return posteriors
 
     elif model.configuration["solver"]["method"] == "emcee":
 
@@ -381,14 +381,14 @@ def solve(observed_spectra, model_filename, initial_guess=None):
 
         # Initialise the sampler
         sampler = emcee.EnsembleSampler(nwalkers, len(model.dimensions), log_likelihood,
-            args=(model, observed_spectra),
-            threads=threads)
+            args=(model, observed_spectra), threads=threads)
 
         # BURN BABY BURN
         # Sample_data contains all the inputs, and the \chi^2 and L 
         # sampler_state = (pos, lnprob, state[, blobs])
         for i, sampler_state in enumerate(sampler.sample(
-            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=model.configuration["solver"]["burn"])):
+            p0, lnprob0=lnprob0, rstate0=rstate0,
+            iterations=model.configuration["solver"]["burn"])):
 
             fraction_complete = (i + 1)/nsteps
             mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
@@ -406,7 +406,8 @@ def solve(observed_spectra, model_filename, initial_guess=None):
 
         # SAMPLE ALL THE THINGS
         for j, sampler_state in enumerate(sampler.sample(
-            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=model.configuration["solver"]["sample"])):
+            p0, lnprob0=lnprob0, rstate0=rstate0,
+            iterations=model.configuration["solver"]["sample"])):
 
             fraction_complete = (i + j + 1)/nsteps
             mean_acceptance_fractions[i + j] = np.mean(sampler.acceptance_fraction)
@@ -421,7 +422,8 @@ def solve(observed_spectra, model_filename, initial_guess=None):
 
 
         # Convert state to posteriors
-        logging.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fractions[-1]))
+        logging.info("The final mean acceptance fraction is {0:.3f}".format(
+            mean_acceptance_fractions[-1]))
 
         # Blobs contain all the sampled parameters and likelihoods        
         sampled = np.array(sampler.blobs).reshape((-1, len(model.dimensions) + 1))

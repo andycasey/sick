@@ -9,6 +9,7 @@ __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 import argparse
 import logging
 import os
+import cPickle as pickle
 
 from hashlib import md5
 from json import dumps as json_dumps
@@ -179,12 +180,11 @@ def main():
 			plt.close("all")
 
 
-		finally:
-			# Save the metadata to the results list
-			all_results.append(metadata)
+		# Save the metadata to the results list
+		all_results.append(metadata)
 
-			# Save all results thus far to a fits file
-			raise NotImplementedError
+		# Save all results thus far to a fits file
+		raise NotImplementedError
 
 if __name__ == "__main__":
 	main()
