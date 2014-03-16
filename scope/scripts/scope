@@ -197,31 +197,28 @@ def main():
 					metadata_columns.append(prefix + column)
 
 			# Nusiance parameters (w/ uncertainties)
-			nusiance_columns = scope.utils.unique_preserved_list(model.colnames + model.dimension)[len(model.colnames):]
+			nusiance_columns = scope.utils.unique_preserved_list(model.colnames + model.dimensions)[len(model.colnames):]
 			for column in nusiance_columns:
 				metadata_columns.append(column)
 				for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
 					metadata_columns.append(prefix + column)
 
 			# Time elapsed, model
-			metadata_columns.extend(["time_elapsed", "model"])
+			metadata_columns.extend(["time_elapsed", "model", "filenames"])
 
-			metadata_formats = [("f8", "|S1024")[isinstance(value, str)] for value in metadata.values()]
-			all_results = np.core.records.fromrecords([metadata.values()],
-				names=metadata.keys(), formats=metadata_formats)
+			metadata_formats = [("f8", "|S1024")[isinstance(metadata[key], str)] for key in metadata_columns]
+			all_results = np.core.records.fromrecords([[metadata[key] for key in metadata_columns]],
+				names=metadata_columns, formats=metadata_formats)
 
 		else:
-			all_results = np.append(all_results, np.array([(metadata[key] for key in metadata_columns)],
-				dtype=all_results.dtype))
+			row = np.core.records.fromrecords([[metadata[key] for key in metadata_columns]], dtype=all_results.dtype)
+			all_results = np.append(all_results, row)
 
+		# Save all results thus far to a fits file	
 		primary_hdu = pyfits.PrimaryHDU()
 		table_hdu = pyfits.BinTableHDU(all_results)
 		hdulist = pyfits.HDUList([primary_hdu, table_hdu])
 		hdulist.writeto(os.path.join(args.output_dir, "scope-results.fits"), clobber=True)
-
-		# Save all results thus far to a fits file	
-		if i >= 1:
-			raise NotImplementedError
 
 if __name__ == "__main__":
 	main()
