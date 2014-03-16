@@ -16,6 +16,7 @@ from json import dumps as json_dumps
 from time import time
 
 import numpy as np
+import pyfits
 
 import scope
 
@@ -70,7 +71,6 @@ def main():
 	}
 
 	# For each spectra, analyse
-	all_results = []
 	for i, spectra in enumerate(all_spectra):
 
 		# Create metadata and put header information in
@@ -132,6 +132,9 @@ def main():
 			with open(os.path.join(args.output_dir, filename_prefix + ".chain"), "wb") as fp:
 				pickle.dump(chain, fp)
 
+			with open(os.path.join(args.output_dir, filename_prefix + ".results"), "wb") as fp:
+				pickle.dump((posteriors, sampler, model, mean_acceptance_fractions), fp)
+
 			# Plot results
 			if not args.plotting:
 				continue
@@ -181,10 +184,23 @@ def main():
 
 
 		# Save the metadata to the results list
-		all_results.append(metadata)
+		if i == 0:
+			metadata_columns = metadata.keys()
+			metadata_formats = [("f8", "|S1024")[isinstance(str, value)] for value in metadata.values()]
+			all_results = np.core.records.fromrecords([metadata.values()],
+				names=metadata.keys(), formats=metadata_formats)
+
+		else:
+			all_results = np.append(all_results, np.array([(metadata[key] for key in metadata_columns)],
+				dtype=all_results.dtype))
+
+		hdu = pyfits.PrimaryHDU(results_array)
+		hdulist = pyfits.HDUList([hdu])
+		hdulist.writeto(os.path.join(output_dir, "scope-results.fits"), clobber=True)
 
 		# Save all results thus far to a fits file
-		raise NotImplementedError
+		if i ==1 :
+			raise NotImplementedError
 
 if __name__ == "__main__":
 	main()
