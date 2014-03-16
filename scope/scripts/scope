@@ -120,7 +120,7 @@ def main():
 				})
 
 			# Save the sampler chain
-			blobs = np.array(sampler.chain)
+			blobs = np.array(sampler.blobs)
 			blobs = blobs.reshape((-1, 1 + len(model.dimensions)))
 			chain = np.core.records.fromarrays(blobs.T,
 				names=model.dimensions + ["ln L"],

@@ -215,12 +215,12 @@ def initialise_priors(model, observations):
             logging.info("\tParameter {0} - initial point: {1:.2e}".format(
                 dimension, walker_priors[i]))
 
-    return (model.dimensions, walker_priors)
+    return walker_priors
 
 
-def log_prior(theta, parameter_names, model):
+def log_prior(theta, model):
     
-    parameters = dict(zip(parameter_names, theta))
+    parameters = dict(zip(model.dimensions, theta))
 
     for parameter, value in parameters.iteritems():
         # Check doppler shifts. Anything more than 500 km/s is considered implausible
@@ -243,7 +243,8 @@ def log_prior(theta, parameter_names, model):
 
     return 0
 
-def log_likelihood(theta, parameter_names, model, observations, callback=None):
+
+def log_likelihood(theta, model, observations):
     """Calculates the likelihood that a given set of observations
     and parameters match the input models.
 
@@ -259,11 +260,11 @@ def log_likelihood(theta, parameter_names, model, observations, callback=None):
     """
 
     blob = list(theta)
-    if not np.isfinite(log_prior(theta, parameter_names, model)):
+    if not np.isfinite(log_prior(theta, model)):
         logging.debug("Returning -inf log-likelihood because log-prior was -inf")
         return (-np.inf, blob + [-np.inf])
 
-    parameters = dict(zip(parameter_names, theta))
+    parameters = dict(zip(model.dimensions, theta))
 
     # Prepare the observed spectra: radial velocity shift? normalisation?
     observed_spectra = model.observed_spectra(observations, **parameters)
@@ -355,11 +356,9 @@ def solve(observed_spectra, model_filename, initial_guess=None):
     # Make fmin_powell the default
     if   model.configuration["solver"].get("method", "fmin_powell") == "fmin_powell":
 
-        raise NotImplementedError
-        parameter_names, p0 = initialise_priors(model, configuration, observed_spectra)
-        parameters_final = scipy.optimize.fmin_powell(chi_sq, p0,
-            args=(parameter_names, observed_spectra, model), xtol=0.001, ftol=0.001)
-
+        p0 = initialise_priors(model, configuration, observed_spectra)
+        posteriors = scipy.optimize.fmin_powell(chi_sq, p0,
+            args=(model, observed_spectra), xtol=0.001, ftol=0.001)
 
         return parameters_final
 
@@ -375,15 +374,14 @@ def solve(observed_spectra, model_filename, initial_guess=None):
         mean_acceptance_fractions = np.zeros(nsteps)
         
         # Initialise priors and set up arguments for optimization
-        parameter_names, p0 = initialise_priors(model, observed_spectra)
+        model.dimensions, p0 = initialise_priors(model, observed_spectra)
 
         logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(
-            nwalkers, ", ".join(parameter_names)))
+            nwalkers, ", ".join(model.dimensions)))
 
         # Initialise the sampler
-        num_parameters = len(parameter_names)
-        sampler = emcee.EnsembleSampler(nwalkers, num_parameters, log_likelihood,
-            args=(parameter_names, model, observed_spectra),
+        sampler = emcee.EnsembleSampler(nwalkers, len(model.dimensions), log_likelihood,
+            args=(model, observed_spectra),
             threads=threads)
 
         # BURN BABY BURN
@@ -426,7 +424,7 @@ def solve(observed_spectra, model_filename, initial_guess=None):
         logging.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fractions[-1]))
 
         # Blobs contain all the sampled parameters and likelihoods        
-        sampled = np.array(sampler.blobs).reshape((-1, num_parameters + 1))
+        sampled = np.array(sampler.blobs).reshape((-1, len(model.dimensions) + 1))
 
         sampled = sampled[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"]):]
         sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
@@ -445,7 +443,7 @@ def solve(observed_spectra, model_filename, initial_guess=None):
 
         # Get the quantiles
         posteriors = {}
-        for parameter_name, (quantile_50, quantile_16, quantile_84) in zip(parameter_names, 
+        for parameter_name, (quantile_50, quantile_16, quantile_84) in zip(model.dimensions, 
             map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), zip(*np.percentile(sampled, [16, 50, 84], axis=0)))):
             posteriors[parameter_name] = (me_parameters[parameter_name], quantile_16, quantile_84)
 
