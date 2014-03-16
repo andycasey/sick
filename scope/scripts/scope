@@ -133,54 +133,53 @@ def main():
 				pickle.dump(chain, fp)
 
 			with open(os.path.join(args.output_dir, filename_prefix + ".results"), "wb") as fp:
-				pickle.dump((posteriors, sampler, model, mean_acceptance_fractions), fp)
+				pickle.dump((posteriors, mean_acceptance_fractions), fp)
 
 			# Plot results
-			if not args.plotting:
-				continue
+			if args.plotting:
 
-			# Make a corner plot
-			fig = plt.figure()
-			ax = fig.add_subplot(111)
-			ax.plot(acceptance_fractions)
-			ax.set_xlabel("Iterations")
-			ax.set_ylabel("$\langle{}f_a\rangle$")
-			fig.savefig(filename_prefix + "-acceptance.pdf")
+				# Make a corner plot
+				fig = plt.figure()
+				ax = fig.add_subplot(111)
+				ax.plot(acceptance_fractions)
+				ax.set_xlabel("Iterations")
+				ax.set_ylabel("$\langle{}f_a\rangle$")
+				fig.savefig(filename_prefix + "-acceptance.pdf")
 
-			ndim = sampler.chain.shape[-1]
-			fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"] * 0.5):, :],
-				labels=scope.utils.latexify(model.dimensions))
-			fig.savefig(filename_prefix + "-corner.pdf")
+				ndim = sampler.chain.shape[-1]
+				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"] * 0.5):, :],
+					labels=scope.utils.latexify(model.dimensions))
+				fig.savefig(filename_prefix + "-corner.pdf")
 
-			# Get the most probable spectra
-			me_index = np.argmax(chain[:, -1])
-			me_parameters = dict(zip(model.dimensions, chain[me_index, :-1]))
+				# Get the most probable spectra
+				me_index = np.argmax(chain[:, -1])
+				me_parameters = dict(zip(model.dimensions, chain[me_index, :-1]))
 
-			me_observed_spectra = model.observed_spectra(spectra, **me_parameters)
-			me_model_spectra = model.model_spectra(observations=me_observed_spectra, **me_parameters)
+				me_observed_spectra = model.observed_spectra(spectra, **me_parameters)
+				me_model_spectra = model.model_spectra(observations=me_observed_spectra, **me_parameters)
 
-			fig = plt.figure()
-			for i, (aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, me_observed_spectra)):
+				fig = plt.figure()
+				for i, (aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, me_observed_spectra)):
 
-				ax = fig.add_subplot(len(spectra), 1, i+1)
+					ax = fig.add_subplot(len(spectra), 1, i+1)
 
-				modelled_aperture = me_model_spectra[aperture]
-				ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b')
-				ax.plot(observed_aperture.disp, observed_aperture.flux, 'k')
+					modelled_aperture = me_model_spectra[aperture]
+					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b')
+					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k')
 
-				# Get the full boundaries
-				if "masks" in model.configuration and aperture in model.configuration["masks"]:
-					full_extent = \
-						(np.min(model.configuration["masks"][aperture]), np.max(model.configuration["masks"][aperture]))
+					# Get the full boundaries
+					if "masks" in model.configuration and aperture in model.configuration["masks"]:
+						full_extent = \
+							(np.min(model.configuration["masks"][aperture]), np.max(model.configuration["masks"][aperture]))
 
-					ax.set_xlim(full_extent)
+						ax.set_xlim(full_extent)
 
-				ax.set_ylim(0.6, 1.2)
+					ax.set_ylim(0.6, 1.2)
 
-			fig.savefig(filename_prefix + "-spectra.pdf")
+				fig.savefig(filename_prefix + "-spectra.pdf")
 
-			# Closing the figures isn't enough; matplotlib leaks memory
-			plt.close("all")
+				# Closing the figures isn't enough; matplotlib leaks memory
+				plt.close("all")
 
 
 		# Save the metadata to the results list
@@ -198,8 +197,8 @@ def main():
 		hdulist = pyfits.HDUList([hdu])
 		hdulist.writeto(os.path.join(output_dir, "scope-results.fits"), clobber=True)
 
-		# Save all results thus far to a fits file
-		if i ==1 :
+		# Save all results thus far to a fits file	
+		if i >= 1:
 			raise NotImplementedError
 
 if __name__ == "__main__":
