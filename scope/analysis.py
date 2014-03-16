@@ -354,11 +354,11 @@ def solve(observed_spectra, model_filename, initial_guess=None):
 
     
     # Make fmin_powell the default
-    if model.configuration["solver"].get("method", "fmin_powell") == "fmin_powell":
+    if model.configuration["solver"].get("method", "powell") == "powell":
 
         p0 = initialise_priors(model, configuration, observed_spectra)
-        posteriors = scipy.optimize.fmin_powell(chi_sq, p0, args=(model,
-            observed_spectra), xtol=0.001, ftol=0.001)
+        posteriors = scipy.optimize.minimize(chi_sq, p0, method="powell", 
+            args=(model, observed_spectra), xtol=0.001, ftol=0.001)
 
         return posteriors
 
