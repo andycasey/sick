@@ -221,24 +221,28 @@ def initialise_priors(model, observations):
 def log_prior(theta, model):
     
     parameters = dict(zip(model.dimensions, theta))
-
+    print("A B {0} {1}".format(model.dimensions, theta))
     for parameter, value in parameters.iteritems():
         # Check doppler shifts. Anything more than 500 km/s is considered implausible
         if parameter.startswith("doppler_shift.") and abs(value) > 500:
+            logger.debug("DOPPLER SHIFT {0}".format(parameter))
             return -np.inf
 
         # Check smoothing values. Any negative value is considered unrealistic
         if parameter.startswith("smooth_model_flux.") and 0 > value:
+            logger.debug("SMOOTHING {0}".format(parameter))
             return -np.inf
 
         # Check for jitter
         if parameter.startswith("jitter.") and not (1 > value > 0):
+            logger.debug("JITTER {0}".format(parameter))
             return -np.inf
 
         # Check if point is within the grid boundaries?
         if parameter in model.grid_boundaries:
             min_value, max_value = model.grid_boundaries[parameter]
             if value > max_value or min_value > value:
+                logger.debug("POINT OUTSIDE {0}: {1}".format(parameter, value))
                 return -np.inf
 
     return 0
@@ -374,7 +378,7 @@ def solve(observed_spectra, model_filename, initial_guess=None):
         mean_acceptance_fractions = np.zeros(nsteps)
         
         # Initialise priors and set up arguments for optimization
-        model.dimensions, p0 = initialise_priors(model, observed_spectra)
+        p0 = initialise_priors(model, observed_spectra)
 
         logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(
             nwalkers, ", ".join(model.dimensions)))
