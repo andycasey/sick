@@ -29,7 +29,6 @@ def initialise_priors(model, observations):
 
     walker_priors = []
     initial_normalisation_coefficients = {}
-    initial_normalisation_variances = {}
 
     nwalkers = model.configuration["solver"].get("nwalkers", 1)
 
@@ -71,15 +70,12 @@ def initialise_priors(model, observations):
                         flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
 
                     # Fit the spectrum with a polynomial of order X
-                    coefficients, covariance = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices],
-                        order, full=False, cov=True)
+                    coefficients, np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices], order)
 
                     # Save the coefficients and variances
                     initial_normalisation_coefficients[aperture] = coefficients
-                    initial_normalisation_variances[aperture] = np.diag(covariance)[::-1]
-
+                
                 coefficient = initial_normalisation_coefficients[aperture][coefficient_index]
-                variance = initial_normalisation_variances[aperture][coefficient_index]
                 
                 spectrum = observations[model._mapped_apertures.index(aperture)]
                 n = len(initial_normalisation_coefficients[aperture])
