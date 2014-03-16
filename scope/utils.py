@@ -47,6 +47,11 @@ def latexify(labels, overwrite_common_labels=None):
     return latex_labels
 
 
+def unique_preserved_list(original_list):
+    seen = set()
+    seen_add = seen.add
+    return [x for x in original_list if x not in seen and not seen_add(x)]
+
 
 def human_readable_digit(number):
     millnames = ["", "thousand", "million", "billion", "trillion"]

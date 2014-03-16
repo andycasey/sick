@@ -75,9 +75,12 @@ def main():
 
 		# Create metadata and put header information in
 		metadata = {}
+		header_columns = []
 		bluest_spectrum = spectra[0] if isinstance(spectra, list) else spectra
 		for header in default_headers:
 			if header not in bluest_spectrum.headers: continue
+			header_columns.append(header)
+
 			metadata[header] = bluest_spectrum.headers[header]
 
 		# Set defaults for metadata
@@ -184,7 +187,26 @@ def main():
 
 		# Save the metadata to the results list
 		if i == 0:
-			metadata_columns = metadata.keys()
+
+			# Headers first
+			metadata_columns = [] + header_columns
+
+			# Dimensions (w/ uncertainties)
+			for column in model.colnames:
+				metadata_columns.append(column)
+				for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
+					metadata_columns.append(prefix + column)
+
+			# Nusiance parameters (w/ uncertainties)
+			nusiance_columns = scope.utils.unique_preserved_list(model.colnames + model.dimension)[len(model.colnames):]
+			for column in nusiance_columns:
+				metadata_columns.append(column)
+				for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
+					metadata_columns.append(prefix + column)
+
+			# Time elapsed, model
+			metadata_columns.extend(["time_elapsed", "model"])
+
 			metadata_formats = [("f8", "|S1024")[isinstance(value, str)] for value in metadata.values()]
 			all_results = np.core.records.fromrecords([metadata.values()],
 				names=metadata.keys(), formats=metadata_formats)
@@ -196,7 +218,7 @@ def main():
 		primary_hdu = pyfits.PrimaryHDU()
 		table_hdu = pyfits.BinTableHDU(all_results)
 		hdulist = pyfits.HDUList([primary_hdu, table_hdu])
-		hdulist.writeto(os.path.join(output_dir, "scope-results.fits"), clobber=True)
+		hdulist.writeto(os.path.join(args.output_dir, "scope-results.fits"), clobber=True)
 
 		# Save all results thus far to a fits file	
 		if i >= 1:
