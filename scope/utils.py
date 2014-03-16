@@ -8,7 +8,8 @@ __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 import numpy as np
 
-__all__ = ["human_readable_digit", "find_spectral_overlap", "latexify"]
+__all__ = ["human_readable_digit", "find_spectral_overlap", "latexify",
+    "unique_preserved_list"]
 
 
 def latexify(labels, overwrite_common_labels=None):
