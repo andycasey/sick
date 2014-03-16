@@ -19,8 +19,6 @@ import numpy as np
 
 import scope
 
-logger = logging.basicConfig(level=logging.INFO)
-
 def main():
 
 	parser = argparse.ArgumentParser(description="infer stellar parameters from spectra")
@@ -29,9 +27,11 @@ def main():
 	parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
 		type=str, default=os.getcwd())
 	parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
+	parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
 	parser.add_argument("--debug", dest="debug", action="store_true", default=False)
 
 	args = parser.parse_args()
+	logger = logging.basicConfig(level=logging.DEBUG if (args.debug or args.verbose) else logging.INFO)
 
 	if not os.path.exists(args.model):
 		raise IOError("model filename does not exist")
@@ -129,7 +129,7 @@ def main():
 
 			filename_prefix = "scope-{0}".format(i)
 
-			with open(os.path.join(args.output_dir, filename_prefix + ".chain", "wb")) as fp:
+			with open(os.path.join(args.output_dir, filename_prefix + ".chain"), "wb") as fp:
 				pickle.dump(chain, fp)
 
 			# Plot results
