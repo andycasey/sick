@@ -372,12 +372,6 @@ class Model(object):
         return True
 
 
-    @property
-    def apertures(self):
-        """Returns the aperture names specified in the configuration."""
-        return configuration['models']['dispersion_filenames'].keys()
-
-
     def check_aperture_names(configuration, key):
         """Checks that all the apertures specified in the models
         exist in the given sub-config `key`.
