@@ -70,7 +70,7 @@ def initialise_priors(model, observations):
                         flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
 
                     # Fit the spectrum with a polynomial of order X
-                    coefficients, np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices], order)
+                    coefficients = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices], order)
 
                     # Save the coefficients and variances
                     initial_normalisation_coefficients[aperture] = coefficients
