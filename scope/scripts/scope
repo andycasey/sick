@@ -185,7 +185,7 @@ def main():
 		# Save the metadata to the results list
 		if i == 0:
 			metadata_columns = metadata.keys()
-			metadata_formats = [("f8", "|S1024")[isinstance(str, value)] for value in metadata.values()]
+			metadata_formats = [("f8", "|S1024")[isinstance(value, str)] for value in metadata.values()]
 			all_results = np.core.records.fromrecords([metadata.values()],
 				names=metadata.keys(), formats=metadata_formats)
 
@@ -193,8 +193,9 @@ def main():
 			all_results = np.append(all_results, np.array([(metadata[key] for key in metadata_columns)],
 				dtype=all_results.dtype))
 
-		hdu = pyfits.PrimaryHDU(results_array)
-		hdulist = pyfits.HDUList([hdu])
+		primary_hdu = pyfits.PrimaryHDU()
+		table_hdu = pyfits.BinTableHDU(all_results)
+		hdulist = pyfits.HDUList([primary_hdu, table_hdu])
 		hdulist.writeto(os.path.join(output_dir, "scope-results.fits"), clobber=True)
 
 		# Save all results thus far to a fits file	
