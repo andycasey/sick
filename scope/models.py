@@ -397,6 +397,9 @@ class Model(object):
         """Returns all dimension names for a given configuration, which can
         include both implicit and explicit priors."""
 
+        if hasattr(self, "_dimensions"):
+            return self._dimensions
+
         # Get the actual apertures we're going to use
         useful_apertures = self.configuration["models"]["dispersion_filenames"].keys()
 
@@ -421,7 +424,9 @@ class Model(object):
         if self.configuration["solver"].get("nwalkers", 1) > 1:
             for aperture in useful_apertures:
                 dimensions.append("jitter.{0}".format(aperture))
-                
+        
+        setattr(self, "_dimensions", dimensions)
+        
         return dimensions
 
 
