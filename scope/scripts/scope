@@ -96,10 +96,7 @@ def main():
 				raise
 			
 			# Update the metadata with the model information, as well as NaN's for posteriors
-			metadata.update({
-				"model": md5(json_dumps(model.configuration).encode("utf-8")).hexdigest(),
-				"time_elapsed": time() - t_init
-			})
+			metadata.update({"time_elapsed": time() - t_init})
 			for dimension in model.dimensions:
 				metadata[dimension] = np.nan
 				metadata["u_maxabs_{0}".format(dimension)] = np.nan
