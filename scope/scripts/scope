@@ -126,12 +126,12 @@ def main():
 				names=model.dimensions + ["ln L"],
 				formats=["f8"] * (1 + len(model.dimensions)))
 
-			filename_prefix = "scope-{0}".format(i)
+			filename_prefix = os.path.join(args.output_dir, "scope-{0}".format(i))
 
-			with open(os.path.join(args.output_dir, filename_prefix + ".chain"), "wb") as fp:
+			with open(filename_prefix + ".chain", "wb") as fp:
 				pickle.dump(chain, fp)
 
-			with open(os.path.join(args.output_dir, filename_prefix + ".results"), "wb") as fp:
+			with open(filename_prefix + ".results", "wb") as fp:
 				pickle.dump((posteriors, mean_acceptance_fractions), fp)
 
 			# Plot results
@@ -140,7 +140,7 @@ def main():
 				# Make a corner plot
 				fig = plt.figure()
 				ax = fig.add_subplot(111)
-				ax.plot(acceptance_fractions)
+				ax.plot(mean_acceptance_fractions)
 				ax.set_xlabel("Iterations")
 				ax.set_ylabel("$\langle{}f_a\rangle$")
 				fig.savefig(filename_prefix + "-acceptance.pdf")
