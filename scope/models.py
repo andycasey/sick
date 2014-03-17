@@ -16,7 +16,7 @@ import multiprocessing
 # Third-party
 import numpy as np
 import pyfits
-from scipy import interpolate, ndimage
+from scipy import interpolate, ndimage, spatial
 import yaml
 
 # Module
@@ -151,6 +151,7 @@ class Model(object):
 
         first_beam = self.configuration['models']['dispersion_filenames'].keys()[0]
         self.grid_points = np.array(grid_points[first_beam])
+        self._tree = spatial.cKDTree(self.grid_points)
 
         self.grid_boundaries = {}
         for i, colname in enumerate(self.colnames):
@@ -496,12 +497,6 @@ class Model(object):
             raise ValueError("point length ({length}) is incompatible with grid shape ({shape})"
                 .format(length=len(point), shape=self.grid_points.shape))
 
-        try: n = int(n)
-        except TypeError:
-            raise TypeError("number of neighbours must be an integer-type")
-        if 1 > n:
-            raise ValueError("number of neighbours must be a positive integer-type")
-
         indices = set(np.arange(len(self.grid_points)))
         for i, point_value in enumerate(point):
             difference = np.unique(self.grid_points[:, i] - point_value)
@@ -512,7 +507,7 @@ class Model(object):
             limit_min = difference[np.where(difference < 0)][-n:][0] + point_value
             limit_max = difference[np.where(difference > 0)][:n][-1] + point_value
     
-            these_indices = np.where((limit_max >= self.grid_points[:, i]) & (self.grid_points[:, i] >= limit_min))[0]
+            these_indices = np.where((limit_max >= self.grid_points[:, i]) * (self.grid_points[:, i] >= limit_min))[0]
             indices.intersection_update(these_indices)
 
         return np.array(list(indices))
@@ -556,7 +551,6 @@ class Model(object):
             to use. Default is 'linear'.
         """
 
-        neighbour_indices = self.get_nearest_neighbours(point)
 
         if beams is 'all':
             beams = self.dispersion.keys()
@@ -568,31 +562,30 @@ class Model(object):
             if beam not in self.dispersion.keys():
                 raise ValueError("could not find '{beam}' beam".format(beam=beam))
 
+        #k = 2*(len(self.colnames)**2)
+
+        n, indices = 1, []
+        while 2**len(self.colnames) > len(indices):
+            indices = self.get_nearest_neighbours(point, n=n)
+            n += 1
+            
+            if n > 4 or len(indices) > self.colnames*(2**len(self.colnames)):
+                raise ValueError("hit hard limit")
+
         interpolated_flux = {}
         for beam in beams:
 
-            beam_flux = np.zeros((
-                len(neighbour_indices),
-                len(self.dispersion[beam])
-                ))
+            beam_flux = np.zeros((len(indices), len(self.dispersion[beam])))
             beam_flux[:] = np.nan
 
             # Load the flux points
             flux_data = self.flux_filenames if len(self.dispersion.keys()) == 1 else self.flux_filenames[beam]
-            for i, index in enumerate(neighbour_indices):
-                #if beam in self.flux_cache and not np.all(~np.isfinite(self.flux_cache[beam][index])):
-                #    beam_flux[i, :] = self.flux_cache[beam][index]
-                #    logger.info("CACHING")
-                #else:
-                #    self.flux_cache[beam][index] = load_model_data(flux_data[index])
+            for i, index in enumerate(indices):
                 beam_flux[i, :] = load_model_data(flux_data[index])
             
             try:
                 interpolated_flux[beam] = interpolate.griddata(
-                    self.grid_points[neighbour_indices],
-                    beam_flux,
-                    [point],
-                    **kwargs).flatten()
+                    self.grid_points[indices], beam_flux, [point], **kwargs).flatten()
 
             except:
                 raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
