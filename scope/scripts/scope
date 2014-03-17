@@ -187,8 +187,8 @@ def main():
 				fig.savefig(filename_prefix + "-corner.pdf")
 
 				# Get the most probable spectra
-				me_index = np.argmax(chain[:, -1])
-				me_parameters = dict(zip(model.dimensions, chain[me_index, :-1]))
+				me_index = np.argmax(blobs[:, -1])
+				me_parameters = dict(zip(model.dimensions, blobs[me_index, :-1]))
 
 				me_observed_spectra = model.observed_spectra(spectra, **me_parameters)
 				me_model_spectra = model.model_spectra(observations=me_observed_spectra, **me_parameters)
