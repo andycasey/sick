@@ -160,7 +160,7 @@ def main():
 					names=metadata_columns, formats=metadata_formats)
 
 			else:
-				row = np.core.records.fromrecords([[metadata[key].get(key, np.nan) for key in metadata_columns]],
+				row = np.core.records.fromrecords([[metadata.get(key, np.nan) for key in metadata_columns]],
 					dtype=all_results.dtype)
 				all_results = np.append(all_results, row)
 
