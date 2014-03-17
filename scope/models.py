@@ -563,7 +563,7 @@ class Model(object):
                 raise ValueError("could not find '{beam}' beam".format(beam=beam))
 
         #k = 2*(len(self.colnames)**2)
-
+        """
         n, indices = 1, []
         while 2**len(self.colnames) > len(indices):
             indices = self.get_nearest_neighbours(point, n=n)
@@ -571,6 +571,8 @@ class Model(object):
             
             if n > 4 or len(indices) > self.colnames*(2**len(self.colnames)):
                 raise ValueError("hit hard limit")
+        """
+        indices = self.get_nearest_neighbours(point, n=1)
 
         interpolated_flux = {}
         for beam in beams:
