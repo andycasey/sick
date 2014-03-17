@@ -91,17 +91,17 @@ def main():
 
 		except:
 			logging.exception("Failed to analyse #{0}:".format(i))
+			if args.debug: raise
 
-			if args.debug:
-				raise
-			
-			# Update the metadata with the model information, as well as NaN's for posteriors
-			metadata.update({"time_elapsed": time() - t_init})
-			for dimension in model.dimensions:
-				metadata[dimension] = np.nan
-				metadata["u_maxabs_{0}".format(dimension)] = np.nan
-				metadata["u_pos{0}".format(dimension)] = np.nan
-				metadata["u_neg_{0}".format(dimension)] = np.nan
+			try: all_results
+			except NameError:
+				# Cannot add to results because we don't know all the model dimensions. We must continue
+				# until we find one result that works
+				continue
+			else:
+				row = np.core.records.fromrecords([[metadata[key].get(key, np.nan) for key in metadata_columns]],
+					dtype=all_results.dtype)
+				all_results = np.append(all_results, row)
 
 		else:
 			# Save information related to the analysis
@@ -134,6 +134,42 @@ def main():
 			with open(filename_prefix + ".results", "wb") as fp:
 				pickle.dump((posteriors, mean_acceptance_fractions), fp)
 
+			try: metadata_columns
+			except NameError:
+				# Headers first
+				metadata_columns = [] + header_columns
+
+				# Dimensions (w/ uncertainties)
+				for column in model.colnames:
+					metadata_columns.append(column)
+					for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
+						metadata_columns.append(prefix + column)
+
+				# Nusiance parameters (w/ uncertainties)
+				nusiance_columns = scope.utils.unique_preserved_list(model.colnames + model.dimensions)[len(model.colnames):]
+				for column in nusiance_columns:
+					metadata_columns.append(column)
+					for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
+						metadata_columns.append(prefix + column)
+
+				# Time elapsed, model
+				metadata_columns.extend(["time_elapsed", "model", "filenames"])
+				metadata_formats = [("f8", "|S1024")[isinstance(metadata[key], str)] for key in metadata_columns]
+
+				all_results = np.core.records.fromrecords([[metadata[key] for key in metadata_columns]],
+					names=metadata_columns, formats=metadata_formats)
+
+			else:
+				row = np.core.records.fromrecords([[metadata[key].get(key, np.nan) for key in metadata_columns]],
+					dtype=all_results.dtype)
+				all_results = np.append(all_results, row)
+
+			# Write results to filename	
+			primary_hdu = pyfits.PrimaryHDU()
+			table_hdu = pyfits.BinTableHDU(all_results)
+			hdulist = pyfits.HDUList([primary_hdu, table_hdu])
+			hdulist.writeto(os.path.join(args.output_dir, "scope-results.fits"), clobber=True)
+
 			# Plot results
 			if args.plotting:
 
@@ -142,7 +178,7 @@ def main():
 				ax = fig.add_subplot(111)
 				ax.plot(mean_acceptance_fractions)
 				ax.set_xlabel("Iterations")
-				ax.set_ylabel("$\langle{}f_a\rangle$")
+				ax.set_ylabel("$\langle{}f_a\\rangle$")
 				fig.savefig(filename_prefix + "-acceptance.pdf")
 
 				ndim = sampler.chain.shape[-1]
@@ -179,43 +215,6 @@ def main():
 
 				# Closing the figures isn't enough; matplotlib leaks memory
 				plt.close("all")
-
-
-		# Save the metadata to the results list
-		if i == 0:
-
-			# Headers first
-			metadata_columns = [] + header_columns
-
-			# Dimensions (w/ uncertainties)
-			for column in model.colnames:
-				metadata_columns.append(column)
-				for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
-					metadata_columns.append(prefix + column)
-
-			# Nusiance parameters (w/ uncertainties)
-			nusiance_columns = scope.utils.unique_preserved_list(model.colnames + model.dimensions)[len(model.colnames):]
-			for column in nusiance_columns:
-				metadata_columns.append(column)
-				for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
-					metadata_columns.append(prefix + column)
-
-			# Time elapsed, model
-			metadata_columns.extend(["time_elapsed", "model", "filenames"])
-
-			metadata_formats = [("f8", "|S1024")[isinstance(metadata[key], str)] for key in metadata_columns]
-			all_results = np.core.records.fromrecords([[metadata[key] for key in metadata_columns]],
-				names=metadata_columns, formats=metadata_formats)
-
-		else:
-			row = np.core.records.fromrecords([[metadata[key] for key in metadata_columns]], dtype=all_results.dtype)
-			all_results = np.append(all_results, row)
-
-		# Save all results thus far to a fits file	
-		primary_hdu = pyfits.PrimaryHDU()
-		table_hdu = pyfits.BinTableHDU(all_results)
-		hdulist = pyfits.HDUList([primary_hdu, table_hdu])
-		hdulist.writeto(os.path.join(args.output_dir, "scope-results.fits"), clobber=True)
 
 if __name__ == "__main__":
 	main()
