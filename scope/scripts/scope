@@ -71,7 +71,6 @@ def main():
 
 	# For each spectra, analyse
 	for i, spectra in enumerate(all_spectra):
-
 		# Create metadata and put header information in
 		metadata = {}
 		header_columns = []
@@ -99,7 +98,7 @@ def main():
 				# until we find one result that works
 				continue
 			else:
-				row = np.core.records.fromrecords([[metadata[key].get(key, np.nan) for key in metadata_columns]],
+				row = np.core.records.fromrecords([[metadata.get(key, np.nan) for key in metadata_columns]],
 					dtype=all_results.dtype)
 				all_results = np.append(all_results, row)
 
