@@ -27,6 +27,7 @@ def main():
 	parser.add_argument("spectra", nargs="+", help="filenames of spectra to analyse")
 	parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
 		type=str, default=os.getcwd())
+	parser.add_argument("--pre-load", dest="pre_load", action="store_true", default=False)
 	parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
 	parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
 	parser.add_argument("--debug", dest="debug", action="store_true", default=False)
@@ -61,11 +62,17 @@ def main():
 	else:
 		all_spectra = [all_spectra]
 
+	# Load the model
+	model = scope.Model(args.model)
+	if args.pre_load:
+		logging.info("Pre-loading model fluxes (get yourself a coffee)...")
+		model.pre_load()
+
 	# Define headers that we want in the results filename 
 	default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
 		"MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE", "UTEND", "UTSTART", )
 	default_metadata = {
-		"model": "",
+		"model": md5(json_dumps(model.configuration).encode("utf-8")).hexdigest(),
 		"filenames": ", ".join(args.spectra)
 	}
 
@@ -86,7 +93,7 @@ def main():
 
 		try:
 			t_init = time()
-			posteriors, sampler, model, mean_acceptance_fractions = scope.solve(spectra, args.model)
+			posteriors, sampler, mean_acceptance_fractions = scope.solve(spectra, model)
 
 		except:
 			logging.exception("Failed to analyse #{0}:".format(i))
@@ -105,7 +112,6 @@ def main():
 		else:
 			# Save information related to the analysis
 			metadata.update({
-				"model": md5(json_dumps(model.configuration).encode("utf-8")).hexdigest(),
 				"time_elapsed": int(time() - t_init)
 			})
 
