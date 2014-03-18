@@ -123,7 +123,7 @@ def initialise_priors(model, observations):
                     possible_points = model.grid_points[:, index]
 
                     if i == 0: # Only print initialisation for the first walker
-                        logging.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
+                        logger.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
                             dimension, np.min(possible_points), np.max(possible_points)))
                     current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
 
@@ -131,7 +131,7 @@ def initialise_priors(model, observations):
                     mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
                     if i == 0: # Only print initialisation for the first walker
-                        logging.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
+                        logger.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
                             dimension, mu, sigma))
                     current_walker.append(random.normal(mu, sigma))
 
@@ -139,7 +139,7 @@ def initialise_priors(model, observations):
                     minimum, maximum = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
                     if i == 0: # Only print initialisation for the first walker
-                        logging.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
+                        logger.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
                             dimension, minimum, maximum))
                     current_walker.append(random.uniform(minimum, maximum))
 
@@ -206,13 +206,13 @@ def initialise_priors(model, observations):
     raise a
     """
 
-    logging.info("Priors summary:")
+    logger.info("Priors summary:")
     for i, dimension in enumerate(model.dimensions):
         if len(walker_priors.shape) > 1 and walker_priors.shape[1] > 1:
-            logging.info("\tParameter {0} - mean: {1:.2e}, min: {2:.2e}, max: {3:.2e}".format(
+            logger.info("\tParameter {0} - mean: {1:.2e}, min: {2:.2e}, max: {3:.2e}".format(
                 dimension, np.mean(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
         else:
-            logging.info("\tParameter {0} - initial point: {1:.2e}".format(
+            logger.info("\tParameter {0} - initial point: {1:.2e}".format(
                 dimension, walker_priors[i]))
 
     return walker_priors
@@ -260,7 +260,7 @@ def log_likelihood(theta, model, observations):
 
     blob = list(theta)
     if not np.isfinite(log_prior(theta, model)):
-        logging.debug("Returning -inf log-likelihood because log-prior was -inf")
+        logger.debug("Returning -inf log-likelihood because log-prior was -inf")
         return (-np.inf, blob + [-np.inf])
 
     parameters = dict(zip(model.dimensions, theta))
@@ -268,13 +268,13 @@ def log_likelihood(theta, model, observations):
     # Prepare the observed spectra: radial velocity shift? normalisation?
     observed_spectra = model.observed_spectra(observations, **parameters)
     if observed_spectra is None:
-        logging.debug("Returning -inf log-likelihood because modified observed spectra is invalid")
+        logger.debug("Returning -inf log-likelihood because modified observed spectra is invalid")
         return (-np.inf, blob + [-np.inf])
 
     # Prepare the model spectra: smoothing? re-sample to observed dispersion?
     model_spectra = model.model_spectra(observations=observed_spectra, **parameters)
     if model_spectra is None:
-        logging.debug("Returning -inf log-likelihood because modified model spectra is invalid")
+        logger.debug("Returning -inf log-likelihood because modified model spectra is invalid")
         return (-np.inf, blob + [-np.inf])
 
     # Any masks?
@@ -305,7 +305,7 @@ def log_likelihood(theta, model, observations):
         # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
         useful_pixels = positive_finite_chisq_indices * positive_finite_flux_indices
         if sum(useful_pixels) == 0:
-            logging.debug("Returning -np.inf log-likelihood because there were no useful pixels")
+            logger.debug("Returning -np.inf log-likelihood because there were no useful pixels")
             return (-np.inf, blob + [-np.inf])
 
         chi_sqs[aperture] = np.sum(chi_sq[useful_pixels]) - np.sum(np.log(inverse_variance[useful_pixels]))
@@ -375,7 +375,7 @@ def solve(observed_spectra, model, initial_guess=None):
         # Initialise priors and set up arguments for optimization
         p0 = initialise_priors(model, observed_spectra)
 
-        logging.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(
+        logger.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(
             nwalkers, ", ".join(model.dimensions)))
 
         # Initialise the sampler
@@ -393,11 +393,11 @@ def solve(observed_spectra, model, initial_guess=None):
             mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
 
             # Announce progress
-            logging.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
+            logger.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
                 fraction_complete * 100, i + 1, mean_acceptance_fractions[i]))
 
             if mean_acceptance_fractions[i] == 0:
-                logging.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
+                logger.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
 
         sampler.reset()
@@ -412,16 +412,16 @@ def solve(observed_spectra, model, initial_guess=None):
             mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
 
             # Announce progress
-            logging.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
+            logger.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
                 fraction_complete * 100, i + j + 2, mean_acceptance_fractions[i + j + 1]))
 
             if mean_acceptance_fractions[i + j + 1] == 0:
-                logging.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
+                logger.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
 
 
         # Convert state to posteriors
-        logging.info("The final mean acceptance fraction is {0:.3f}".format(
+        logger.info("The final mean acceptance fraction is {0:.3f}".format(
             mean_acceptance_fractions[-1]))
 
         # Blobs contain all the sampled parameters and likelihoods        
