@@ -191,7 +191,7 @@ def main():
 			# Plot results
 			if args.plotting:
 
-				# Make a corner plot
+				# Plot the mean acceptance fractions
 				fig = plt.figure()
 				ax = fig.add_subplot(111)
 				ax.plot(mean_acceptance_fractions)
@@ -199,10 +199,17 @@ def main():
 				ax.set_ylabel("$\langle{}f_a\\rangle$")
 				fig.savefig(filename_prefix + "-acceptance.pdf")
 
+				# Make a corner plot
 				ndim = sampler.chain.shape[-1]
 				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"]):, :],
 					labels=scope.utils.latexify(model.dimensions), extents=[0.99]*len(model.dimensions))
 				fig.savefig(filename_prefix + "-corner.pdf")
+
+				# Make another corner plot with just the parameters of interest
+				indices = np.array([model.dimensions.index(dimension) for dimension in model.colnames])
+				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"]):, indices],
+					labels=scope.utils.latexify(model.colnames), extents=[0.99]*len(model.colnames))
+				fig.savefig(filename_prefix + "-corner-2.pdf")
 
 				# Get the most probable spectra
 				me_index = np.argmax(blobs[:, -1])
