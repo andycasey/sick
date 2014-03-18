@@ -43,7 +43,7 @@ def main():
 		# Import plotting dependencies 
 		import matplotlib as mpl
 		mpl.use("Agg")
-		
+
 		import matplotlib.pyplot as plt
 		import triangle
 
@@ -207,6 +207,32 @@ def main():
 					ax = fig.add_subplot(len(spectra), 1, i+1)
 
 					modelled_aperture = me_model_spectra[aperture]
+					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b')
+					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k')
+
+					# Get the full boundaries
+					if "masks" in model.configuration and aperture in model.configuration["masks"]:
+						full_extent = \
+							(np.min(model.configuration["masks"][aperture]), np.max(model.configuration["masks"][aperture]))
+
+						ax.set_xlim(full_extent)
+
+					ax.set_ylim(0.6, 1.2)
+
+				fig.savefig(filename_prefix + "-ml-spectra.pdf")
+
+				# Get the 50th quantile parameters
+				mid_parameters = dict(zip(posteriors.keys(), [posteriors[k][0] for k in posteriors.keys()]))
+				
+				mid_observed_spectra = model.observed_spectra(spectra, **mid_parameters)
+				mid_modelled_spectra = model.model_spectra(observations=mid_observed_spectra, **mid_parameters)
+
+				fig = plt.figure()
+				for i, (aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, mid_observed_spectra)):
+
+					ax = fig.add_subplot(len(spectra), 1, i+1)
+
+					modelled_aperture = mid_modelled_spectra[aperture]
 					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b')
 					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k')
 
