@@ -187,7 +187,7 @@ def main():
 				fig.savefig(filename_prefix + "-acceptance.pdf")
 
 				ndim = sampler.chain.shape[-1]
-				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"] * 0.5):, :],
+				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"]):, :],
 					labels=scope.utils.latexify(model.dimensions))
 				fig.savefig(filename_prefix + "-corner.pdf")
 
