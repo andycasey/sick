@@ -14,14 +14,13 @@ import os
 import numpy as np
 import pyfits
 
-from scipy import interpolate, ndimage, polyfit, poly1d
+from scipy import interpolate, ndimage
 from scipy.optimize import leastsq
 
 __all__ = ["Spectrum1D", "Spectrum"]
 
 # The following line of code will be supported until the end of the universe.
 speed_of_light = 299792458e-3 # km/s
-
 
 class Spectrum(object):
     """A class to deal with loading lots of different types of spectra"""
@@ -47,11 +46,13 @@ class Spectrum(object):
         raise IOError("could not interpret spectrum in {0}".format(filename))
 
 
-
 class Spectrum1D(object):
     """This is a temporary class holder for a Spectrum1D object until the
     astropy.specutils.Spectrum1D module has advanced sufficiently to replace it."""
     
+    headers = {}
+    uncertainty = None
+
     def __init__(self, disp, flux, uncertainty=None, headers=None):
         """Initializes a `Spectrum1D` object with the given dispersion and flux
         arrays.
@@ -71,23 +72,22 @@ class Spectrum1D(object):
         if len(disp) != len(flux):
             raise ValueError("dispersion and flux must have the same length")
 
-        if 0 in map(len, [disp, flux]):
+        if len(disp) == 0:
             raise ValueError("dispersion and flux cannot be empty arrays")
         
         self.disp = disp
         self.flux = flux
         self.uncertainty = uncertainty
-        self.headers = headers
-        
+        if headers is not None:
+            self.headers = headers
+
         return None
 
     def copy(self):
         """ Creates a copy of the object """
 
-        headers = None if self.headers is None else self.headers.copy()
-        uncertainty = None if self.uncertainty is None else self.uncertainty.copy()
         return self.__class__(self.disp.copy(), self.flux.copy(),
-            uncertainty=uncertainty, headers=headers)
+            uncertainty=self.uncertainty, headers=self.headers)
     
     @classmethod
     def load(cls, filename, **kwargs):
@@ -292,24 +292,18 @@ class Spectrum1D(object):
         Inputs
         ------
         fwhm : float
-            The FWHM of the Gaussian kernel to smooth with.
+            The FWHM of the Gaussian kernel to smooth with (Angstroms).
         """
-
-
 
         profile_sigma = abs(fwhm) / (2 * (2*np.log(2))**0.5)
         
         # The requested FWHM is in Angstroms, but the dispersion between each
         # pixel is likely less than an Angstrom, so we must calculate the true
         # smoothing value
-        
         true_profile_sigma = profile_sigma / np.mean(np.diff(self.disp))
         smoothed_flux = ndimage.gaussian_filter1d(self.flux, true_profile_sigma, **kwargs)
         
-        return self.__class__(
-            self.disp,
-            smoothed_flux,
-            uncertainty=self.uncertainty,
+        return self.__class__(self.disp, smoothed_flux, uncertainty=self.uncertainty,
             headers=self.headers)
         
 
@@ -323,18 +317,12 @@ class Spectrum1D(object):
             The velocity (in km/s) to correct the `Spectrum1D` object by.
         """
         
-        new_disp = self.disp * np.sqrt((1 + velocity/speed_of_light)/(1 - velocity/speed_of_light))
-        #new_disp = (self.disp * (1 + velocity/speed_of_light))/np.sqrt(1 - velocity**2/speed_of_light**2)
-            
-        return self.__class__(
-            new_disp,
-            self.flux,
-            uncertainty=self.uncertainty,
-            headers=self.headers)
+        new_disp = self.disp * (1 + velocity/speed_of_light)
+        return self.__class__(new_disp, self.flux, uncertainty=self.uncertainty, headers=self.headers)
 
     
     def interpolate(self, new_disp, mode='linear', bounds_error=False,
-                    fill_value=np.nan):
+        fill_value=np.nan):
         """Interpolate the `Spectrum1D` onto a new dispersion map.
         
         Inputs
@@ -354,24 +342,10 @@ class Spectrum1D(object):
         """
         
         f = interpolate.interp1d(self.disp, self.flux, kind=mode, copy=False,
-                                 bounds_error=bounds_error, fill_value=fill_value)
+                bounds_error=bounds_error, fill_value=fill_value)
 
-        if self.uncertainty is not None:
-            # Probably not the 'right' thing to do, but to a first approximation..
-            f_u = interpolate.interp1d(self.disp, self.uncertainty, kind=mode, copy=False,
-                                       bounds_error=bounds_error, fill_value=fill_value)
-
-            uncertainty = f_u(new_disp)
-
-        else:
-            uncertainty = None
-
-        return self.__class__(
-            new_disp,
-            f(new_disp),
-            uncertainty=uncertainty,
-            headers=self.headers
-            )
+        return self.__class__(new_disp, f(new_disp), uncertainty=self.uncertainty,
+            headers=self.headers)
 
 
     def cross_correlate(self, template, wl_region, full_output=False):
@@ -486,224 +460,6 @@ class Spectrum1D(object):
             return results
 
         return [measured_vrad, measured_verr]
-
-
-    def fit_continuum(self, knot_spacing=200, lower_clip=1.0, upper_clip=0.20, \
-                      max_iterations=3, order=3, exclude=None, include=None, \
-                      additional_points=None, function='spline', scale=1.0, **kwargs):
-        """Fits the continuum for a given `Spectrum1D` spectrum.
-        
-        Inputs
-        ------
-        knot_spacing : float or None, optional
-            The knot spacing for the continuum spline function in Angstroms. Optional.
-            If not provided then the knot spacing will be determined automatically.
-        
-        lower_clip : float, optional
-            This is the lower sigma clipping level. Optional.
-
-        upper_clip : float, optional
-            This is the upper sigma clipping level. Optional.
-            
-        max_iterations : int, optional
-            Maximum number of spline-fitting operations.
-            
-        order : int, optional
-            The order of the spline function to fit.
-            
-        exclude : list of tuple-types containing floats, optional
-            A list of wavelength regions to always exclude when determining the
-            continuum. Example:
-            
-            >> exclude = [
-            >>    (3890.0, 4110.0),
-            >>    (4310.0, 4340.0)
-            >>  ]
-            
-            In the example above the regions between 3890 A and 4110 A, as well as
-            4310 A to 4340 A will always be excluded when determining the continuum
-            regions.
-
-        function: only 'spline' or 'poly'
-
-        scale : float
-            A positive scaling factor to apply to the normalised flux levels.
-            
-        include : list of tuple-types containing floats, optional
-            A list of wavelength regions to always include when determining the
-            continuum.
-        """
-
-        logging.debug("fit_continuum({self}, {function}, {knot_spacing}, {sigma_clip}, {iter}, {order}, {scale})".format(self=self,function=function,knot_spacing=knot_spacing,sigma_clip=(lower_clip,upper_clip), iter=max_iterations,order=order,scale=scale))
-        
-        scale = abs(scale)
-
-        exclusions = []
-        continuum_indices = range(len(self.flux))
-
-        # Snip left and right
-        finite_positive_flux = np.isfinite(self.flux) * self.flux > 0
-
-        #print "finite flux", np.any(finite_positive_flux), finite_positive_flux
-        #print "where flux", np.where(finite_positive_flux)
-        #print "flux is...", self.flux
-        left_index = np.where(finite_positive_flux)[0][0]
-        right_index = np.where(finite_positive_flux)[0][-1]
-
-        # See if there are any regions we need to exclude
-        if exclude is not None and len(exclude) > 0:
-            exclude_indices = []
-            
-            if isinstance(exclude[0], float) and len(exclude) == 2:
-                # Only two floats given, so we only have one region to exclude
-                exclude_indices.extend(range(*np.searchsorted(self.disp, exclude)))
-                
-            else:
-                # Multiple regions provided
-                for exclude_region in exclude:
-                    exclude_indices.extend(range(*np.searchsorted(self.disp, exclude_region)))
-        
-            continuum_indices = np.sort(list(set(continuum_indices).difference(exclude_indices)))
-        
-        # See if there are any regions we should always include
-        if include is not None and len(include) > 0:
-            include_indices = []
-            
-            if isinstance(include[0], float) and len(include) == 2:
-                # Only two floats given, so we can only have one region to include
-                include_indices.extend(range(*np.searchsorted(self.disp, include)))
-                
-            else:
-                # Multiple regions provided
-                for include_region in include:
-                    include_indices.extend(range(*np.searchsorted(self.disp, include_region)))
-        
-
-        # We should exclude non-finite numbers from the fit
-        non_finite_indices = np.where(~np.isfinite(self.flux))[0]
-        continuum_indices = np.sort(list(set(continuum_indices).difference(non_finite_indices)))
-
-        # We should also exclude zero or negative flux points from the fit
-        zero_flux_indices = np.where(0 >= self.flux)[0]
-        continuum_indices = np.sort(list(set(continuum_indices).difference(zero_flux_indices)))
-
-        if knot_spacing is None or knot_spacing == 0:
-            knots = []
-
-        else:
-            knot_spacing = abs(knot_spacing)
-            
-            end_spacing = ((self.disp[-1] - self.disp[0]) % knot_spacing) /2.
-        
-            if knot_spacing/2. > end_spacing: end_spacing += knot_spacing/2.
-                
-            knots = np.arange(self.disp[0] + end_spacing, self.disp[-1] - end_spacing + knot_spacing, knot_spacing)
-            if len(knots) > 0 and knots[-1] > self.disp[continuum_indices][-1]:
-                knots = knots[:knots.searchsorted(self.disp[continuum_indices][-1])]
-                
-            if len(knots) > 0 and knots[0] < self.disp[continuum_indices][0]:
-                knots = knots[knots.searchsorted(self.disp[continuum_indices][0]):]
-
-
-        for iteration in xrange(max_iterations):
-            
-            splrep_disp = self.disp[continuum_indices]
-            splrep_flux = self.flux[continuum_indices]
-
-            splrep_weights = np.ones(len(splrep_disp))
-
-            # We need to add in additional points at the last minute here
-            if additional_points is not None and len(additional_points) > 0:
-
-                for point, flux, weight in additional_points:
-
-                    # Get the index of the fit
-                    insert_index = np.searchsorted(splrep_disp, point)
-                    
-                    # Insert the values
-                    splrep_disp = np.insert(splrep_disp, insert_index, point)
-                    splrep_flux = np.insert(splrep_flux, insert_index, flux)
-                    splrep_weights = np.insert(splrep_weights, insert_index, weight)
-
-
-
-            if function == 'spline':
-                order = 5 if order > 5 else order
-                
-
-                tck = interpolate.splrep(splrep_disp, \
-                                         splrep_flux, \
-                                         k=order, task=-1, t=knots, w=splrep_weights)
-
-                continuum = interpolate.splev(self.disp, tck)
-
-            elif function == 'poly':
-            
-                p = poly1d(polyfit(splrep_disp, splrep_flux, order))
-                continuum = p(self.disp)
-
-            else:
-                raise ValueError("Unknown function type: only spline or poly available")
-            
-
-            difference = continuum - self.flux
-        
-            #n = 100./np.median(np.diff(self.disp))
-            #n = 100
-            #convolved_flux = np.convolve(self.flux, np.ones(n)/n)
-            #sigma_difference = (difference - np.median(difference)) / np.std(difference)
-            sigma_difference = difference / np.std(difference)
-
-            # Clip 
-            upper_exclude = np.where(sigma_difference > abs(upper_clip))[0]
-            lower_exclude = np.where(sigma_difference < -abs(lower_clip))[0]
-            
-            exclude_indices = list(upper_exclude)
-            exclude_indices.extend(lower_exclude)
-            exclude_indices = np.array(exclude_indices)
-            
-            if len(exclude_indices) is 0: break
-            
-            exclusions.extend(exclude_indices)
-            
-            # Before excluding anything, we must check to see if there are regions
-            # which we should never exclude
-            if include is not None:
-                exclude_indices = set(exclude_indices).difference(include_indices)
-            
-            # Remove regions that have been excluded
-            continuum_indices = np.sort(list(set(continuum_indices).difference(exclude_indices)))
-        
-        #return self.__class__(disp=self.disp, flux=continuum, headers=self.headers)
-        
-        # Snip the edges based on exclude regions
-        if exclude is not None:
-
-            for exclude_region in exclude:
-
-                start, end = np.searchsorted(self.disp, exclude_region)
-
-                if end >= right_index > start:
-                    # Snip the edge
-                    right_index = start
-
-                if end > left_index >= start:
-                    # Snip the edge
-                    left_index = end
-
-        # Apply flux scaling
-        continuum *= scale
-
-        normalised = self.__class__(
-            disp=self.disp[left_index:right_index],
-            flux=(self.flux/continuum)[left_index:right_index],
-            uncertainty=self.uncertainty[left_index:right_index] if self.uncertainty is not None else None,
-            headers=self.headers)
-
-        continuum = self.__class__(disp=self.disp[left_index:right_index], flux=continuum[left_index:right_index])
-
-        return (normalised, continuum)
-
 
 
 def load_aaomega_multispec(filename, fill_value=-1):

@@ -825,7 +825,7 @@ class Model(object):
             if self.configuration["doppler_shift"][aperture]["perform"]:
 
                 velocity = kwargs["doppler_shift.{0}".format(aperture)]
-                modified_spectrum = modified_spectrum.doppler_shift(velocity)
+                modified_spectrum = modified_spectrum.doppler_shift(-velocity)
 
             modified_spectra.append(modified_spectrum)
 
