@@ -325,7 +325,7 @@ def log_likelihood(theta, model, observations):
     return (likelihood, blob + [likelihood])
 
 
-def solve(observed_spectra, model_filename, initial_guess=None):
+def solve(observed_spectra, model, initial_guess=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
 
@@ -343,14 +343,14 @@ def solve(observed_spectra, model_filename, initial_guess=None):
         raise ValueError("observed apertures cannot overlap in wavelength, but"
             " they do near {wavelength} Angstroms".format(wavelength=overlap))
 
-    # Load our model
-    model = models.Model(model_filename)
+    # Load our model if necessary
+    if not isinstance(model, models.Model):
+        model = models.Model(model)
 
     # Get the aperture mapping from observed spectra to model spectra
     # For example, which index in our list of spectra corresponds to
     # 'blue', or 'red' in our model 
     aperture_mapping = model.map_apertures(observed_dispersions)
-
     
     # Make fmin_powell the default
     if model.configuration["solver"].get("method", "powell") == "powell":
