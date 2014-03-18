@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-""" Script to run SCOPE from the command line """
+""" Infer stellar parameters from spectra """
 
 from __future__ import division, print_function
 
@@ -27,6 +27,7 @@ def main():
 	parser.add_argument("spectra", nargs="+", help="filenames of spectra to analyse")
 	parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
 		type=str, default=os.getcwd())
+	parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0)
 	parser.add_argument("--pre-load", dest="pre_load", action="store_true", default=False)
 	parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
 	parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
@@ -62,12 +63,11 @@ def main():
 
 		all_spectra = sorted_spectra
 
-	else:
-		all_spectra = [all_spectra]
 
 	# Load the model
 	model = scope.Model(args.model)
 	if args.pre_load:
+		logging.info("Model information: {0}".format(model))
 		logging.info("Pre-loading model fluxes (get yourself a coffee)...")
 		model.pre_load()
 
@@ -82,6 +82,12 @@ def main():
 	# For each spectra, analyse
 	for i, spectra in enumerate(all_spectra):
 		# Create metadata and put header information in
+		if args.skip > i:
+			logging.info("Skipping star #{0}".format(i))
+
+		if not isinstance(spectra, (list, tuple)):
+			spectra = [spectra]
+
 		metadata = {}
 		header_columns = []
 		bluest_spectrum = spectra[0] if isinstance(spectra, list) else spectra
@@ -119,7 +125,11 @@ def main():
 			})
 
 			# Update results with the posteriors
+			logging.info("Posteriors:")
 			for dimension, (posterior_value, pos_uncertainty, neg_uncertainty) in posteriors.iteritems():
+				logging.info("\t{0:15s}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension, posterior_value,
+					pos_uncertainty, neg_uncertainty))
+
 				metadata.update({
 					dimension: posterior_value,
 					"u_maxabs_{0}".format(dimension): np.abs([neg_uncertainty, pos_uncertainty]).max(),
@@ -191,7 +201,7 @@ def main():
 
 				ndim = sampler.chain.shape[-1]
 				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"]):, :],
-					labels=scope.utils.latexify(model.dimensions))
+					labels=scope.utils.latexify(model.dimensions), extents=[0.99]*len(model.dimensions))
 				fig.savefig(filename_prefix + "-corner.pdf")
 
 				# Get the most probable spectra
@@ -207,6 +217,9 @@ def main():
 					ax = fig.add_subplot(len(spectra), 1, i+1)
 
 					modelled_aperture = me_model_spectra[aperture]
+					modelled_aperture.save(filename_prefix + "-me-modelled-{0}.fits".format(aperture))
+					observed_aperture.save(filename_prefix + "-me-observed-{0}.fits".format(aperture))
+
 					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b')
 					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k')
 
@@ -233,6 +246,9 @@ def main():
 					ax = fig.add_subplot(len(spectra), 1, i+1)
 
 					modelled_aperture = mid_modelled_spectra[aperture]
+					modelled_aperture.save(filename_prefix + "-mean-modelled-{0}.fits".format(aperture))
+					observed_aperture.save(filename_prefix + "-mean-observed-{0}.fits".format(aperture))
+
 					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b')
 					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k')
 
