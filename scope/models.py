@@ -431,6 +431,23 @@ class Model(object):
         return dimensions
 
 
+    def pre_load(self):
+        """ Pre loads all spectra to an interpolator for future speedyness. """
+
+        if isinstance(self.flux_filenames, dict):
+            raise NotImplementedError
+
+        else:
+            n_models = len(self.flux_filenames)
+            n_flux_points = len(load_model_data(self.flux_filenames[0]))
+            flux = np.empty((n_models, n_flux_points))
+            for i, filename in enumerate(self.flux_filenames):
+                flux[i, :] = load_model_data(filename)
+
+            self._interpolator = interpolate.LinearNDInterpolator(self.grid_points, flux)
+
+        return True
+
 
     def cache(self, kernel, threads=None, **kwargs):
         """ Pre-convolve the model fluxes and save their convolved flux to memory-mapped
@@ -562,37 +579,51 @@ class Model(object):
             if beam not in self.dispersion.keys():
                 raise ValueError("could not find '{beam}' beam".format(beam=beam))
 
-        #k = 2*(len(self.colnames)**2)
-        """
-        n, indices = 1, []
-        while 2**len(self.colnames) > len(indices):
+        if hasattr(self, "_interpolator"):
+            interpolated_flux = {}
+            interpolated_flux[beams[0]] = self._interpolator(*point)
+            return interpolated_flux
+
+        try_n = [1, 2, 3]
+        for n in try_n:
+
             indices = self.get_nearest_neighbours(point, n=n)
-            n += 1
-            
-            if n > 4 or len(indices) > self.colnames*(2**len(self.colnames)):
-                raise ValueError("hit hard limit")
-        """
-        indices = self.get_nearest_neighbours(point, n=1)
+            print("got {0} with {1}".format(len(indices), n))
+            if len(indices) == len(self.grid_points):
+                print("failed hit hard limit")
+                raise ValueError("could not interpolate flux point -- hard limit hit")
 
-        interpolated_flux = {}
-        for beam in beams:
+            failed = False
+            interpolated_flux = {}
+            for beam in beams:
+                print("trying beam {0}".format(beam))
+                beam_flux = np.zeros((len(indices), len(self.dispersion[beam])))
+                beam_flux[:] = np.nan
 
-            beam_flux = np.zeros((len(indices), len(self.dispersion[beam])))
-            beam_flux[:] = np.nan
+                # Load the flux points
+                flux_data = self.flux_filenames if len(self.dispersion.keys()) == 1 else self.flux_filenames[beam]
+                for i, index in enumerate(indices):
+                    beam_flux[i, :] = load_model_data(flux_data[index])
+                
+                try:
+                    interpolated_flux[beam] = interpolate.griddata(
+                        self.grid_points[indices], beam_flux, [point], **kwargs).flatten()
 
-            # Load the flux points
-            flux_data = self.flux_filenames if len(self.dispersion.keys()) == 1 else self.flux_filenames[beam]
-            for i, index in enumerate(indices):
-                beam_flux[i, :] = load_model_data(flux_data[index])
-            
-            try:
-                interpolated_flux[beam] = interpolate.griddata(
-                    self.grid_points[indices], beam_flux, [point], **kwargs).flatten()
+                except:
+                    print("failed in {0} arm".format(beam))
 
-            except:
-                raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
+                    failed = True
+                    if n == try_n[-1]:
+                        print("breaking out")
+                        raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
 
-        return interpolated_flux
+                    break
+
+            if failed:
+                continue
+
+            print("worked!")
+            return interpolated_flux
 
 
     def map_apertures(self, observed_dispersions):
