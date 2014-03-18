@@ -319,7 +319,7 @@ def log_likelihood(theta, model, observations):
 
     likelihood = -0.5 * np.sum(chi_sqs.values())
 
-    logger.info("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
+    logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
    
     return (likelihood, blob + [likelihood])
@@ -408,14 +408,14 @@ def solve(observed_spectra, model, initial_guess=None):
             p0, lnprob0=lnprob0, rstate0=rstate0,
             iterations=model.configuration["solver"]["sample"])):
 
-            fraction_complete = (i + j + 1)/nsteps
-            mean_acceptance_fractions[i + j] = np.mean(sampler.acceptance_fraction)
+            fraction_complete = (i + j + 2)/nsteps
+            mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
 
             # Announce progress
             logging.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
-                fraction_complete * 100, i + j + 1, mean_acceptance_fractions[i + j]))
+                fraction_complete * 100, i + j + 2, mean_acceptance_fractions[i + j + 1]))
 
-            if mean_acceptance_fractions[i + j] == 0:
+            if mean_acceptance_fractions[i + j + 1] == 0:
                 logging.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
 
