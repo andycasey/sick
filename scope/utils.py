@@ -18,6 +18,7 @@ def latexify(labels, overwrite_common_labels=None):
         "teff": "$T_{eff}$ [K]",
         "feh": "[Fe/H]",
         "logg": "$\log{g}$",
+        "alpha": "[$\alpha$/Fe]",
         "jitter": "$\delta$"
     }
 
@@ -29,7 +30,11 @@ def latexify(labels, overwrite_common_labels=None):
 
         if label in common_labels.keys():
             latex_labels.append(common_labels[label])
-          
+        
+        elif label.startswith("jitter."):
+            aperture = label.split(".")[1]
+            latex_labels.append("$\delta_{{{0}}}$".format(aperture))
+
         elif label.startswith("doppler_shift."):
             aperture = label.split(".")[1]
             latex_labels.append("$V_{{{0}}}$ [km/s]".format(aperture))
