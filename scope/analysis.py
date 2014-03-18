@@ -448,7 +448,7 @@ def solve(observed_spectra, model, initial_guess=None):
             map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), zip(*np.percentile(sampled, [16, 50, 84], axis=0)))):
             posteriors[parameter_name] = (me_parameters[parameter_name], quantile_16, quantile_84)
 
-        return (posteriors, sampler, model, mean_acceptance_fractions) 
+        return (posteriors, sampler, mean_acceptance_fractions) 
 
             
     else:
