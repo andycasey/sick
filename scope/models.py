@@ -24,8 +24,11 @@ from utils import human_readable_digit
 from specutils import Spectrum1D
 
 
-__all__ = ['Model', 'load_model_data']
+__all__ = ['Model', 'load_model_data', "_scope_interpolator_"]
 
+# This is a hacky global variable that is used for when pre-loading and
+# multiprocessing are employed
+_scope_interpolator_ = None
 
 def load_model_data(filename, **kwargs):
     """Loads dispersion/flux values from a given filename. This can be either a 1-column ASCII
@@ -435,17 +438,39 @@ class Model(object):
         """ Pre loads all spectra to an interpolator for future speedyness. """
 
         if isinstance(self.flux_filenames, dict):
-            raise NotImplementedError
+
+            n_flux_points = np.zeros(len(self.dispersion_filenames.keys()))
+            for i, beam in enumerate(self.dispersion_filenames.keys()):
+                if i == 0:
+                    n_models = len(self.flux_filenames[beam])
+                n_flux_points[i] = len(load_model_data(self.flux_filenames[beam][0]))
+
+            flux = np.empty((n_models, sum(n_flux_points)))
+            for i, beam in enumerate(self.dispersion_filenames.keys()):
+
+                si, ei = map(sum, [n_flux_points[:i], n_flux_points[:i+1]])
+                flux[i, si:ei] = load_model_data(self.flux_filenames[beam][i])
+
+            # We will need this
+            self._beam_flux_points = n_flux_points
 
         else:
+            
             n_models = len(self.flux_filenames)
             n_flux_points = len(load_model_data(self.flux_filenames[0]))
+
+            # Load the flux
             flux = np.empty((n_models, n_flux_points))
             for i, filename in enumerate(self.flux_filenames):
                 flux[i, :] = load_model_data(filename)
 
-            self._interpolator = interpolate.LinearNDInterpolator(self.grid_points, flux)
+            self._beam_flux_points = np.array([n_flux_points])
 
+        # Create the interpolator
+        global _scope_interpolator_
+        _scope_interpolator_ = interpolate.LinearNDInterpolator(self.grid_points, flux)
+
+        self._pre_loaded = True
         return True
 
 
@@ -579,10 +604,16 @@ class Model(object):
             if beam not in self.dispersion.keys():
                 raise ValueError("could not find '{beam}' beam".format(beam=beam))
 
-        if hasattr(self, "_interpolator"):
-            interpolated_flux = {}
-            interpolated_flux[beams[0]] = self._interpolator(*point)
-            return interpolated_flux
+        if hasattr(self, "_pre_loaded"):
+
+            
+            interpolated_flux = _scope_interpolator_(*point)
+            interpolated_beams = {}
+            for i, beam in enumerate(beams):
+                si, ei = map(sum, [self._beam_flux_points[:i], self._beam_flux_points[:i+1]])
+                interpolated_beams[beam] = interpolated_flux[si:ei]
+
+            return interpolated_beams
 
         try_n = [1, 2, 3]
         for n in try_n:
