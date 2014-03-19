@@ -314,7 +314,7 @@ def log_likelihood(theta, model, observations):
         #> -2: Not interested in this region, and it was non-finite (not used).
         #> -1: Interested in this region, but it was non-finite (not used).
         #>  0: Not interested in this region, it was finite (not used).
-        #>  1: Interested in this region, it was finite (used for \chi^2 determination)
+        #>  1: Interested in this region, it was finite (used for parameter determination)
         masks[aperture][~useful_pixels] -= 2
 
     likelihood = -0.5 * np.sum(chi_sqs.values())
