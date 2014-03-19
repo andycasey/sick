@@ -56,7 +56,7 @@ In the usage example above, the ``model.yaml`` file contains all the model infor
 ````
 solver:
   method: emcee
-  nwalkers: 200
+  walkers: 200
   burn: 300
   sample: 200
   threads: 8

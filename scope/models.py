@@ -427,7 +427,7 @@ class Model(object):
                         for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
 
         # Append jitter dimension
-        if self.configuration["solver"].get("nwalkers", 1) > 1:
+        if self.configuration["solver"].get("walkers", 1) > 1:
             for aperture in useful_apertures:
                 dimensions.append("jitter.{0}".format(aperture))
         

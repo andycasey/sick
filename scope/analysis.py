@@ -30,9 +30,9 @@ def initialise_priors(model, observations):
     walker_priors = []
     initial_normalisation_coefficients = {}
 
-    nwalkers = model.configuration["solver"].get("nwalkers", 1)
+    walkers = model.configuration["solver"].get("walkers", 1)
 
-    for i in xrange(nwalkers):
+    for i in xrange(walkers):
 
         current_walker = []
         for j, dimension in enumerate(model.dimensions):
@@ -152,14 +152,14 @@ def initialise_priors(model, observations):
 
             else:
                 if i == 0: # Only print initialisation for the first walker
-                    logger_fn = logger.info if nwalkers == 1 else logger.warn
+                    logger_fn = logger.info if walkers == 1 else logger.warn
                     logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(
                         dimension, prior_value))
 
                 current_walker.append(prior_value)
 
         # Add the walker
-        if nwalkers == 1:
+        if walkers == 1:
             walker_priors = current_walker
         
         else:
@@ -381,7 +381,7 @@ def solve(observed_spectra, model, initial_guess=None):
     elif model.configuration["solver"]["method"] == "emcee":
 
         # Ensure we have the number of walkers and steps specified in the configuration
-        nwalkers, nsteps = model.configuration["solver"]["nwalkers"], \
+        walkers, nsteps = model.configuration["solver"]["walkers"], \
             model.configuration["solver"]["burn"] + model.configuration["solver"]["sample"]
 
         lnprob0, rstate0 = None, None
@@ -393,10 +393,10 @@ def solve(observed_spectra, model, initial_guess=None):
         p0 = initialise_priors(model, observed_spectra)
 
         logger.info("All priors initialsed for {0} walkers. Parameter names are: {1}".format(
-            nwalkers, ", ".join(model.dimensions)))
+            walkers, ", ".join(model.dimensions)))
 
         # Initialise the sampler
-        sampler = emcee.EnsembleSampler(nwalkers, len(model.dimensions), log_likelihood,
+        sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_likelihood,
             args=(model, observed_spectra), threads=threads)
 
         # BURN BABY BURN
@@ -444,7 +444,7 @@ def solve(observed_spectra, model, initial_guess=None):
         # Blobs contain all the sampled parameters and likelihoods        
         sampled = np.array(sampler.blobs).reshape((-1, len(model.dimensions) + 1))
 
-        sampled = sampled[-int(model.configuration["solver"]["nwalkers"] * model.configuration["solver"]["sample"]):]
+        sampled = sampled[-int(model.configuration["solver"]["walkers"] * model.configuration["solver"]["sample"]):]
         sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
 
         # Get the maximum estimate
