@@ -163,8 +163,8 @@ class Model(object):
             for i, aperture in enumerate(self.apertures):
 
                 # We will store the filenames and we will load and interpolate on the fly
-                folder = self.configuration["models"][aperture]["flux_folder"]
-                re_match = self.configuration["models"][aperture]["flux_filename_match"]
+                folder = self.configuration["model"][aperture]["flux_folder"]
+                re_match = self.configuration["model"][aperture]["flux_filename_match"]
 
                 all_filenames = glob(os.path.join(folder, "*"))
 
@@ -237,7 +237,7 @@ class Model(object):
 
     @property
     def apertures(self):
-        return self.configuration["models"].keys()
+        return self.configuration["model"].keys()
 
     def validate(self):
         """ Checks aspects of the model for any forseeable errors """
@@ -341,7 +341,7 @@ class Model(object):
         if "models" not in self.configuration.keys():
             raise KeyError("no `models` attribute found in model file")
 
-        settings = self.configuration["models"]
+        settings = self.configuration["model"]
 
         for aperture in self.apertures:
             if "." in aperture:
@@ -350,7 +350,7 @@ class Model(object):
         required_keys = ("dispersion_filenames", "flux_filenames")
         for key in required_keys:
             if key not in settings.keys():
-                raise KeyError("required 'models.{0}' attribute not found in model".format(key))
+                raise KeyError("required 'model.{0}' attribute not found in model".format(key))
 
         # Check for missing keys
         missing_keys = [x for x in settings["dispersion_filenames"].keys() if x not in settings["flux_filenames"]]
@@ -475,7 +475,7 @@ class Model(object):
                     indices = None
 
                 # Cache the dispersion filename
-                pool.apply_async(mapper, args=(cache_model_point, self.configuration["models"]["dispersion_filenames"][beam], None, indices))
+                pool.apply_async(mapper, args=(cache_model_point, self.configuration["model"]["dispersion_filenames"][beam], None, indices))
 
                 for flux_filename in flux_filenames:
                     pool.apply_async(mapper, args=(cache_model_point, flux_filename, sigma, indices))
