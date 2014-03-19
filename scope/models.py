@@ -573,7 +573,7 @@ class Model(object):
         return np.where(index)[0][0]
 
 
-    def interpolate_flux(self, point, beams='all', kind='linear', **kwargs):
+    def interpolate_flux(self, point, beams='all', kind='linear', max_neighbours=3, **kwargs):
         """Interpolates through the grid of models to the given `point` and returns
         the interpolated flux.
 
@@ -615,19 +615,15 @@ class Model(object):
 
             return interpolated_beams
 
-        try_n = [1, 2, 3]
-        for n in try_n:
+        for n in xrange(1, max_neighbours):
 
             indices = self.get_nearest_neighbours(point, n=n)
-            print("got {0} with {1}".format(len(indices), n))
             if len(indices) == len(self.grid_points):
-                print("failed hit hard limit")
                 raise ValueError("could not interpolate flux point -- hard limit hit")
 
             failed = False
             interpolated_flux = {}
             for beam in beams:
-                print("trying beam {0}".format(beam))
                 beam_flux = np.zeros((len(indices), len(self.dispersion[beam])))
                 beam_flux[:] = np.nan
 
@@ -641,11 +637,9 @@ class Model(object):
                         self.grid_points[indices], beam_flux, [point], **kwargs).flatten()
 
                 except:
-                    print("failed in {0} arm".format(beam))
-
+                    
                     failed = True
-                    if n == try_n[-1]:
-                        print("breaking out")
+                    if n == max_neighbours:
                         raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
 
                     break
@@ -653,7 +647,6 @@ class Model(object):
             if failed:
                 continue
 
-            print("worked!")
             return interpolated_flux
 
 
