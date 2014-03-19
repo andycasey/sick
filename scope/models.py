@@ -54,7 +54,7 @@ def load_model_data(filename, **kwargs):
         # Wrapping the data as a new array so that it is pickleable across
         # multiprocessing without the need to share the memmap. See:
         # http://stackoverflow.com/questions/15986133/why-does-a-memmap-need-a-filename-when-i-try-to-reshape-a-numpy-array
-        data = np.array(np.memmap(filename, **kwargs))
+        data = np.memmap(filename, **kwargs)
 
     else:
         # Assume it must be ASCII.
@@ -408,13 +408,15 @@ class Model(object):
         useful_apertures = self.configuration["models"]["dispersion_filenames"].keys()
 
         # Get explicit priors
-        dimensions = []
+        dimensions = [] + self.colnames
         for dimension in self.configuration["priors"].keys():
             if dimension.startswith("doppler_shift") \
             or dimension.startswith("smooth_model_flux"):
                 aperture = dimension.split(".")[1]
                 if aperture not in useful_apertures:
                     continue
+            if dimension in dimensions: continue
+
             dimensions.append(dimension)
 
         # Get implicit normalisation priors
@@ -449,7 +451,7 @@ class Model(object):
             for i, beam in enumerate(self.dispersion_filenames.keys()):
 
                 si, ei = map(sum, [n_flux_points[:i], n_flux_points[:i+1]])
-                flux[i, si:ei] = load_model_data(self.flux_filenames[beam][i])
+                flux[i, si:ei] = load_model_data(self.flux_filenames[beam][i], mode="r")
 
             # We will need this
             self._beam_flux_points = n_flux_points
@@ -462,7 +464,7 @@ class Model(object):
             # Load the flux
             flux = np.empty((n_models, n_flux_points))
             for i, filename in enumerate(self.flux_filenames):
-                flux[i, :] = load_model_data(filename)
+                flux[i, :] = load_model_data(filename, mode="r")
 
             self._beam_flux_points = np.array([n_flux_points])
 
