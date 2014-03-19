@@ -77,7 +77,10 @@ def main():
 	default_metadata = {
 		"model": md5(json_dumps(model.configuration).encode("utf-8")).hexdigest(),
 		"filenames": ", ".join(args.spectra),
-		"scope_version": scope.__version__
+		"scope_version": scope.__version__,
+		"walkers": model.configuration["solver"]["walkers"],
+		"burn": model.configuration["solver"]["burn"],
+		"sample": model.configuration["solver"]["sample"]
 	}
 
 	# For each spectra, analyse
@@ -211,7 +214,7 @@ def main():
 
 			# Save sampler state
 			with open(filename_prefix + ".state", "wb") as fp:
-				pickle.dump((sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state), fp)
+				pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
 			# Plot results
 			if args.plotting:
@@ -294,13 +297,13 @@ def main():
 
 					ax.set_ylim(0.6, 1.2)
 
-				fig.savefig(filename_prefix + "-spectra.pdf")
+				fig.savefig(filename_prefix + "-pp-spectra.pdf")
 
 				# Closing the figures isn't enough; matplotlib leaks memory
 				plt.close("all")
 
-			# Delete the sampler
-			del sampler, chain
+			# Delete some things
+			del sampler, chain, primary_hdu, table_hdu, hdulist
 
 
 if __name__ == "__main__":
