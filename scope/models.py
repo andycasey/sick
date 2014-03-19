@@ -11,6 +11,7 @@ import json
 import logging
 import multiprocessing
 import os
+import pickle
 import re
 from hashlib import md5
 from glob import glob
@@ -22,7 +23,7 @@ import yaml
 from scipy import interpolate, ndimage
 
 # Module-specific
-from utils import human_readable_digit
+from utils import find_spectral_overlap, human_readable_digit 
 from specutils import Spectrum1D
 
 __all__ = ["Model"]
@@ -46,7 +47,8 @@ def load_model_data(filename, **kwargs):
         with pyfits.open(filename, **kwargs) as image:
             data = image[0].data
 
-    elif filename.endswith('.cached'):
+    elif filename.endswith('.memmap') \
+    or filename.endswith(".cached"):
 
         # Put in our preferred keyword arguments
         kwargs.setdefault('mode', 'c')
@@ -128,7 +130,7 @@ class Model(object):
             # Check that all apertures are cached and they all refer to the same
             # points filename (if any)
 
-            original_points_filename = self.configuration["model"][self.apertures[0]]
+            original_points_filename = self.configuration["model"][self.apertures[0]]["points_filename"]
             for aperture in self.apertures[1:]:
                 if self.configuration["model"][aperture].get("points_filename",
                     original_points_filename) != original_points_filename:
@@ -151,7 +153,8 @@ class Model(object):
                 flux_filename = self.configuration["model"][aperture]["flux_filename"]
                 aperture_flux = np.memmap(flux_filename, mode="r", dtype=np.float32).reshape((num_points, -1))
                 _scope_interpolator_[aperture] = interpolate.LinearNDInterpolator(
-                    self.grid_points, aperture_flux)
+                    self.grid_points.view(float).reshape((num_points, -1)),
+                    aperture_flux)
 
         elif "flux_folder" in self.configuration["model"][self.apertures[0]] \
         and  "flux_filename_match" in self.configuration["model"][self.apertures[0]]:
@@ -188,7 +191,7 @@ class Model(object):
 
                 if self.grid_points is not None and len(points) != len(self.grid_points):
                     raise ValueError("number of model points found in {0} aperture ({1})"
-                        " did not match the number in {2} beam ({3})".format(self.apertures[0],
+                        " did not match the number in {2} aperture ({3})".format(self.apertures[0],
                         len(self.grid_points), aperture, len(points)))
                        
                 # Check the first model flux to ensure it's the same length as the dispersion array
@@ -200,7 +203,7 @@ class Model(object):
 
                 if i == 0:
                     # Save the grid points as a record array
-                    self.grid_points = np.core.records.fromrecords(grid_points, names=dimensions,
+                    self.grid_points = np.core.records.fromrecords(points, names=dimensions,
                         formats=["f8"]*len(dimensions))
 
                 self.flux_filenames[aperture] = matched_filenames
@@ -210,10 +213,10 @@ class Model(object):
 
         # Pre-compute the grid boundaries
         self.grid_boundaries = {}
-        for i, dimension in enumerate(dimensions):
+        for dimension in self.grid_points.dtype.names:
             self.grid_boundaries[dimension] = np.array([
-                np.min(self.grid_points[:, i]),
-                np.max(self.grid_points[:, i])
+                np.min(self.grid_points[dimension]),
+                np.max(self.grid_points[dimension])
             ])
 
         # Perform validation checks to ensure there are no forseeable problems
@@ -226,7 +229,7 @@ class Model(object):
         num_models = len(self.grid_points) * num_apertures
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return "{module}.Model({num_models} models, {num_apertures} apertures: {apertures}, {num_parameters}"
+        return "{module}.Model({num_models} models, {num_apertures} apertures: {apertures}, {num_parameters}"\
             " parameters: {parameters}, ~{num_pixels} pixels)".format(module=self.__module__, num_models=num_models,
             num_apertures=num_apertures, apertures=', '.join(self.apertures), num_pixels=human_readable_digit(num_pixels),
             num_parameters=len(self.grid_points.dtype.names), parameters=', '.join(self.grid_points.dtype.names))
@@ -262,12 +265,12 @@ class Model(object):
 
     def _validate_normalisation(self):
 
-        self._check_apertures("normalisation")
+        self._check_apertures("normalise_observed")
 
         # Verify the settings for each aperture.
         for aperture in self.apertures:
 
-            settings = configuration["normalise_observed"][aperture]
+            settings = self.configuration["normalise_observed"][aperture]
 
             # Check that settings exist
             if "perform" not in settings:
@@ -338,27 +341,15 @@ class Model(object):
 
     def _validate_models(self):
 
-        if "models" not in self.configuration.keys():
-            raise KeyError("no `models` attribute found in model file")
-
-        settings = self.configuration["model"]
+        if "model" not in self.configuration.keys():
+            raise KeyError("no 'model' attribute found in model file")
 
         for aperture in self.apertures:
             if "." in aperture:
                 raise ValueError("aperture name '{0}' cannot contain a full-stop character".format(aperture))
 
-        required_keys = ("dispersion_filenames", "flux_filenames")
-        for key in required_keys:
-            if key not in settings.keys():
-                raise KeyError("required 'model.{0}' attribute not found in model".format(key))
-
-        # Check for missing keys
-        missing_keys = [x for x in settings["dispersion_filenames"].keys() if x not in settings["flux_filenames"]]
-        if len(missing_keys) > 0:
-            raise KeyError("missing flux filenames for {0} aperture(s)".format(", ".join(missing_keys)))
-
         # Check dispersion maps of standards don't overlap
-        overlap_wavelength = utils.find_spectral_overlap(self.dispersions.values())
+        overlap_wavelength = find_spectral_overlap(self.dispersion.values())
         if overlap_wavelength is not None:
             raise ValueError("dispersion maps overlap near {0:.0f}".format(overlap_wavelength))
 
@@ -462,7 +453,7 @@ class Model(object):
                     pool.close()
                     raise ValueError("no kernel provided for '{0}' aperture".format(aperture))
 
-            # For each beam, load all the spectra, convolve it, get a new filename, write cached file to disk
+            # For each aperture, load all the spectra, convolve it, get a new filename, write cached file to disk
             for beam, flux_filenames in self.flux_filenames.iteritems():
                 
                 sigma = profile_sigma(kernel[beam], self.dispersion[beam])
@@ -550,16 +541,6 @@ class Model(object):
         ------
         point : list of `float` values
             The point to interpolate to.
-
-        beams : str, optional
-            The beams to interpolate flux for. If this is 'all', a dictionary is
-            returned with interpolated fluxes for all beams.
-
-        kind : str or int, optional
-            Specifies the kind of interpolation as a string
-            ('linear', 'nearest', 'zero', 'slinear', 'quadratic', 'cubic')
-            or as an integer specifying the order of the spline interpolator
-            to use. Default is 'linear'.
         """
 
         global _scope_interpolator_
@@ -679,12 +660,12 @@ class Model(object):
                 for parameter, value in zip(self.grid_points.dtype.names, grid_point)])))
 
         if interpolated_flux == {}:
-            logging.debug("No beams of interpolated flux found")
+            logging.debug("No apertures of interpolated flux found")
             return None
 
         for aperture, flux in interpolated_flux.iteritems():
             if np.all(~np.isfinite(flux)):
-                logging.debug("{0} beam returned all non-finite values for interpolated flux".format(aperture))
+                logging.debug("{0} aperture returned all non-finite values for interpolated flux".format(aperture))
                 return None
 
         # Create spectra
