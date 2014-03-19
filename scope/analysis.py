@@ -325,6 +325,11 @@ def log_likelihood(theta, model, observations):
     return (likelihood, blob + [likelihood])
 
 
+def chi_sq(theta, model, observations):
+    likelihood, blob = log_likelihood(theta, model, observations)
+    return -likelihood if np.isfinite(likelihood) else 999
+
+
 def solve(observed_spectra, model, initial_guess=None):
     """Analyse some spectra of a given star according to the configuration
     provided.
@@ -355,9 +360,21 @@ def solve(observed_spectra, model, initial_guess=None):
     # Make fmin_powell the default
     if model.configuration["solver"].get("method", "powell") == "powell":
 
-        p0 = initialise_priors(model, configuration, observed_spectra)
-        posteriors = scipy.optimize.minimize(chi_sq, p0, method="powell", 
-            args=(model, observed_spectra), xtol=0.001, ftol=0.001)
+        fail_value = +9e99
+        p0 = initialise_priors(model, observed_spectra)
+
+        # Do a cross-correlation to get velocity?
+
+        def minimisation_function(theta, model, observed):
+            likelihood, blobs = log_likelihood(theta, model, observed)
+            return -likelihood if np.isfinite(likelihood) else fail_value
+
+        for walker_p0 in p0:
+            posteriors = scipy.optimize.minimize(minimisation_function,
+                walker_p0, args=(model, observed_spectra))
+            if not posteriors["success"] or posteriors["fun"] == fail_value:
+                continue
+            raise a
 
         return posteriors
 
@@ -400,6 +417,7 @@ def solve(observed_spectra, model, initial_guess=None):
                 logger.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
 
+        logger.info("Sampler burn-in complete. Resetting chain..")
         sampler.reset()
         p0, lnpro0, state0 = sampler_state[0], None, None
 
@@ -418,7 +436,6 @@ def solve(observed_spectra, model, initial_guess=None):
             if mean_acceptance_fractions[i + j + 1] == 0:
                 logger.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
-
 
         # Convert state to posteriors
         logger.info("The final mean acceptance fraction is {0:.3f}".format(
