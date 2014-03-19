@@ -223,20 +223,20 @@ def main():
 				fig = plt.figure()
 				ax = fig.add_subplot(111)
 				ax.plot(mean_acceptance_fractions, "k", lw=2)
-				ax.axvline(y=model.configuration["solver"]["burn"], c="#666666", zindex=-1, lw=1)
+				ax.axvline(x=model.configuration["solver"]["burn"], c="#666666", zorder=-1, lw=1)
 				ax.set_xlabel("Iterations")
 				ax.set_ylabel("$\langle{}f_a\\rangle$")
 				fig.savefig(filename_prefix + "-acceptance.pdf")
 
 				# Make a corner plot
 				ndim = sampler.chain.shape[-1]
-				fig = triangle.corner(sampler.chain.reshape((-1, ndim)),
-					labels=scope.utils.latexify(model.dimensions), extents=[0.99]*len(model.dimensions))
-				fig.savefig(filename_prefix + "-corner.pdf")
+				#fig = triangle.corner(sampler.chain.reshape((-1, ndim)),
+				#	labels=scope.utils.latexify(model.dimensions), extents=[0.99]*len(model.dimensions))
+				#fig.savefig(filename_prefix + "-corner.pdf")
 
 				# Make another corner plot with just the parameters of interest
 				indices = np.array([model.dimensions.index(dimension) for dimension in model.colnames])
-				fig = triangle.corner(sampler.chain.reshape((-1, ndim)),
+				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[:, indices],
 					labels=scope.utils.latexify(model.colnames), extents=[0.99]*len(model.colnames))
 				fig.savefig(filename_prefix + "-corner-2.pdf")
 
