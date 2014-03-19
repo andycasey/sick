@@ -7,24 +7,25 @@ from __future__ import division, print_function
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 # Standard library
+import json
 import logging
+import multiprocessing
 import os
 import re
+from hashlib import md5
 from glob import glob
-import multiprocessing
 
 # Third-party
 import numpy as np
 import pyfits
-from scipy import interpolate, ndimage, spatial
 import yaml
+from scipy import interpolate, ndimage
 
-# Module
+# Module-specific
 from utils import human_readable_digit
 from specutils import Spectrum1D
 
-
-__all__ = ['Model', 'load_model_data', "_scope_interpolator_"]
+__all__ = ["Model"]
 
 # This is a hacky global variable that is used for when pre-loading and
 # multiprocessing are employed
@@ -107,107 +108,139 @@ class Model(object):
         with open(filename, "r") as fp:
             self.configuration = parse(fp)
 
-        # Dispersions
+        # Load the dispersions
         self.dispersion = {}
-        for beam, dispersion_filename in self.configuration['models']['dispersion_filenames'].iteritems():
-            self.dispersion[beam] = load_model_data(dispersion_filename)
+        for aperture in self.apertures:
+            self.dispersion[aperture] = load_model_data(self.configuration["model"][aperture]["dispersion_filename"])
 
-        grid_points = {}
-        flux_filenames = {}
+        # Model apertures can either have:
+        # flux_folder, flux_filename_match
+        #   OR
+        # points_filename, flux_filename
 
-        # Read the points from dispersion filenames
-        for beam in self.configuration['models']['dispersion_filenames']:
-            folder = self.configuration['models']['flux_filenames'][beam]['folder']
-            re_match = self.configuration['models']['flux_filenames'][beam]['re_match']
+        # The first is where we will need to fully load the spectra at each point
+        # the second is where we need to just load each file
+        
+        # It can only be one or the other!
 
-            all_filenames = glob(os.path.join(folder, '*'))
+        if  "points_filename" in self.configuration["model"][self.apertures[0]] \
+        and "flux_filename" in self.configuration["model"][self.apertures[0]]:
+            # Check that all apertures are cached and they all refer to the same
+            # points filename (if any)
 
-            points = []
-            matched_filenames = []
-            for filename in all_filenames:
-                match = re.match(re_match, os.path.basename(filename))
+            original_points_filename = self.configuration["model"][self.apertures[0]]
+            for aperture in self.apertures[1:]:
+                if self.configuration["model"][aperture].get("points_filename",
+                    original_points_filename) != original_points_filename:
+                    raise ValueError("points filename must be the same for all cached apertures")
 
-                if match is not None:
-                    if not hasattr(self, 'colnames'):
-                        colnames = []
-                        groups = match.groups()
+            # Grid points must be pickled data so that the dimension names are known
+            with open(original_points_filename, "rb") as fp:
+                self.grid_points = pickle.load(fp)
 
-                        groupdict = match.groupdict()
-                        for value in match.groupdict().itervalues():
-                            if groups.count(value) > 1: break
-                            colnames.append(match.groupdict().keys()[groups.index(value)])
+            if len(self.grid_points.dtype.names) == 0:
+                raise TypeError("cached grid points filename has no dimension names as columns")
 
-                        if len(colnames) == len(groups):
-                            self.colnames = colnames
+            # Load the fluxes, which must be as memmaps
+            global _scope_interpolator_
+            _scope_interpolator_ = {}
 
-                    points.append(map(float, match.groups()))
-                    matched_filenames.append(filename)
+            num_points = len(self.grid_points)
+            for aperture in self.apertures:
 
-            # Check the first model flux to ensure it's the same length as the dispersion array
-            first_point_flux = load_model_data(matched_filenames[0])
-            if len(first_point_flux) != len(self.dispersion[beam]):
-                raise ValueError("number of dispersion ({0}) and flux ({1}) points in {2} aperture do not match".format(
-                    len(self.dispersion[beam]), len(first_point_flux), beam))
+                flux_filename = self.configuration["model"][aperture]["flux_filename"]
+                aperture_flux = np.memmap(flux_filename, mode="r", dtype=np.float32).reshape((num_points, -1))
+                _scope_interpolator_[aperture] = interpolate.LinearNDInterpolator(
+                    self.grid_points, aperture_flux)
 
-            grid_points[beam] = points
-            flux_filenames[beam] = matched_filenames
+        elif "flux_folder" in self.configuration["model"][self.apertures[0]] \
+        and  "flux_filename_match" in self.configuration["model"][self.apertures[0]]:
 
-        first_beam = self.configuration['models']['dispersion_filenames'].keys()[0]
-        self.grid_points = np.array(grid_points[first_beam])
-        self._tree = spatial.cKDTree(self.grid_points)
+            self.grid_points = None
+            self.flux_filenames = {}
 
+            dimensions = []
+            for i, aperture in enumerate(self.apertures):
+
+                # We will store the filenames and we will load and interpolate on the fly
+                folder = self.configuration["models"][aperture]["flux_folder"]
+                re_match = self.configuration["models"][aperture]["flux_filename_match"]
+
+                all_filenames = glob(os.path.join(folder, "*"))
+
+                points = []
+                matched_filenames = []
+                for filename in all_filenames:
+                    match = re.match(re_match, os.path.basename(filename))
+
+                    if match is not None:
+                        if len(dimensions) == 0:
+                            
+                            groups = match.groups()
+                            groupdict = match.groupdict()
+
+                            for value in match.groupdict().itervalues():
+                                if groups.count(value) > 1: break
+                                dimensions.append(match.groupdict().keys()[groups.index(value)])
+
+                        points.append(map(float, match.groups()))
+                        matched_filenames.append(filename)
+
+                if self.grid_points is not None and len(points) != len(self.grid_points):
+                    raise ValueError("number of model points found in {0} aperture ({1})"
+                        " did not match the number in {2} beam ({3})".format(self.apertures[0],
+                        len(self.grid_points), aperture, len(points)))
+                       
+                # Check the first model flux to ensure it's the same length as the dispersion array
+                first_point_flux = load_model_data(matched_filenames[0])
+                if len(first_point_flux) != len(self.dispersion[aperture]):
+                    raise ValueError("number of dispersion ({0}) and flux ({1}) points in {2} "
+                        "aperture do not match".format(len(self.dispersion[aperture]), len(first_point_flux),
+                        aperture))
+
+                if i == 0:
+                    # Save the grid points as a record array
+                    self.grid_points = np.core.records.fromrecords(grid_points, names=dimensions,
+                        formats=["f8"]*len(dimensions))
+
+                self.flux_filenames[aperture] = matched_filenames
+           
+        else:
+            raise ValueError("no flux information provided for {0} aperture".format(self.apertures[0]))
+
+        # Pre-compute the grid boundaries
         self.grid_boundaries = {}
-        for i, colname in enumerate(self.colnames):
-            self.grid_boundaries[colname] = np.array([
+        for i, dimension in enumerate(dimensions):
+            self.grid_boundaries[dimension] = np.array([
                 np.min(self.grid_points[:, i]),
                 np.max(self.grid_points[:, i])
-                ])
+            ])
 
-        # If it's just the one beam, it's easy!        
-        if len(self.configuration['models']['dispersion_filenames'].keys()) == 1:
-            self.flux_filenames = flux_filenames[first_beam]
-            return None
-        
-        else:
-            self.flux_filenames = {first_beam: flux_filenames[first_beam]}
-
-        # Put all points and filenames on the one scale
-        for beam in self.configuration['models']['dispersion_filenames'].keys()[1:]:
-            
-            points = grid_points[beam]
-            if len(points) != len(self.grid_points):
-                raise ValueError("number of model points found in {first_beam} beam ({num_first_beam})"
-                    " did not match the number in {this_beam} beam ({num_this_beam})"
-                    .format(first_beam=first_beam, num_first_beam=len(self.grid_points), this_beam=beam,
-                        num_this_beam=len(points)))
-
-            sort_indices = []
-
-            for point in points:
-                index = self.check_grid_point(point)
-                sort_indices.append(index)
-
-            self.flux_filenames[beam] = [flux_filenames[beam][index] for index in sort_indices]
+        # Perform validation checks to ensure there are no forseeable problems
+        self.validate()
 
         return None
 
-
     def __repr__(self):
-        num_apertures = len(self.dispersion)
+        num_apertures = len(self.apertures)
         num_models = len(self.grid_points) * num_apertures
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return '{module}.Model({num_models} models, {num_apertures} apertures: "{apertures}", {num_parameters} parameters: "{parameters}", ~{num_pixels} pixels)'.format(
-            module=self.__module__, num_models=num_models, num_apertures=num_apertures, apertures=', '.join(self.dispersion.keys()),
-            num_pixels=human_readable_digit(num_pixels), num_parameters=self.grid_points.shape[1],
-            parameters=', '.join(self.colnames))
+        return "{module}.Model({num_models} models, {num_apertures} apertures: {apertures}, {num_parameters}"
+            " parameters: {parameters}, ~{num_pixels} pixels)".format(module=self.__module__, num_models=num_models,
+            num_apertures=num_apertures, apertures=', '.join(self.apertures), num_pixels=human_readable_digit(num_pixels),
+            num_parameters=len(self.grid_points.dtype.names), parameters=', '.join(self.grid_points.dtype.names))
 
+    @property
+    def hash(self):
+        return md5(json.dumps(self.configuration).encode("utf-8")).hexdigest()
 
     @property
     def apertures(self):
-        return self.configuration['models']['dispersion_filenames'].keys()
+        return self.configuration["models"].keys()
 
     def validate(self):
+        """ Checks aspects of the model for any forseeable errors """
 
         self._validate_models()
         self._validate_solver()
@@ -219,7 +252,6 @@ class Model(object):
     
         return True
 
-
     def _check_apertures(self, key):
 
         for aperture in self.apertures:
@@ -228,7 +260,6 @@ class Model(object):
                 " it's specified in the models".format(aperture=aperture, key=key))
         return True
 
-
     def _validate_normalisation(self):
 
         self._check_apertures("normalisation")
@@ -236,10 +267,10 @@ class Model(object):
         # Verify the settings for each aperture.
         for aperture in self.apertures:
 
-            settings = configuration['normalise_observed'][aperture]
+            settings = configuration["normalise_observed"][aperture]
 
             # Check that settings exist
-            if 'perform' not in settings:
+            if "perform" not in settings:
                 raise KeyError("configuration setting 'normalise_observed.{aperture}.perform' not found".format(aperture=aperture))
 
             # If perform is false then we don't need order
@@ -376,26 +407,6 @@ class Model(object):
         return True
 
 
-    def check_aperture_names(configuration, key):
-        """Checks that all the apertures specified in the models
-        exist in the given sub-config `key`.
-
-        Inputs
-        ------
-        `configuration` : dict
-            A dictionary configuration for SCOPE.
-
-        `key` : str
-            The sub-key to check (e.g. 'normalise_observed')
-        """
-
-        for aperture in self.apertures:
-            if aperture not in configuration[key]:
-                raise KeyError("no aperture '{aperture}' listed in {key}, but"
-                " it's specified in the models".format(aperture=aperture, key=key))
-        return True
-
-
     @property
     def dimensions(self):
         """Returns all dimension names for a given configuration, which can
@@ -404,23 +415,20 @@ class Model(object):
         if hasattr(self, "_dimensions"):
             return self._dimensions
 
-        # Get the actual apertures we're going to use
-        useful_apertures = self.configuration["models"]["dispersion_filenames"].keys()
-
         # Get explicit priors
-        dimensions = [] + self.colnames
+        dimensions = [] + self.grid_points.dtype.names
         for dimension in self.configuration["priors"].keys():
             if dimension.startswith("doppler_shift") \
             or dimension.startswith("smooth_model_flux"):
                 aperture = dimension.split(".")[1]
-                if aperture not in useful_apertures:
+                if aperture not in self.apertures:
                     continue
             if dimension in dimensions: continue
 
             dimensions.append(dimension)
 
         # Get implicit normalisation priors
-        for aperture in useful_apertures:     
+        for aperture in self.apertures:     
             if self.configuration["normalise_observed"][aperture]["perform"]:
                 dimensions.extend(
                     ["normalise_observed.{0}.a{1}".format(aperture, i) \
@@ -428,7 +436,7 @@ class Model(object):
 
         # Append jitter dimension
         if self.configuration["solver"].get("walkers", 1) > 1:
-            for aperture in useful_apertures:
+            for aperture in self.apertures:
                 dimensions.append("jitter.{0}".format(aperture))
         
         setattr(self, "_dimensions", dimensions)
@@ -436,49 +444,10 @@ class Model(object):
         return dimensions
 
 
-    def pre_load(self):
-        """ Pre loads all spectra to an interpolator for future speedyness. """
-
-        if isinstance(self.flux_filenames, dict):
-
-            n_flux_points = np.zeros(len(self.configuration["models"]["dispersion_filenames"].keys()))
-            for i, beam in enumerate(self.configuration["models"]["dispersion_filenames"].keys()):
-                if i == 0:
-                    n_models = len(self.flux_filenames[beam])
-                n_flux_points[i] = len(load_model_data(self.flux_filenames[beam][0]))
-
-            flux = np.empty((n_models, sum(n_flux_points)))
-            for i, beam in enumerate(self.configuration["models"]["dispersion_filenames"].keys()):
-
-                si, ei = map(sum, [n_flux_points[:i], n_flux_points[:i+1]])
-                flux[i, si:ei] = load_model_data(self.flux_filenames[beam][i], mode="r")
-
-            # We will need this
-            self._beam_flux_points = n_flux_points
-
-        else:
-            
-            n_models = len(self.flux_filenames)
-            n_flux_points = len(load_model_data(self.flux_filenames[0]))
-
-            # Load the flux
-            flux = np.empty((n_models, n_flux_points))
-            for i, filename in enumerate(self.flux_filenames):
-                flux[i, :] = load_model_data(filename, mode="r")
-
-            self._beam_flux_points = np.array([n_flux_points])
-
-        # Create the interpolator
-        global _scope_interpolator_
-        _scope_interpolator_ = interpolate.LinearNDInterpolator(self.grid_points, flux)
-
-        self._pre_loaded = True
-        return True
-
-
-    def cache(self, kernel, threads=None, **kwargs):
-        """ Pre-convolve the model fluxes and save their convolved flux to memory-mapped
-        files for faster read access. 
+    def cache_models(self, smoothing_kernels=None, wavelength_slices=None, sample_rate=1,
+        threads=None, **kwargs):
+        """ Cache the model dispersions and fluxes for faster read access at runtime.
+        Spectra can be pre-convolved
 
         """
 
@@ -537,9 +506,9 @@ class Model(object):
             Therefore the total number of points returned will be dim(point)^n.
         """
 
-        if len(point) != self.grid_points.shape[1]:
-            raise ValueError("point length ({length}) is incompatible with grid shape ({shape})"
-                .format(length=len(point), shape=self.grid_points.shape))
+        if len(point) != len(self.grid_points.dtype.names):
+            raise ValueError("point length ({0}) is incompatible with grid shape ({1})"
+                .format(length=len(point), shape=len(self.grid_points.dtype.names)))
 
         indices = set(np.arange(len(self.grid_points)))
         for i, point_value in enumerate(point):
@@ -568,14 +537,12 @@ class Model(object):
         """
 
         index = np.all(self.grid_points == point, axis=-1)
-
         if not any(index):
             return False
-        
         return np.where(index)[0][0]
 
 
-    def interpolate_flux(self, point, beams='all', kind='linear', max_neighbours=3, **kwargs):
+    def interpolate_flux(self, point, **kwargs):
         """Interpolates through the grid of models to the given `point` and returns
         the interpolated flux.
 
@@ -595,80 +562,52 @@ class Model(object):
             to use. Default is 'linear'.
         """
 
+        global _scope_interpolator_
+        if _scope_interpolator_ is not None:
 
-        if beams is 'all':
-            beams = self.dispersion.keys()
+            interpolated_fluxes = {}
+            for i, aperture in enumerate(self.apertures):
+                interpolated_fluxes[aperture] = _scope_interpolator_(point)
+            return interpolated_fluxes
 
-        elif not isinstance(beams, (list, tuple)):
-            beams = [beams]
+        indices = self.get_nearest_neighbours(point)
 
-        for beam in beams:
-            if beam not in self.dispersion.keys():
-                raise ValueError("could not find '{beam}' beam".format(beam=beam))
-
-        if hasattr(self, "_pre_loaded"):
-
+        interpolated_fluxes = {}
+        for aperture in self.apertures:
             
-            interpolated_flux = _scope_interpolator_(*point)
-            interpolated_beams = {}
-            for i, beam in enumerate(beams):
-                si, ei = map(sum, [self._beam_flux_points[:i], self._beam_flux_points[:i+1]])
-                interpolated_beams[beam] = interpolated_flux[si:ei]
+            flux = np.zeros((len(indices), len(self.dispersion[aperture])))
+            flux[:] = np.nan
 
-            return interpolated_beams
+            # Load the flux points
+            for i, index in enumerate(indices):
+                aperture_flux[i, :] = load_model_data(self.flux_filenames[aperture][index])
+            
+            try:
+                interpolated_flux[aperture] = interpolate.griddata(self.grid_points[indices],
+                    aperture_flux, [point], **kwargs).flatten()
 
-        for n in xrange(1, max_neighbours):
+            except:
+                raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
 
-            indices = self.get_nearest_neighbours(point, n=n)
-            if len(indices) == len(self.grid_points):
-                raise ValueError("could not interpolate flux point -- hard limit hit")
+        return interpolated_fluxes
+    
 
-            failed = False
-            interpolated_flux = {}
-            for beam in beams:
-                beam_flux = np.zeros((len(indices), len(self.dispersion[beam])))
-                beam_flux[:] = np.nan
-
-                # Load the flux points
-                flux_data = self.flux_filenames if len(self.dispersion.keys()) == 1 else self.flux_filenames[beam]
-                for i, index in enumerate(indices):
-                    beam_flux[i, :] = load_model_data(flux_data[index])
-                
-                try:
-                    interpolated_flux[beam] = interpolate.griddata(
-                        self.grid_points[indices], beam_flux, [point], **kwargs).flatten()
-
-                except:
-                    
-                    failed = True
-                    if n == max_neighbours:
-                        raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
-
-                    break
-
-            if failed:
-                continue
-
-            return interpolated_flux
-
-
-    def map_apertures(self, observed_dispersions):
+    def map_apertures(self, observations):
         """References model spectra to each observed spectra based on their wavelengths.
 
         Inputs
         ------
-        observed_dispsersions : a list of observed dispersion maps (e.g. list-types full of floats)
-            The dispersion maps for all observed apertures.
+        observations : a list of observed spectra to map
         """
 
         mapped_apertures = []
-        for i, observed_dispersion in enumerate(observed_dispersions):
+        for i, spectrum in enumerate(observations):
 
             # Initialise the list
             apertures_found = []
 
-            observed_wlmin = np.min(observed_dispersion)
-            observed_wlmax = np.max(observed_dispersion)
+            observed_wlmin = np.min(spectrum.disp)
+            observed_wlmax = np.max(spectrum.disp)
 
             for model_aperture, model_dispersion in self.dispersion.iteritems():
 
@@ -705,6 +644,7 @@ class Model(object):
         # Keep an internal reference of the aperture mapping
         self._mapped_apertures = mapped_apertures
 
+        # Should we update our internal .apertures and .dimensions?
         return mapped_apertures
 
 
@@ -722,7 +662,7 @@ class Model(object):
         """
 
         # Build the grid point
-        grid_point = [kwargs[stellar_parameter] for stellar_parameter in self.colnames]
+        grid_point = [kwargs[stellar_parameter] for stellar_parameter in self.grid_points.dtype.names]
 
         # Interpolate the flux
         try:
@@ -731,12 +671,12 @@ class Model(object):
         except:
             logging.debug("No model flux could be determined for {0}".format(
                 ", ".join(["{0} = {1:.2f}".format(parameter, value) \
-                    for parameter, value in zip(self.colnames, grid_point)])))
+                    for parameter, value in zip(self.grid_points.dtype.names, grid_point)])))
             return None
 
         logging.debug("Interpolated model flux at {0}".format(
             ", ".join(["{0} = {1:.2f}".format(parameter, value) \
-                for parameter, value in zip(self.colnames, grid_point)])))
+                for parameter, value in zip(self.grid_points.dtype.names, grid_point)])))
 
         if interpolated_flux == {}:
             logging.debug("No beams of interpolated flux found")
@@ -750,12 +690,12 @@ class Model(object):
         # Create spectra
         model_spectra = {}
         for aperture, interpolated_flux in interpolated_flux.iteritems():
-            model_spectra[aperture] = Spectrum1D(
-                disp=self.dispersion[aperture], flux=interpolated_flux)
+            model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture],
+                flux=interpolated_flux)
 
         # Any synthetic smoothing to apply?
         for aperture in self._mapped_apertures:
-            key = 'smooth_model_flux.{aperture}.kernel'.format(aperture=aperture)
+            key = "smooth_model_flux.{aperture}.kernel".format(aperture=aperture)
 
             # Is the smoothing a free parameter?
             if key in kwargs:
@@ -763,9 +703,9 @@ class Model(object):
                 if kwargs[key] < 0: return None
                 model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kwargs[key])
 
-            elif self.configuration['smooth_model_flux'][aperture]['perform']:
+            elif self.configuration["smooth_model_flux"][aperture]["perform"]:
                 # Apply a single smoothing value
-                kernel = self.configuration['smooth_model_flux'][aperture]['kernel']
+                kernel = self.configuration["smooth_model_flux"][aperture]["kernel"]
                 model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kernel)
                 logging.debug("Smoothed model flux for '{0}' aperture with kernel {1}".format(
                     aperture, kernel))
