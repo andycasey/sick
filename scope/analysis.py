@@ -444,7 +444,7 @@ def solve(observed_spectra, model, initial_guess=None):
         # Blobs contain all the sampled parameters and likelihoods        
         sampled = np.array(sampler.blobs).reshape((-1, len(model.dimensions) + 1))
 
-        sampled = sampled[-int(model.configuration["solver"]["walkers"] * model.configuration["solver"]["sample"]):]
+        sampled = sampled[-int(model.configuration["solver"]["walkers"] * model.configuration["solver"]["sample"] * 0.5):]
         sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
 
         # Get the maximum estimate
