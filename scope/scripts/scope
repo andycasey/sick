@@ -84,6 +84,7 @@ def main():
 		# Create metadata and put header information in
 		if args.skip > i:
 			logging.info("Skipping star #{0}".format(i))
+			continue
 
 		if not isinstance(spectra, (list, tuple)):
 			spectra = [spectra]
@@ -104,6 +105,7 @@ def main():
 			t_init = time()
 			posteriors, sampler, mean_acceptance_fractions = scope.solve(spectra, model)
 
+			
 		except:
 			logging.exception("Failed to analyse #{0}:".format(i))
 			if args.debug: raise
@@ -272,6 +274,12 @@ def main():
 
 				# Closing the figures isn't enough; matplotlib leaks memory
 				plt.close("all")
+
+			if model.configuration["solver"].get("nwalkers", 1) > 1:
+				sampler.pool.close()
+				sampler.pool.join()
+			del sampler
+
 
 if __name__ == "__main__":
 	main()
