@@ -76,7 +76,8 @@ def main():
 		"MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE", "UTEND", "UTSTART", )
 	default_metadata = {
 		"model": md5(json_dumps(model.configuration).encode("utf-8")).hexdigest(),
-		"filenames": ", ".join(args.spectra)
+		"filenames": ", ".join(args.spectra),
+		"scope_version": scope.__version__
 	}
 
 	# For each spectra, analyse
@@ -88,6 +89,7 @@ def main():
 
 		if not isinstance(spectra, (list, tuple)):
 			spectra = [spectra]
+			default_metadata["filenames"] = args.spectra[i]
 
 		metadata = {}
 		header_columns = []
@@ -142,15 +144,27 @@ def main():
 			# Save the sampler chain
 			blobs = np.array(sampler.blobs)
 			blobs = blobs.reshape((-1, 1 + len(model.dimensions)))
-			chain = np.core.records.fromarrays(blobs.T,
-				names=model.dimensions + ["ln L"],
-				formats=["f8"] * (1 + len(model.dimensions)))
+
+			# Append an sample and step number
+			walkers = model.configuration["solver"]["nwalkers"]
+			chain = np.core.records.fromarrays(
+				np.vstack([
+					np.arange(1, 1 + len(blobs)),
+					np.floor(np.arange(1, 1 + len(blobs)/walkers, 1.0/walkers)),
+					blobs.T
+				]),
+				names=["Iteration", "Sample"] + model.dimensions + ["log(likelihood)"],
+				formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
 
 			filename_prefix = os.path.join(args.output_dir, "scope-{0}".format(i))
 
-			with open(filename_prefix + ".chain", "wb") as fp:
-				pickle.dump(chain, fp)
+			# Save the chain
+			primary_hdu = pyfits.PrimaryHDU()
+			table_hdu = pyfits.BinTableHDU(chain)
+			hdulist = pyfits.HDUList([primary_hdu, table_hdu])
+			hdulist.writeto(filename_prefix + "-posterior.fits", clobber=True)
 
+			# Save the posteriors and mean acceptance fractions
 			with open(filename_prefix + ".results", "wb") as fp:
 				pickle.dump((posteriors, mean_acceptance_fractions), fp)
 
@@ -190,13 +204,23 @@ def main():
 			hdulist = pyfits.HDUList([primary_hdu, table_hdu])
 			hdulist.writeto(os.path.join(args.output_dir, "scope-results.fits"), clobber=True)
 
+			# Close sampler pool
+			if model.configuration["solver"].get("nwalkers", 1) > 1:
+				sampler.pool.close()
+				sampler.pool.join()
+
+			# Save sampler state
+			with open(filename_prefix + ".state", "wb") as fp:
+				pickle.dump((sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state), fp)
+
 			# Plot results
 			if args.plotting:
 
 				# Plot the mean acceptance fractions
 				fig = plt.figure()
 				ax = fig.add_subplot(111)
-				ax.plot(mean_acceptance_fractions)
+				ax.plot(mean_acceptance_fractions, "k", lw=2)
+				ax.axvline(y=model.configuration["solver"]["burn"], c="#666666", zindex=-1, lw=1)
 				ax.set_xlabel("Iterations")
 				ax.set_ylabel("$\langle{}f_a\\rangle$")
 				fig.savefig(filename_prefix + "-acceptance.pdf")
@@ -275,10 +299,8 @@ def main():
 				# Closing the figures isn't enough; matplotlib leaks memory
 				plt.close("all")
 
-			if model.configuration["solver"].get("nwalkers", 1) > 1:
-				sampler.pool.close()
-				sampler.pool.join()
-			del sampler
+			# Delete the sampler
+			del sampler, chain
 
 
 if __name__ == "__main__":
