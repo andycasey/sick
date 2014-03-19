@@ -18,7 +18,7 @@ def latexify(labels, overwrite_common_labels=None):
         "teff": "$T_{eff}$ [K]",
         "feh": "[Fe/H]",
         "logg": "$\log{g}$",
-        "alpha": "[$\alpha$/Fe]",
+        "alpha": "[$\\alpha$/Fe]",
         "jitter": "$\delta$"
     }
 
