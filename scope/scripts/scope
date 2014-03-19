@@ -11,7 +11,6 @@ import logging
 import os
 import cPickle as pickle
 
-from hashlib import md5
 from json import dumps as json_dumps
 from time import time
 
@@ -75,7 +74,7 @@ def main():
 	default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
 		"MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE", "UTEND", "UTSTART", )
 	default_metadata = {
-		"model": md5(json_dumps(model.configuration).encode("utf-8")).hexdigest(),
+		"model": model.hash, 
 		"filenames": ", ".join(args.spectra),
 		"scope_version": scope.__version__,
 		"walkers": model.configuration["solver"]["walkers"],

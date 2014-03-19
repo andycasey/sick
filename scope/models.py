@@ -7,11 +7,11 @@ from __future__ import division, print_function
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 # Standard library
+import cPickle as pickle
 import json
 import logging
 import multiprocessing
 import os
-import pickle
 import re
 from hashlib import md5
 from glob import glob
