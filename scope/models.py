@@ -441,14 +441,14 @@ class Model(object):
 
         if isinstance(self.flux_filenames, dict):
 
-            n_flux_points = np.zeros(len(self.dispersion_filenames.keys()))
-            for i, beam in enumerate(self.dispersion_filenames.keys()):
+            n_flux_points = np.zeros(len(self.configuration["models"]["dispersion_filenames"].keys()))
+            for i, beam in enumerate(self.configuration["models"]["dispersion_filenames"].keys()):
                 if i == 0:
                     n_models = len(self.flux_filenames[beam])
                 n_flux_points[i] = len(load_model_data(self.flux_filenames[beam][0]))
 
             flux = np.empty((n_models, sum(n_flux_points)))
-            for i, beam in enumerate(self.dispersion_filenames.keys()):
+            for i, beam in enumerate(self.configuration["models"]["dispersion_filenames"].keys()):
 
                 si, ei = map(sum, [n_flux_points[:i], n_flux_points[:i+1]])
                 flux[i, si:ei] = load_model_data(self.flux_filenames[beam][i], mode="r")
