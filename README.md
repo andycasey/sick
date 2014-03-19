@@ -32,18 +32,26 @@ If ``blue_spectrum.fits`` and ``red_spectrum.fits`` have multiple apertures (e.g
 import scope
 
 # A single spectrum:
-posteriors, sampler, model, mean_acceptance_fractions = \
-    scope.solve("sun.ms.fits", "model.yml")
+posteriors, sampler, mean_acceptance_fractions = \
+    scope.solve("sun.ms.fits", "model.yaml")
 
 # Multiple spectra of the same star:
 # (As long as your model apertures are defined, the order of input spectra does not matter..)
-posteriors, sampler, model, mean_acceptance_fractions = \
-    scope.solve(["red.fits", "blue.fits"], "model.yml")
+posteriors, sampler, mean_acceptance_fractions = \
+    scope.solve(["red.fits", "blue.fits"], "model.yaml")
+
+# Or you can load the model first and use it for many stars:
+model = scope.models.Model("model.yaml")
+sun_posteriors, sun_sampler, sun_mean_acceptance_fractions = \
+    scope.solve("sun.ms.fits", model)
+
+arcturus_posteriors, arcturus_sampler, arcturus_mean_acceptance_fractions = \
+    scope.solve("arcturus.fits", model)
 ````
 
 Model Example
 -------------
-In the usage example above, the ``model.yml`` file contains all the model information required. This file can be a YAML or JSON-style format. Below is an example of what ``model.yml`` might look like, with comments:
+In the usage example above, the ``model.yaml`` file contains all the model information required. This file can be a YAML or JSON-style format. Below is an example of what ``model.yaml`` might look like, with comments:
 
 ````
 solver:
