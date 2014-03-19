@@ -317,7 +317,9 @@ class Spectrum1D(object):
             The velocity (in km/s) to correct the `Spectrum1D` object by.
         """
         
-        new_disp = self.disp * (1 + velocity/speed_of_light)
+        #new_disp = self.disp * (1 + velocity/speed_of_light)
+        # Relatavistic:
+        new_disp = (self.disp * (1 + velocity/speed_of_light))/np.sqrt(1 - pow(velocity/speed_of_light, 2))
         return self.__class__(new_disp, self.flux, uncertainty=self.uncertainty, headers=self.headers)
 
     
