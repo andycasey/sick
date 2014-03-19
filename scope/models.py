@@ -205,8 +205,11 @@ class Model(object):
                     # Save the grid points as a record array
                     self.grid_points = np.core.records.fromrecords(points, names=dimensions,
                         formats=["f8"]*len(dimensions))
+                    self.flux_filenames[aperture] = matched_filenames
 
-                self.flux_filenames[aperture] = matched_filenames
+                else:
+                    sort_indices = map(self.check_grid_point, points)
+                    self.flux_filenames[aperture] = [matched_filenames[index] for index in sort_indices]
            
         else:
             raise ValueError("no flux information provided for {0} aperture".format(self.apertures[0]))
@@ -229,8 +232,8 @@ class Model(object):
         num_models = len(self.grid_points) * num_apertures
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return "{module}.Model({num_models} models, {num_apertures} apertures: {apertures}, {num_parameters}"\
-            " parameters: {parameters}, ~{num_pixels} pixels)".format(module=self.__module__, num_models=num_models,
+        return "{module}.Model({num_models} models; {num_apertures} apertures: {apertures}; {num_parameters}"\
+            " parameters: {parameters}; ~{num_pixels} pixels)".format(module=self.__module__, num_models=num_models,
             num_apertures=num_apertures, apertures=', '.join(self.apertures), num_pixels=human_readable_digit(num_pixels),
             num_parameters=len(self.grid_points.dtype.names), parameters=', '.join(self.grid_points.dtype.names))
 
@@ -407,7 +410,7 @@ class Model(object):
             return self._dimensions
 
         # Get explicit priors
-        dimensions = [] + self.grid_points.dtype.names
+        dimensions = [] + list(self.grid_points.dtype.names)
         for dimension in self.configuration["priors"].keys():
             if dimension.startswith("doppler_shift") \
             or dimension.startswith("smooth_model_flux"):
@@ -527,7 +530,8 @@ class Model(object):
             The point of interest.
         """
 
-        index = np.all(self.grid_points == point, axis=-1)
+        num_dimensions = len(self.grid_points.dtype.names)
+        index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == point, axis=-1)
         if not any(index):
             return False
         return np.where(index)[0][0]
