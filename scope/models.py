@@ -84,7 +84,7 @@ def cache_model_point(filename, sigma=None, indices=None):
         data = data[indices[0]:indices[1]]
 
     # Save it to disk
-    fp = np.memmap(new_filename, dtype="float32", mode="w+",
+    fp = np.memmap(new_filename, dtype=np.float32, mode="w+",
         shape=data.shape)
     fp[:] = data[:]
     del fp
@@ -145,16 +145,33 @@ class Model(object):
 
             # Load the fluxes, which must be as memmaps
             global _scope_interpolator_
-            _scope_interpolator_ = {}
 
             num_points = len(self.grid_points)
-            for aperture in self.apertures:
+            fluxes = [] 
+            for i, aperture in enumerate(self.apertures):
+                if not "flux_filename" in self.configuration["model"][aperture]:
+                    logging.warn("No flux filename specified for {0} aperture".format(aperture))
+                    continue
+                fluxes.append(np.memmap(self.configuration["model"][aperture]["flux_filename"], mode="r", dtype=np.float32).reshape((num_points, -1)))
 
-                flux_filename = self.configuration["model"][aperture]["flux_filename"]
-                aperture_flux = np.memmap(flux_filename, mode="r", dtype=np.float32).reshape((num_points, -1))
-                _scope_interpolator_[aperture] = interpolate.LinearNDInterpolator(
-                    self.grid_points.view(float).reshape((num_points, -1)),
-                    aperture_flux)
+            total_pixels = sum([each.shape[1] for each in fluxes])
+            total_expected_pixels = sum(map(len, [self.dispersion[aperture] for aperture in self.apertures]))
+            if total_pixels != total_expected_pixels:
+                raise ValueError("the total flux pixels for a spectrum ({0}) was different to "\
+                    "what was expected ({1})".format(total_pixels, total_expected_pixels))
+
+            _scope_interpolator_ = interpolate.LinearNDInterpolator(
+                self.grid_points.view(float).reshape((num_points, -1)),
+                fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes))
+
+            del fluxes
+
+            #for aperture in self.apertures:
+            #    flux_filename = self.configuration["model"][aperture]["flux_filename"]
+            #    aperture_flux = np.memmap(flux_filename, mode="r", dtype=np.float32).reshape((num_points, -1))
+            #    _scope_interpolator_[aperture] = interpolate.LinearNDInterpolator(
+            #        self.grid_points.view(float).reshape((num_points, -1)),
+            #        aperture_flux)
 
         elif "flux_folder" in self.configuration["model"][self.apertures[0]] \
         and  "flux_filename_match" in self.configuration["model"][self.apertures[0]]:
@@ -550,10 +567,19 @@ class Model(object):
         global _scope_interpolator_
         if _scope_interpolator_ is not None:
 
+            interpolated_flux = _scope_interpolator_(*point)
+            
             interpolated_fluxes = {}
+            num_pixels = map(len, [self.dispersion[aperture] for aperture in self.apertures])
             for i, aperture in enumerate(self.apertures):
-                interpolated_fluxes[aperture] = _scope_interpolator_(point)
+                si, ei = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
+                interpolated_fluxes[aperture] = interpolated_flux[si:ei]
             return interpolated_fluxes
+
+            #interpolated_fluxes = {}
+            #for i, aperture in enumerate(self.apertures):
+            #    interpolated_fluxes[aperture] = _scope_interpolator_(point)
+            #return interpolated_fluxes
 
         indices = self.get_nearest_neighbours(point)
 
