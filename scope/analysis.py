@@ -37,7 +37,7 @@ def initialise_priors(model, observations):
         current_walker = []
         for j, dimension in enumerate(model.dimensions):
 
-            if dimension.startswith("jitter."):
+            if dimension == "jitter":
                 # Uniform prior between 0 and 1
                 current_walker.append(random.uniform(0, 1))
                 continue
@@ -119,8 +119,7 @@ def initialise_priors(model, observations):
                 # We probably need to evaluate this.
                 if prior_value.lower() == "uniform":
                     # Only works on stellar parameter values.
-                    index = model.colnames.index(dimension)
-                    possible_points = model.grid_points[:, index]
+                    possible_points = model.grid_points[dimension].view(np.float)
 
                     if i == 0: # Only print initialisation for the first walker
                         logger.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
@@ -223,15 +222,15 @@ def log_prior(theta, model):
     parameters = dict(zip(model.dimensions, theta))
     for parameter, value in parameters.iteritems():
         # Check doppler shifts. Anything more than 500 km/s is considered implausible
-        if parameter.startswith("doppler_shift.") and abs(value) > 500:
-            return -np.inf
+        #if parameter.startswith("doppler_shift.") and abs(value) > 500:
+        #    return -np.inf
 
         # Check smoothing values. Any negative value is considered unrealistic
         if parameter.startswith("smooth_model_flux.") and 0 > value:
             return -np.inf
 
         # Check for jitter
-        if parameter.startswith("jitter.") and not (1 > value > 0):
+        if parameter == "jitter" and not (1 > value > 0):
             return -np.inf
 
         # Check if point is within the grid boundaries?
@@ -278,32 +277,25 @@ def log_likelihood(theta, model, observations):
         return (-np.inf, blob + [-np.inf])
 
     # Any masks?
-    masks = model.masks(model_spectra)
+    #masks = model.masks(model_spectra)
     #weighting_functions = model.weights(model_spectra)
     
     # Calculate chi^2 difference
     chi_sqs = {}
-    for i, (aperture, observed_spectrum) in enumerate(zip(model._mapped_apertures, observed_spectra)):
+    for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observed_spectra)):
 
-
-        #inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter"])
-        #chi_sq = (observed_spectrum.flux - model_spectra[aperture].flux)**2 * inverse_variance
-
-        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter.{0}".format(aperture)]**2)
-        chi_sq = ((observed_spectrum.flux - model_spectra[aperture].flux)**2) * inverse_variance
+        #inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter.{0}".format(aperture)])
+        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter"])
+        chi_sq = ((observed_spectrum.flux - modelled_spectrum.flux)**2) * inverse_variance
 
         # Apply any weighting functions to the chi_sq values
         #chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
 
         # Apply masks
-        chi_sq *= masks[aperture]
-
-        # Add only finite, positive values
-        positive_finite_chisq_indices = (chi_sq > 0) * np.isfinite(chi_sq)
-        positive_finite_flux_indices = (observed_spectrum.flux > 0) * np.isfinite(observed_spectrum.flux)
+        #chi_sq *= masks[aperture]
 
         # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
-        useful_pixels = positive_finite_chisq_indices * positive_finite_flux_indices
+        useful_pixels = np.isfinite(chi_sq) 
         if sum(useful_pixels) == 0:
             logger.debug("Returning -np.inf log-likelihood because there were no useful pixels")
             return (-np.inf, blob + [-np.inf])
@@ -315,11 +307,11 @@ def log_likelihood(theta, model, observations):
         #> -1: Interested in this region, but it was non-finite (not used).
         #>  0: Not interested in this region, it was finite (not used).
         #>  1: Interested in this region, it was finite (used for parameter determination)
-        masks[aperture][~useful_pixels] -= 2
+        #masks[aperture][~useful_pixels] -= 2
 
     likelihood = -0.5 * np.sum(chi_sqs.values())
 
-    logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
+    logger.info("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
    
     return (likelihood, blob + [likelihood])
@@ -342,7 +334,7 @@ def solve(observed_spectra, model, initial_guess=None):
     """
 
     # Check observed arms do not overlap
-    observed_dispersions = [spectrum.disp for spectrum in observed_spectra]
+    observed_dispersions = [s.disp for s in observed_spectra]
     overlap = utils.find_spectral_overlap(observed_dispersions)
     if overlap is not None:
         raise ValueError("observed apertures cannot overlap in wavelength, but"
@@ -355,7 +347,7 @@ def solve(observed_spectra, model, initial_guess=None):
     # Get the aperture mapping from observed spectra to model spectra
     # For example, which index in our list of spectra corresponds to
     # 'blue', or 'red' in our model 
-    aperture_mapping = model.map_apertures(observed_dispersions)
+    aperture_mapping = model.map_apertures(observed_spectra)
     
     # Make fmin_powell the default
     if model.configuration["solver"].get("method", "powell") == "powell":
