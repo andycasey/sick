@@ -225,7 +225,7 @@ class Model(object):
                     self.flux_filenames[aperture] = matched_filenames
 
                 else:
-                    sort_indices = map(self.check_grid_point, points)
+                    sort_indices = np.argsort(map(self.check_grid_point, points))
                     self.flux_filenames[aperture] = [matched_filenames[index] for index in sort_indices]
            
         else:
@@ -447,8 +447,9 @@ class Model(object):
 
         # Append jitter dimension
         if self.configuration["solver"].get("walkers", 1) > 1:
-            for aperture in self.apertures:
-                dimensions.append("jitter.{0}".format(aperture))
+            dimensions.append("jitter")
+            #for aperture in self.apertures:
+            #    dimensions.append("jitter.{0}".format(aperture))
         
         setattr(self, "_dimensions", dimensions)
         
@@ -548,7 +549,8 @@ class Model(object):
         """
 
         num_dimensions = len(self.grid_points.dtype.names)
-        index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == point, axis=-1)
+        index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == np.array([point]).view(np.float), axis=-1)
+        #index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == point, axis=-1)
         if not any(index):
             return False
         return np.where(index)[0][0]
@@ -643,14 +645,14 @@ class Model(object):
             mapped_apertures.append(apertures_found[0])
 
         # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
-        for aperture, observed_dispersion in zip(mapped_apertures, observed_dispersions):
+        for aperture, spectrum in zip(mapped_apertures, observations):
 
-            mean_observed_pixel_size = np.mean(np.diff(observed_dispersion))
+            mean_observed_pixel_size = np.mean(np.diff(spectrum.disp))
             mean_model_pixel_size = np.mean(np.diff(self.dispersion[aperture]))
             if mean_model_pixel_size > mean_observed_pixel_size:
                 raise ValueError("the mean model pixel size in the {aperture} aperture is larger than the mean"
                     " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
-                    .format(aperture=aperture, wl_start=np.min(observed_dispersion), wl_end=np.max(observed_dispersion)))
+                    .format(aperture=aperture, wl_start=np.min(spectrum.disp), wl_end=np.max(spectrum.disp)))
 
         # Keep an internal reference of the aperture mapping
         self._mapped_apertures = mapped_apertures
@@ -705,13 +707,11 @@ class Model(object):
                 flux=interpolated_flux)
 
         # Any synthetic smoothing to apply?
-        for aperture in self._mapped_apertures:
+        for aperture in self.apertures:
             key = "smooth_model_flux.{aperture}.kernel".format(aperture=aperture)
 
             # Is the smoothing a free parameter?
             if key in kwargs:
-                # Ensure valid smoothing value
-                if kwargs[key] < 0: return None
                 model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kwargs[key])
 
             elif self.configuration["smooth_model_flux"][aperture]["perform"]:
@@ -726,7 +726,7 @@ class Model(object):
             for aperture, observed_spectrum in zip(self._mapped_apertures, observations):
                 model_spectra[aperture] = model_spectra[aperture].interpolate(observed_spectrum.disp)
 
-        return model_spectra
+        return [model_spectra[aperture] for aperture in self._mapped_apertures]
 
 
     def observed_spectra(self, observations, **kwargs):
@@ -763,9 +763,6 @@ class Model(object):
 
                 continuum = np.polyval(coefficients, modified_spectrum.disp)
                 modified_spectrum.flux /= continuum
-
-                if np.all(modified_spectrum.flux < 0):
-                    return None
 
             # Any doppler shift to perform?
             if self.configuration["doppler_shift"][aperture]["perform"]:
