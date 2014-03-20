@@ -201,7 +201,7 @@ def main():
 			primary_hdu = pyfits.PrimaryHDU()
 			table_hdu = pyfits.BinTableHDU(all_results)
 			hdulist = pyfits.HDUList([primary_hdu, table_hdu])
-			hdulist.writeto(filename_prefix + "-results.fits", clobber=True)
+			hdulist.writeto(os.path.join(args.output_dir, "{0}-results.fits".format(args.filename_prefix)), clobber=True)
 
 			# Close sampler pool
 			if model.configuration["solver"].get("walkers", 1) > 1:
@@ -264,7 +264,7 @@ def main():
 
 						ax.set_xlim(full_extent)
 
-					ax.set_ylim(0.6, 1.2)
+					ax.set_ylim(0.0, 1.1)
 
 				fig.savefig(filename_prefix + "-ml-spectra.pdf")
 
@@ -289,7 +289,7 @@ def main():
 
 						ax.set_xlim(full_extent)
 
-					ax.set_ylim(0.6, 1.2)
+					ax.set_ylim(0.0, 1.1)
 
 				fig.savefig(filename_prefix + "-pp-spectra.pdf")
 
