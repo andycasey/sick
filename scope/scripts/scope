@@ -242,7 +242,7 @@ def main():
 
 				# Make another corner plot with just the parameters of interest
 				indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[:, indices],
+				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[-int(model.configuration["solver"]["walkers"] * model.configuration["solver"]["sample"] * 0.5):, indices],
 					labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(model.grid_points.dtype.names))
 				fig.savefig(filename_prefix + "-corner.pdf")
 
