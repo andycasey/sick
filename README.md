@@ -143,3 +143,8 @@ masks:
     - [8450, 8750]
 ````
 
+**License**
+
+Copyright 2014 Andy Casey
+
+This is open source software available under the MIT License. For details see the LICENSE file.
