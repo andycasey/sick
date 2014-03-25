@@ -3,7 +3,7 @@
 """ Spectral Comparison and Parameter Evaluation """
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
-__version__ = "0.083"
+__version__ = "0.084"
 
 __all__ = ["config", "Model", "specutils", "Spectrum", "utils"]
 

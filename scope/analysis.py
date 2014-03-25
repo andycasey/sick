@@ -32,178 +32,211 @@ def initialise_priors(model, observations):
 
     walkers = model.configuration["solver"].get("walkers", 1)
 
-    for i in xrange(walkers):
+    if model.configuration.has_key("priors"):
+        for i in xrange(walkers):
 
-        current_walker = []
-        for j, dimension in enumerate(model.dimensions):
+            current_walker = []
+            for j, dimension in enumerate(model.dimensions):
 
-            if dimension == "jitter":
-                # Uniform prior between 0 and 1
-                current_walker.append(random.uniform(0, 1))
-                continue
+                if dimension == "jitter" or dimension.startswith("jitter."):
+                    # Uniform prior between 0 and 1
+                    current_walker.append(random.uniform(0, 1))
+                    continue
 
-            # Implicit priors
-            if dimension.startswith("normalise_observed."):
-                aperture = dimension.split(".")[1]
-                coefficient_index = int(dimension.split(".")[-1].lstrip("a"))
+                # Implicit priors
+                if dimension.startswith("normalise_observed."):
+                    aperture = dimension.split(".")[1]
+                    coefficient_index = int(dimension.split(".")[-1].lstrip("a"))
 
-                if aperture not in initial_normalisation_coefficients:
-                    index = model._mapped_apertures.index(aperture)
-                    order = model.configuration["normalise_observed"][aperture]["order"]
+                    if aperture not in initial_normalisation_coefficients:
+                        index = model._mapped_apertures.index(aperture)
+                        order = model.configuration["normalise_observed"][aperture]["order"]
 
-                    spectrum = observations[index]
+                        spectrum = observations[index]
+                        
+                        # Get the full range of spectra that will be normalised
+                        if "masks" in model.configuration and aperture in model.configuration["masks"]:
+                            
+                            ranges = np.array(model.configuration["masks"][aperture])
+                            min_range, max_range = np.min(ranges), np.max(ranges)
+                            range_indices = np.searchsorted(spectrum.disp, [min_range, max_range])
+
+                            flux_indices = np.zeros(len(spectrum.disp), dtype=bool)
+                            flux_indices[range_indices[0]:range_indices[1]] = True
+                            flux_indices *= np.isfinite(spectrum.flux) * (spectrum.flux > 0)
+                            
+                            logger.info("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
+                                aperture, np.min(spectrum.disp[flux_indices]), np.max(spectrum.disp[flux_indices])))
+                        else:
+                            flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
+
+                        # Fit the spectrum with a polynomial of order X
+                        coefficients = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices], order)
+
+                        # Save the coefficients and variances
+                        initial_normalisation_coefficients[aperture] = coefficients
                     
-                    # Get the full range of spectra that will be normalised
-                    if "masks" in model.configuration and aperture in model.configuration["masks"]:
-                        
-                        ranges = np.array(model.configuration["masks"][aperture])
-                        min_range, max_range = np.min(ranges), np.max(ranges)
-                        range_indices = np.searchsorted(spectrum.disp, [min_range, max_range])
+                    coefficient = initial_normalisation_coefficients[aperture][coefficient_index]
+                    
+                    spectrum = observations[model._mapped_apertures.index(aperture)]
+                    n = len(initial_normalisation_coefficients[aperture])
 
-                        flux_indices = np.zeros(len(spectrum.disp), dtype=bool)
-                        flux_indices[range_indices[0]:range_indices[1]] = True
-                        flux_indices *= np.isfinite(spectrum.flux) * (spectrum.flux > 0)
-                        
-                        logger.info("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
-                            aperture, np.min(spectrum.disp[flux_indices]), np.max(spectrum.disp[flux_indices])))
+                    sigma = 100./(np.mean(spectrum.disp[flux_indices])**(n - coefficient_index - 1))
+                    val = np.random.normal(coefficient, sigma)
+                    current_walker.append(val)
+
+                    continue
+
+                # Explicit priors
+                prior_value = model.configuration["priors"][dimension]
+                try:
+                    prior_value = float(prior_value)
+
+                except:
+
+                    # We probably need to evaluate this.
+                    if prior_value.lower() == "uniform":
+                        # Only works on stellar parameter values.
+                        possible_points = model.grid_points[dimension].view(np.float)
+
+                        if i == 0: # Only print initialisation for the first walker
+                            logger.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
+                                dimension, np.min(possible_points), np.max(possible_points)))
+                        current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
+
+                    elif prior_value.lower().startswith("normal"):
+                        mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
+
+                        if i == 0: # Only print initialisation for the first walker
+                            logger.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
+                                dimension, mu, sigma))
+                        current_walker.append(random.normal(mu, sigma))
+
+                    elif prior_value.lower().startswith("uniform"):
+                        minimum, maximum = map(float, prior_value.split("(")[1].rstrip(")").split(","))
+
+                        if i == 0: # Only print initialisation for the first walker
+                            logger.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
+                                dimension, minimum, maximum))
+                        current_walker.append(random.uniform(minimum, maximum))
+
+                    elif prior_value.lower().startswith("cross_correlate"):
+                        # cross_correlate('data/sun.ms.fits', 8400, 8800)
+                        raise NotImplementedError
+
                     else:
-                        flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
-
-                    # Fit the spectrum with a polynomial of order X
-                    coefficients = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices], order)
-
-                    # Save the coefficients and variances
-                    initial_normalisation_coefficients[aperture] = coefficients
-                
-                coefficient = initial_normalisation_coefficients[aperture][coefficient_index]
-                
-                spectrum = observations[model._mapped_apertures.index(aperture)]
-                n = len(initial_normalisation_coefficients[aperture])
-
-                sigma = 100./(np.mean(spectrum.disp[flux_indices])**(n - coefficient_index - 1))
-                val = np.random.normal(coefficient, sigma)
-                current_walker.append(val)
-                #print("coefficient", n -coefficient_index - 1, dimension, coefficient, val)
-                #print("original flux", np.mean(spectrum.flux[flux_indices]))
-
-                #current_walker.append(np.random.normal(coefficient,
-                #    0.1 * abs(coefficient) / np.mean(disp[flux_indices])**(coefficient_index)
-                #    ))
-                
-                #current_walker.append(np.random.normal(coefficient, abs(sigma)))
-
-                ##current_walker.append(np.random.normal(coefficient, \
-                #    0.001 * abs(coefficient) / np.mean(observations[model._mapped_apertures.index(aperture)].disp)**coefficient_index))
-                # This gives good setup in blue:
-                #intrinsic_sigma = 1e-5
-                #current_walker.append(random.normal(coefficient, intrinsic_sigma**float(coefficient_index + 1)))
-
-
-                #current_walker.append(random.normal(coefficient, 0.01 * abs(coefficient)**(1.0/(coefficient_index + 1))))
-                #current_walker.append(random.normal(coefficient, 0.1 * (abs(coefficient) / np.mean(observations[model._mapped_apertures.index(aperture)].disp)**(coefficient_index))))
-
-                #if aperture == "blue":
-                #    current_walker.append(random.normal(coefficient, 0.01 * abs(coefficient)))
-                #else:
-                #    current_walker.append(random.normal(coefficient, 0.01 * abs(coefficient)))
-                #    #current_walker.append(random.normal(coefficient, 10**(-len(initial_normalisation_coefficients[aperture])) * abs(coefficient)))
-                continue
-
-            # Explicit priors
-            prior_value = model.configuration["priors"][dimension]
-            try:
-                prior_value = float(prior_value)
-
-            except:
-
-                # We probably need to evaluate this.
-                if prior_value.lower() == "uniform":
-                    # Only works on stellar parameter values.
-                    possible_points = model.grid_points[dimension].view(np.float)
-
-                    if i == 0: # Only print initialisation for the first walker
-                        logger.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
-                            dimension, np.min(possible_points), np.max(possible_points)))
-                    current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
-
-                elif prior_value.lower().startswith("normal"):
-                    mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
-
-                    if i == 0: # Only print initialisation for the first walker
-                        logger.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
-                            dimension, mu, sigma))
-                    current_walker.append(random.normal(mu, sigma))
-
-                elif prior_value.lower().startswith("uniform"):
-                    minimum, maximum = map(float, prior_value.split("(")[1].rstrip(")").split(","))
-
-                    if i == 0: # Only print initialisation for the first walker
-                        logger.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
-                            dimension, minimum, maximum))
-                    current_walker.append(random.uniform(minimum, maximum))
-
-                elif prior_value.lower().startswith("cross_correlate"):
-                    # cross_correlate('data/sun.ms.fits', 8400, 8800)
-                    raise NotImplementedError
+                        raise TypeError("prior type not valid for {dimension}".format(dimension=dimension))
 
                 else:
-                    raise TypeError("prior type not valid for {dimension}".format(dimension=dimension))
+                    if i == 0: # Only print initialisation for the first walker
+                        logger_fn = logger.info if walkers == 1 else logger.warn
+                        logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(
+                            dimension, prior_value))
 
+                    current_walker.append(prior_value)
+
+            # Add the walker
+            if walkers == 1:
+                walker_priors = current_walker
+            
             else:
-                if i == 0: # Only print initialisation for the first walker
-                    logger_fn = logger.info if walkers == 1 else logger.warn
-                    logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(
-                        dimension, prior_value))
+                walker_priors.append(current_walker)
 
-                current_walker.append(prior_value)
+        walker_priors = np.array(walker_priors)
 
-        # Add the walker
-        if walkers == 1:
-            walker_priors = current_walker
-        
-        else:
-            walker_priors.append(current_walker)
+    else:
+        # No explicit priors given. Work it out!
+        cross_correlation_peaks = np.zeros((walkers, len(model.apertures)))
+        for i in xrange(walkers):
+            
+            current_walker = []
+            interpolated_flux = {}
+            normalisation_coefficients = {}
+            for j, dimension in enumerate(model.dimensions):
 
-    walker_priors = np.array(walker_priors)
+                if dimension == "jitter" or dimension.startswith("jitter."):
+                    current_walker.append(random.uniform(0, 1))
+                    continue
 
+                # Is it a model dimension?
+                if dimension in model.grid_points.dtype.names:
+                    # Sample uniformly
+                    current_walker.append(random.uniform(*model.grid_boundaries[dimension]))
+                    continue
 
-    """
-    print("PARAMETER NAMES", dimensions)
-    import matplotlib.pyplot as plt
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
+                else:
+                    # Since the grid point parameters come first in model.dimensions, the first
+                    # time this else is run means we can interpolate flux
+                    if len(interpolated_flux) == 0:
+                        interpolated_flux.update(model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)]))
+                        if np.any([np.all(~np.isfinite(value)) for value in interpolated_flux.values()]):
+                            
+                            k, keep_trying = 0, True
+                            while keep_trying:
+                                current_walker = [random.uniform(*model.grid_boundaries[dimension]) for dimension in model.grid_points.dtype.names]
+                                interpolated_flux = model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)])
 
-    red_indices = np.array([dimensions.index(name) for name in ["normalise_observed.red.a0","normalise_observed.red.a1","normalise_observed.red.a2","normalise_observed.red.a3"] if name in dimensions])
+                                if k > walkers:
+                                    raise ValueError("could not initialise priors with any finite flux points")
 
-    fluxes = []
-    for walker in walker_priors:
-        coefficients = walker[red_indices]
-        ax.plot(observations[0].disp, observations[0].flux / np.polyval(coefficients, observations[0].disp), c="#666666")
-
-    #fluxes = np.array(fluxes)
-    #ax.hist(fluxes[np.isfinite(fluxes)], bins=np.linspace(-5, 5, 50))
-    
-    fig.savefig("red-variance.png")
-    
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-
-    blue_indices = np.array([dimensions.index(name) for name in ["normalise_observed.blue.a0","normalise_observed.blue.a1","normalise_observed.blue.a2"]])
-    fluxes = []
-    for walker in walker_priors:
-        coefficients = walker[blue_indices]
-        ax.plot(observations[0].disp, observations[0].flux / np.polyval(coefficients, observations[0].disp), c="#666666")
-
-    #fluxes = np.array(fluxes)
-    #ax.hist(fluxes[np.isfinite(fluxes)], bins=np.linspace(-5, 5, 50))
-    #ax.set_xlim(-5, 5)
-    fig.savefig("blue-variance.png")
+                                if not np.any([np.all(~np.isfinite(value)) for value in interpolated_flux.values()]):
+                                    break
 
 
-    plt.close("all")
-    raise a
-    """
+                # Is it a smoothing parameter? Estimate from resolution
+
+                # Is it a velocity parameter? Estimate from cross-correlation with interpolated flux?
+                if dimension.startswith("doppler_shift."):
+                    aperture = dimension.split(".")[1]
+                    observed_spectrum = observations[model._mapped_apertures.index(aperture)]
+                    
+                    template = specutils.Spectrum1D(model.dispersion[aperture], interpolated_flux[aperture])
+                    vrad, u_vrad, R = observed_spectrum.cross_correlate(template)
+                    current_walker.append(random.normal(vrad, u_vrad))
+
+                    cross_correlation_peaks[i, int(model.apertures.index(aperture))] = R
+
+                # Is it a normalisation parameter? Estimate from division with spectra at point
+                elif dimension.startswith("normalise_observed."):
+                    aperture, coefficient = dimension.split(".")[1:3]
+
+                    if not normalisation_coefficients.has_key(aperture):
+                        # Get the full range of spectra that will be normalised
+                        observed_spectrum = observations[model._mapped_apertures.index(aperture)]
+                        order = model.configuration["normalise_observed"][aperture]["order"]
+
+                        if "masks" in model.configuration and aperture in model.configuration["masks"]:
+                            
+                            ranges = np.array(model.configuration["masks"][aperture])
+                            min_range, max_range = np.min(ranges), np.max(ranges)
+                            range_indices = np.searchsorted(observed_spectrum.disp, [min_range, max_range])
+
+                            flux_indices = np.zeros(len(observed_spectrum.disp), dtype=bool)
+                            flux_indices[range_indices[0]:range_indices[1]] = True
+                            flux_indices *= np.isfinite(observed_spectrum.flux) * (observed_spectrum.flux > 0)
+                            
+                            logger.debug("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
+                                aperture, np.min(observed_spectrum.disp[flux_indices]), np.max(observed_spectrum.disp[flux_indices])))
+                        else:
+                            flux_indices = np.isfinite(observed_spectrum.flux) * (observed_spectrum.flux > 0)
+
+                        # Put the interpolated flux onto the same scale as the observed_spectrum
+                        interpolated_resampled_flux = np.interp(observed_spectrum.disp[flux_indices], model.dispersion[aperture], interpolated_flux[aperture],
+                            left=np.nan, right=np.nan)
+
+                        # Fit the divided spectrum with a polynomial of order X
+                        divided_flux = observed_spectrum.flux[flux_indices]/interpolated_resampled_flux
+                        isfinite = np.isfinite(divided_flux)
+
+                        coefficients = np.polyfit(observed_spectrum.disp[flux_indices][isfinite], divided_flux[isfinite], order)
+                        normalisation_coefficients[aperture] = coefficients
+
+                    current_walker.append(normalisation_coefficients[aperture][int(coefficient[1:])])
+
+            walker_priors.append(map(float, current_walker))
+
+        walker_priors = np.array(walker_priors)
+        raise a
 
     logger.info("Priors summary:")
     for i, dimension in enumerate(model.dimensions):
@@ -230,7 +263,7 @@ def log_prior(theta, model):
             return -np.inf
 
         # Check for jitter
-        if parameter == "jitter" and not (1 > value > 0):
+        if (parameter == "jitter" or parameter.startswith("jitter.")) and not (1 > value > 0):
             return -np.inf
 
         # Check if point is within the grid boundaries?
@@ -284,8 +317,8 @@ def log_likelihood(theta, model, observations):
     chi_sqs = {}
     for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observed_spectra)):
 
-        #inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter.{0}".format(aperture)])
-        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter"])
+        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter.{0}".format(aperture)])
+        #inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter"])
         chi_sq = ((observed_spectrum.flux - modelled_spectrum.flux)**2) * inverse_variance
 
         # Apply any weighting functions to the chi_sq values
@@ -311,7 +344,7 @@ def log_likelihood(theta, model, observations):
 
     likelihood = -0.5 * np.sum(chi_sqs.values())
 
-    logger.info("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
+    logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
    
     return (likelihood, blob + [likelihood])
@@ -366,7 +399,7 @@ def solve(observed_spectra, model, initial_guess=None):
                 walker_p0, args=(model, observed_spectra))
             if not posteriors["success"] or posteriors["fun"] == fail_value:
                 continue
-            raise a
+        raise a
 
         return posteriors
 
@@ -391,12 +424,10 @@ def solve(observed_spectra, model, initial_guess=None):
         sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_likelihood,
             args=(model, observed_spectra), threads=threads)
 
-        # BURN BABY BURN
         # Sample_data contains all the inputs, and the \chi^2 and L 
         # sampler_state = (pos, lnprob, state[, blobs])
         for i, sampler_state in enumerate(sampler.sample(
-            p0, lnprob0=lnprob0, rstate0=rstate0,
-            iterations=model.configuration["solver"]["burn"])):
+            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=nsteps)):
 
             fraction_complete = (i + 1)/nsteps
             mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
@@ -409,26 +440,6 @@ def solve(observed_spectra, model, initial_guess=None):
                 logger.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
 
-        logger.info("Sampler burn-in complete. Resetting chain..")
-        sampler.reset()
-        p0, lnpro0, state0 = sampler_state[0], None, None
-
-        # SAMPLE ALL THE THINGS
-        for j, sampler_state in enumerate(sampler.sample(
-            p0, lnprob0=lnprob0, rstate0=rstate0,
-            iterations=model.configuration["solver"]["sample"])):
-
-            fraction_complete = (i + j + 2)/nsteps
-            mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
-
-            # Announce progress
-            logger.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
-                fraction_complete * 100, i + j + 2, mean_acceptance_fractions[i + j + 1]))
-
-            if mean_acceptance_fractions[i + j + 1] == 0:
-                logger.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
-                break
-
         # Convert state to posteriors
         logger.info("The final mean acceptance fraction is {0:.3f}".format(
             mean_acceptance_fractions[-1]))
@@ -436,7 +447,7 @@ def solve(observed_spectra, model, initial_guess=None):
         # Blobs contain all the sampled parameters and likelihoods        
         sampled = np.array(sampler.blobs).reshape((-1, len(model.dimensions) + 1))
 
-        sampled = sampled[-int(model.configuration["solver"]["walkers"] * model.configuration["solver"]["sample"] * 0.5):]
+        sampled = sampled[model.configuration["solver"]["sample"] * walkers:]
         sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
 
         # Get the maximum estimate

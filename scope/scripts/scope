@@ -6,6 +6,9 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
+import matplotlib
+matplotlib.use("Agg")
+
 import argparse
 import logging
 import os
@@ -61,7 +64,6 @@ def main():
 			sorted_spectra.append([all_spectra[j][i] for j in xrange(num_apertures)])
 
 		all_spectra = sorted_spectra
-
 
 	# Load the model
 	model = scope.Model(args.model)

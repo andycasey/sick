@@ -350,7 +350,7 @@ class Spectrum1D(object):
             headers=self.headers)
 
 
-    def cross_correlate(self, template, wl_region, full_output=False):
+    def cross_correlate(self, template, wl_region=None, full_output=False):
         """Performs a cross-correlation between the observed and template spectrum and
         provides a radial velocity and associated uncertainty.
 
@@ -359,7 +359,7 @@ class Spectrum1D(object):
         template : `Spectrum1D`
             The normalised template spectrum.
 
-        wl_region : two length list containing floats [start, end]
+        wl_region : optional, two length list containing floats [start, end]
             The starting and end wavelength to perform the cross-correlation on.
 
         full_output : `bool`, default False
@@ -376,15 +376,22 @@ class Spectrum1D(object):
         if not isinstance(template, Spectrum1D):
             raise TypeError("template spectrum must be a `specutils.Spectrum1D` object")
 
-        if not isinstance(wl_region, (tuple, list, np.ndarray)) or len(wl_region) != 2:
-            raise TypeError("wavelength region must be a two length list-type")
+        if wl_region is not None:
 
-        try:
-            wl_region = map(float, wl_region)
+            if not isinstance(wl_region, (tuple, list, np.ndarray)) or len(wl_region) != 2:
+                raise TypeError("wavelength region must be a two length list-type")
 
-        except:
-            raise TypeError("wavelength regions must be float-like")
+            try:
+                wl_region = map(float, wl_region)
 
+            except:
+                raise TypeError("wavelength regions must be float-like")
+
+        else:
+            wl_region = np.array([
+                self.disp[0],
+                self.disp[-1]
+                ])
         
         # Splice the observed spectrum
         idx = np.searchsorted(self.disp, wl_region)
@@ -447,21 +454,20 @@ class Spectrum1D(object):
         # 0, p1, sigma
         f, g, h = [func(point) for func, point in zip(functions, points)]
 
-
         # Calculate velocity 
         measured_vrad = speed_of_light * (1 - g/f)
 
         # Uncertainty
         measured_verr = np.abs(speed_of_light * (1 - h/f))
+        R = np.max(fft_y)
 
-        
         if full_output:
-            results = [measured_vrad, measured_verr, np.vstack([fft_x, fft_y])]
+            results = [measured_vrad, measured_verr, R, np.vstack([fft_x, fft_y])]
             results.extend(p1)
 
             return results
 
-        return [measured_vrad, measured_verr]
+        return [measured_vrad, measured_verr, R]
 
 
 def load_aaomega_multispec(filename, fill_value=-1):

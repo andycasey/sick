@@ -26,6 +26,8 @@ from scipy import interpolate, ndimage
 from utils import find_spectral_overlap, human_readable_digit 
 from specutils import Spectrum1D
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Model"]
 
 # This is a hacky global variable that is used for when pre-loading and
@@ -315,7 +317,7 @@ class Model(object):
             raise KeyError("no solver information provided in configuration")
 
         solver = self.configuration["solver"]
-        available_methods = ("fmin_powell", "emcee")
+        available_methods = ("powell", "bfgs", "emcee")
 
         if solver["method"] not in available_methods:
             raise ValueError("solver method '{0}' is unsupported. Available methods are: {1}".format(
@@ -447,60 +449,88 @@ class Model(object):
 
         # Append jitter dimension
         if self.configuration["solver"].get("walkers", 1) > 1:
-            dimensions.append("jitter")
-            #for aperture in self.apertures:
-            #    dimensions.append("jitter.{0}".format(aperture))
+            #imensions.append("jitter")
+            for aperture in self.apertures:
+                dimensions.append("jitter.{0}".format(aperture))
         
         setattr(self, "_dimensions", dimensions)
         
         return dimensions
 
 
-    def cache_models(self, smoothing_kernels=None, wavelength_slices=None, sample_rate=1,
-        threads=None, **kwargs):
+    def cache(self, grid_points_filename, dispersion_filenames, flux_filename, wavelengths=None, smoothing_kernels=None,
+        sampling=None):
         """ Cache the model dispersions and fluxes for faster read access at runtime.
         Spectra can be pre-convolved
 
         """
 
-        threads = 1 if threads is None else threads
-        profile_sigma = lambda k, d: (k / (2 * (2*np.log(2))**0.5))/np.mean(np.diff(d))
+        if not isinstance(smoothing_kernels, dict):
+            raise TypeError("smoothing kernels must be a dictionary-type with apertures as keys"\
+                " and kernels as values")
 
-        pool = multiprocessing.Pool(threads)
+        if not isinstance(wavelengths, dict):
+            raise TypeError("wavelengths must be a dictionary-type with apertures as keys")
 
-        if isinstance(self.flux_filenames, dict):
-            for aperture in self.flux_filenames.keys():
-                if aperture not in kernel.keys():
-                    pool.close()
-                    raise ValueError("no kernel provided for '{0}' aperture".format(aperture))
+        if sampling is None:
+            sampling = dict(zip(self.apertures, np.ones(len(self.apertures))))
 
-            # For each aperture, load all the spectra, convolve it, get a new filename, write cached file to disk
-            for beam, flux_filenames in self.flux_filenames.iteritems():
-                
-                sigma = profile_sigma(kernel[beam], self.dispersion[beam])
-                
-                if beam in self.configuration["masks"]:
-                    min_wl, max_wl = np.min(self.configuration["masks"][beam]), np.max(self.configuration["masks"][beam])
-                    indices = self.dispersion[beam].searchsorted([min_wl, max_wl])
+        # We need to know how big our arrays will be
+        n_points = len(self.grid_points)
 
-                else:
-                    indices = None
-
-                # Cache the dispersion filename
-                pool.apply_async(mapper, args=(cache_model_point, self.configuration["model"]["dispersion_filenames"][beam], None, indices))
-
-                for flux_filename in flux_filenames:
-                    pool.apply_async(mapper, args=(cache_model_point, flux_filename, sigma, indices))
+        if wavelengths is None:
+            n_pixels = []
+            wavelength_indices = {}
+            for aperture in self.apertures:
+                pixels = len(self.dispersion[aperture])
+                n_pixels.append(int(np.floor(pixels/sampling[aperture])))
+                wavelength_indices[aperture] = np.array([0, pixels])
 
         else:
-            raise NotImplementedError
+            n_pixels = []
+            wavelength_indices = {}
+            for aperture in self.apertures:
+                start, end = self.dispersion[aperture].searchsorted(wavelengths[aperture])
+                wavelength_indices[aperture] = np.array([start, end])
 
-            sigma = profile_sigma(kernel[beam], self.dispersion)
-            for flux_filename in self.flux_filenames:
-                pool.apply_async(mapper, args=(cache_model_point, flux_filename, sigma))
+                pixels = end - start 
+                n_pixels.append(int(np.floor(pixels/sampling[aperture])))
 
-        pool.close()
-        pool.join()
+        # Create the grid points filename
+        with open(grid_points_filename, "wb") as fp:
+            pickle.dump(self.grid_points, fp)
+
+        # Create empty memmap
+        flux = np.memmap(flux_filename, dtype=np.float32, mode="w+", shape=(n_points, sum(n_pixels)))
+        for i in xrange(n_points):
+
+            logger.info("Caching point {0} of {1} ({2:.1f}%)".format(i+1, n_points, 100*(i+1.)/n_points))
+            for j, aperture in enumerate(self.apertures):
+
+                sj, ej = map(int, map(sum, [n_pixels[:j], n_pixels[:j+1]]))
+
+                # Get the flux
+                si, ei = wavelength_indices[aperture]
+                aperture_flux = load_model_data(self.flux_filenames[aperture][i])
+
+                # Do we need to convolve it first?
+                if smoothing_kernels is not None and smoothing_kernels.has_key(aperture):
+                    sigma = (smoothing_kernels[aperture]/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(self.dispersion[aperture]))
+                    aperture_flux = ndimage.gaussian_filter1d(aperture_flux, sigma)
+
+                # Do we need to resample?
+                flux[i, sj:ej] = aperture_flux[si:ei:sampling[aperture]]
+
+        # Save the resampled dispersion arrays to disk
+        for aperture, dispersion_filename in dispersion_filenames.iteritems():
+            si, ei = wavelength_indices[aperture]
+
+            disp = np.memmap(dispersion_filename, dtype=np.float32, mode="w+", shape=(int((ei - si)/sampling[aperture]), ))
+            disp[:] = self.dispersion[aperture][si:ei:sampling[aperture]]
+            del disp
+
+        # Now we need to save the flux to disk
+        del flux
 
         return True
 
