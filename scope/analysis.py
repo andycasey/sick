@@ -36,6 +36,7 @@ def initialise_priors(model, observations):
         for i in xrange(walkers):
 
             current_walker = []
+            interpolated_flux = {}
             for j, dimension in enumerate(model.dimensions):
 
                 if dimension == "jitter" or dimension.startswith("jitter."):
@@ -45,10 +46,21 @@ def initialise_priors(model, observations):
 
                 # Implicit priors
                 if dimension.startswith("normalise_observed."):
+
+                    if len(interpolated_flux) == 0:
+                        interpolated_flux = model.interpolate_flux(current_walker[:len(self.grid_points.dtype.names)])
+
+                        if np.all(np.isfinite(interpolated_flux.values()[0])):
+                            interpolated_flux = {}
+                            for aperture in model.apertures:
+                                interpolated_flux[aperture] = np.ones(len(model.dispersion[aperture]))
+
                     aperture = dimension.split(".")[1]
                     coefficient_index = int(dimension.split(".")[-1].lstrip("a"))
 
+                    # If we're at this stage we should have grid point dimensions
                     if aperture not in initial_normalisation_coefficients:
+
                         index = model._mapped_apertures.index(aperture)
                         order = model.configuration["normalise_observed"][aperture]["order"]
 
@@ -71,19 +83,15 @@ def initialise_priors(model, observations):
                             flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
 
                         # Fit the spectrum with a polynomial of order X
-                        coefficients = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices], order)
+                        resampled_interpolated_flux = np.interp(spectrum.disp[flux_indices], model.dispersion[aperture],
+                            interpolated_flux[aperture])
+                        coefficients = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices]/resampled_interpolated_flux, order)
 
                         # Save the coefficients and variances
                         initial_normalisation_coefficients[aperture] = coefficients
                     
                     coefficient = initial_normalisation_coefficients[aperture][coefficient_index]
-                    
-                    spectrum = observations[model._mapped_apertures.index(aperture)]
-                    n = len(initial_normalisation_coefficients[aperture])
-
-                    sigma = 100./(np.mean(spectrum.disp[flux_indices])**(n - coefficient_index - 1))
-                    val = np.random.normal(coefficient, sigma)
-                    current_walker.append(val)
+                    current_walker.append(coefficient)
 
                     continue
 
