@@ -37,6 +37,7 @@ def initialise_priors(model, observations):
 
             current_walker = []
             interpolated_flux = {}
+            initial_normalisation_coefficients = {}
             for j, dimension in enumerate(model.dimensions):
 
                 if dimension == "jitter" or dimension.startswith("jitter."):
@@ -48,9 +49,8 @@ def initialise_priors(model, observations):
                 if dimension.startswith("normalise_observed."):
 
                     if len(interpolated_flux) == 0:
-                        interpolated_flux = model.interpolate_flux(current_walker[:len(self.grid_points.dtype.names)])
-
-                        if np.all(np.isfinite(interpolated_flux.values()[0])):
+                        interpolated_flux = model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)])
+                        if np.all(~np.isfinite(interpolated_flux.values()[0])):
                             interpolated_flux = {}
                             for aperture in model.apertures:
                                 interpolated_flux[aperture] = np.ones(len(model.dispersion[aperture]))
@@ -86,7 +86,7 @@ def initialise_priors(model, observations):
                         resampled_interpolated_flux = np.interp(spectrum.disp[flux_indices], model.dispersion[aperture],
                             interpolated_flux[aperture])
                         coefficients = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices]/resampled_interpolated_flux, order)
-
+                        
                         # Save the coefficients and variances
                         initial_normalisation_coefficients[aperture] = coefficients
                     
@@ -249,8 +249,8 @@ def initialise_priors(model, observations):
     logger.info("Priors summary:")
     for i, dimension in enumerate(model.dimensions):
         if len(walker_priors.shape) > 1 and walker_priors.shape[1] > 1:
-            logger.info("\tParameter {0} - mean: {1:.2e}, min: {2:.2e}, max: {3:.2e}".format(
-                dimension, np.mean(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
+            logger.info("\tParameter {0} - mean: {1:.2e}, std: {2:.2e}, min: {3:.2e}, max: {4:.2e}".format(
+                dimension, np.mean(walker_priors[:, i]), np.std(walker_priors[:, i]), np.min(walker_priors[:, i]), np.max(walker_priors[:, i])))
         else:
             logger.info("\tParameter {0} - initial point: {1:.2e}".format(
                 dimension, walker_priors[i]))
