@@ -263,11 +263,11 @@ def log_prior(theta, model):
     parameters = dict(zip(model.dimensions, theta))
     for parameter, value in parameters.iteritems():
         # Check doppler shifts. Anything more than 500 km/s is considered implausible
-        #if parameter.startswith("doppler_shift.") and abs(value) > 500:
-        #    return -np.inf
+        if parameter.startswith("doppler_shift.") and abs(value) > 500:
+            return -np.inf
 
         # Check smoothing values. Any negative value is considered unrealistic
-        if parameter.startswith("smooth_model_flux.") and 0 > value:
+        if parameter.startswith("smooth_model_flux.") and (0 > value or value > 5):
             return -np.inf
 
         # Check for jitter
@@ -455,7 +455,7 @@ def solve(observed_spectra, model, initial_guess=None):
         # Blobs contain all the sampled parameters and likelihoods        
         sampled = np.array(sampler.blobs).reshape((-1, len(model.dimensions) + 1))
 
-        sampled = sampled[model.configuration["solver"]["sample"] * walkers:]
+        sampled = sampled[int(model.configuration["solver"]["sample"] * walkers):]
         sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
 
         # Get the maximum estimate

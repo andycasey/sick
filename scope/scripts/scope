@@ -78,7 +78,8 @@ def main():
 		"scope_version": scope.__version__,
 		"walkers": model.configuration["solver"]["walkers"],
 		"burn": model.configuration["solver"]["burn"],
-		"sample": model.configuration["solver"]["sample"]
+		"sample": model.configuration["solver"]["sample"],
+		"final_mean_acceptance_fraction": 0
 	}
 
 	# For each spectra, analyse
@@ -102,6 +103,7 @@ def main():
 			metadata[header] = bluest_spectrum.headers[header]
 
 		# Set defaults for metadata
+		metadata.update({"run_id": i})
 		metadata.update(default_metadata)
 
 		try:
@@ -126,7 +128,9 @@ def main():
 		else:
 			# Save information related to the analysis
 			metadata.update({
-				"time_elapsed": int(time() - t_init)
+				"time_elapsed": int(time() - t_init),
+				"final_mean_acceptance_fraction": mean_acceptance_fractions[-1],
+				"last_100_mean_acceptance_fraction_sigma": np.std(mean_acceptance_fractions[-100:])
 			})
 
 			# Update results with the posteriors
@@ -163,7 +167,7 @@ def main():
 			primary_hdu = pyfits.PrimaryHDU()
 			table_hdu = pyfits.BinTableHDU(chain)
 			hdulist = pyfits.HDUList([primary_hdu, table_hdu])
-			hdulist.writeto(filename_prefix + "-posterior.fits", clobber=True)
+			hdulist.writeto(filename_prefix + "-chain.fits", clobber=True)
 
 			# Save the posteriors and mean acceptance fractions
 			with open(filename_prefix + ".results", "wb") as fp:
@@ -234,7 +238,7 @@ def main():
 				ax.axvline(x=model.configuration["solver"]["burn"], c="#666666", zorder=-1, lw=1)
 				ax.set_xlabel("Iterations")
 				ax.set_ylabel("$\langle{}f_a\\rangle$")
-				fig.savefig(filename_prefix + "-acceptance.pdf")
+				fig.savefig(filename_prefix + "-acceptance.jpg")
 
 				# Make a corner plot
 				ndim = sampler.chain.shape[-1]
@@ -246,7 +250,7 @@ def main():
 				indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
 				fig = triangle.corner(sampler.chain.reshape((-1, ndim))[int(model.configuration["solver"]["walkers"] * model.configuration["solver"]["burn"]):, indices],
 					labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(model.grid_points.dtype.names))
-				fig.savefig(filename_prefix + "-corner.pdf")
+				fig.savefig(filename_prefix + "-corner.jpg")
 
 				# Get the most probable spectra
 				me_index = np.argmax(blobs[:, -1])
@@ -268,7 +272,7 @@ def main():
 
 					ax.set_ylim(0.0, 1.1)
 
-				fig.savefig(filename_prefix + "-ml-spectra.pdf")
+				fig.savefig(filename_prefix + "-ml-spectra.jpg")
 
 				# Get the 50th quantile parameters
 				mid_parameters = dict(zip(posteriors.keys(), [posteriors[k][0] for k in posteriors.keys()]))
@@ -293,7 +297,7 @@ def main():
 
 					ax.set_ylim(0.0, 1.1)
 
-				fig.savefig(filename_prefix + "-pp-spectra.pdf")
+				fig.savefig(filename_prefix + "-pp-spectra.jpg")
 
 				# Closing the figures isn't enough; matplotlib leaks memory
 				plt.close("all")
