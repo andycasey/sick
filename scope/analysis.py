@@ -369,7 +369,8 @@ def optimise(observed_spectra, model, initial_samples=None):
     returned_values = []
     random_points = []
 
-    for i in xrange(initial_samples):
+
+    while len(random_points) > initial_samples:
         p0 = [np.random.uniform(*model.grid_boundaries[parameter]) for parameter in model.grid_points.dtype.names]
         
         try:
@@ -383,8 +384,8 @@ def optimise(observed_spectra, model, initial_samples=None):
 
     best_index = np.argmin(returned_values)
 
-    logging.info("Optimising from {0} with initial chi-sq of {1:.2f}".format(p0[best_index], returned_values[best_index]))
-    result = minimisation_function(p0[best_index], model, observed_spectra)
+    logging.info("Optimising from {0} with initial chi-sq of {1:.2f}".format(random_points[best_index], returned_values[best_index]))
+    result = minimisation_function(random_points[best_index], model, observed_spectra)
 
     return minimisation_function(result["x"], model, observed_spectra, full_output=True)
     
