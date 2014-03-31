@@ -319,7 +319,7 @@ class Model(object):
         solver = self.configuration["solver"]
         available_methods = ("powell", "bfgs", "emcee")
 
-        if solver["method"] not in available_methods:
+        if solver.get("method", "powell") not in available_methods:
             raise ValueError("solver method '{0}' is unsupported. Available methods are: {1}".format(
                 solver["method"], ", ".join(available_methods)))
 
