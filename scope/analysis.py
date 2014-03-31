@@ -249,11 +249,11 @@ def initialise_priors(model, observations):
     return walker_priors
 
 
-def optimise(observed_spectra, model, max_attempts=None, allowable_chi_sq=2):
+def optimise(observed_spectra, model, initial_samples=None):
     """ Optimise the model parameters prior to MCMC sampling """
 
-    if max_attempts is None:
-        max_attempts = model.configuration["solver"].get("walkers", 100)
+    if initial_samples is None:
+        initial_samples = model.configuration["solver"].get("walkers", 200)
 
     # Define a function to fit the smoothing
     def fit_smoothing(kernel, obs_flux, obs_sigma, model_flux):
@@ -366,17 +366,25 @@ def optimise(observed_spectra, model, max_attempts=None, allowable_chi_sq=2):
         return r_chi_sq
 
     fail_value = +9e99
-    result = {}
-    while result.get("fun", fail_value) == fail_value or result["fun"] > allowable_chi_sq:
+    returned_values = []
+    random_points = []
 
-        # Keep trying initial samples in the grid until we sample physical parameters
+    for i in xrange(initial_samples):
         p0 = [np.random.uniform(*model.grid_boundaries[parameter]) for parameter in model.grid_points.dtype.names]
+        
         try:
-            result = scipy.optimize.minimize(minimisation_function, p0, args=(model, observed_spectra))
-
+            result = minimisation_function(p0, model, observed_spectra)
         except:
-            logging.exception("Failed to converge from {0}".format(p0))
+            logging.exception("Failed to sample {0}".format(p0))
             continue
+
+        returned_values.append(result)
+        random_points.append(p0)
+
+    best_index = np.argmin(returned_values)
+
+    logging.info("Optimising from {0} with initial chi-sq of {1:.2f}".format(p0[best_index], returned_values[best_index]))
+    result = minimisation_function(p0[best_index], model, observed_spectra)
 
     return minimisation_function(result["x"], model, observed_spectra, full_output=True)
     
