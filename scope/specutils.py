@@ -388,9 +388,10 @@ class Spectrum1D(object):
                 raise TypeError("wavelength regions must be float-like")
 
         else:
+            # Get overlapping region
             wl_region = np.array([
-                self.disp[0],
-                self.disp[-1]
+                np.max([self.disp[0], template.disp[0]]),
+                np.min([self.disp[-1], template.disp[-1]])
                 ])
         
         # Splice the observed spectrum
