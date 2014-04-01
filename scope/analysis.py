@@ -357,7 +357,7 @@ def optimise(observed_spectra, model, initial_samples=None):
 
         r_chi_sq = chi_sqs/(ndim - len(model.grid_points.dtype.names) - 1)
         
-        print(u"Optimisation is returning a reduced χ² = {0:.2f} for the point where {1}".format(
+        logging.debug(u"Optimisation is returning a reduced χ² = {0:.2f} for the point where {1}".format(
             r_chi_sq, ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, theta)])))
         
         if full_output:
@@ -369,23 +369,26 @@ def optimise(observed_spectra, model, initial_samples=None):
     returned_values = []
     random_points = []
 
-
-    while len(random_points) > initial_samples:
+    logging.info("Random sampling...")
+    while initial_samples > len(random_points):
         p0 = [np.random.uniform(*model.grid_boundaries[parameter]) for parameter in model.grid_points.dtype.names]
         
         try:
             result = minimisation_function(p0, model, observed_spectra)
         except:
             logging.exception("Failed to sample {0}".format(p0))
-            continue
 
-        returned_values.append(result)
-        random_points.append(p0)
+        else:
+            returned_values.append(result)
+            random_points.append(p0)
 
     best_index = np.argmin(returned_values)
 
-    logging.info("Optimising from {0} with initial chi-sq of {1:.2f}".format(random_points[best_index], returned_values[best_index]))
-    result = minimisation_function(random_points[best_index], model, observed_spectra)
+    logging.info(u"Optimising from {0} with initial reduced χ² = {1:.2f}".format(
+        ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, random_points[best_index])]),
+        returned_values[best_index]))
+    result = scipy.optimize.minimize(minimisation_function, random_points[best_index],
+        args=(model, observed_spectra))
 
     return minimisation_function(result["x"], model, observed_spectra, full_output=True)
     
@@ -450,22 +453,17 @@ def log_likelihood(theta, model, observations):
         return (-np.inf, blob + [-np.inf])
 
     # Any masks?
-    #masks = model.masks(model_spectra)
-    #weighting_functions = model.weights(model_spectra)
+    masks = model.masks(model_spectra)
     
     # Calculate chi^2 difference
     chi_sqs = {}
     for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observed_spectra)):
 
         inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter.{0}".format(aperture)])
-        #inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter"])
         chi_sq = ((observed_spectrum.flux - modelled_spectrum.flux)**2) * inverse_variance
 
-        # Apply any weighting functions to the chi_sq values
-        #chi_sq /= weighting_functions[aperture](model_spectra[aperture].disp, model_spectra[aperture].flux)
-
         # Apply masks
-        #chi_sq *= masks[aperture]
+        chi_sq *= masks[aperture]
 
         # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
         useful_pixels = np.isfinite(chi_sq) 
@@ -529,8 +527,6 @@ def solve(observed_spectra, model):
         
         return result
         
-
-
     elif model.configuration["solver"]["method"] == "emcee":
 
         # Ensure we have the number of walkers and steps specified in the configuration
@@ -543,10 +539,9 @@ def solve(observed_spectra, model):
         mean_acceptance_fractions = np.zeros(nsteps)
         
         # Initialise priors and set up arguments for optimization
-        if model.configuration["solver"].get("optimise", False):
-            r_chi_sq, parameters = optimise(observed_spectra, model)
+        if model.configuration["solver"].get("optimise", True):
 
-            # Initialise a ball
+            r_chi_sq, parameters = optimise(observed_spectra, model)
 
             walker_priors = []
             initial_normalisation_coefficients = {}
@@ -622,7 +617,7 @@ def solve(observed_spectra, model):
                         continue
 
                     if dimension in model.grid_points.dtype.names:
-                        current_walker.append(random.normal(parameters[dimension], 0.05 * np.ptp(model.grid_boundaries[dimension])))
+                        current_walker.append(random.normal(parameters[dimension], 0.10 * np.ptp(model.grid_boundaries[dimension])))
                         continue
 
                     # Explicit priors
@@ -682,7 +677,6 @@ def solve(observed_spectra, model):
 
             p0 = np.array(walker_priors)
 
-
         else:
             p0 = initialise_priors(model, observed_spectra)
 
@@ -695,7 +689,6 @@ def solve(observed_spectra, model):
                 logger.info("\tParameter {0} - initial point: {1:.2e}".format(
                     dimension, p0[i]))
 
-        
         # Initialise the sampler
         sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_likelihood,
             args=(model, observed_spectra), threads=threads)
