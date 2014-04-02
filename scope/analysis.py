@@ -253,7 +253,7 @@ def optimise(observed_spectra, model, initial_samples=None):
     """ Optimise the model parameters prior to MCMC sampling """
 
     if initial_samples is None:
-        initial_samples = model.configuration["solver"].get("walkers", 200)
+        initial_samples = model.configuration["solver"].get("initial_samples", 1000)
 
     # Define a function to fit the smoothing
     def fit_smoothing(kernel, obs_flux, obs_sigma, model_flux):
@@ -334,12 +334,15 @@ def optimise(observed_spectra, model, initial_samples=None):
                 # Do we have a kernel?
                 if model.configuration["smooth_model_flux"][aperture]["kernel"] == "free":
 
+                    # For the moment, at least some smoothing information is required in the model file
+                    kernel = float(model.configuration["priors"]["smooth_model_flux.{0}.kernel".format(aperture)].split("(")[0].split(",")[0])
+
                     # Estimate kernel value
-                    kernel = abs(scipy.optimize.minimize(fit_smoothing, [0],
-                        args=(observed_normalised_aperture_flux, observed_aperture.uncertainty[flux_indices], resampled_model_aperture.flux[flux_indices]))["x"])
+                    #kernel = abs(scipy.optimize.minimize(fit_smoothing, [0],
+                    #    args=(observed_normalised_aperture_flux, observed_aperture.uncertainty[flux_indices], resampled_model_aperture.flux[flux_indices]))["x"])
 
                     # Scale kernel to a fwhm
-                    kernel *= (2 * (2*np.log(2))**0.5) * np.mean(np.diff(resampled_model_aperture.disp))
+                    #kernel *= (2 * (2*np.log(2))**0.5) * np.mean(np.diff(resampled_model_aperture.disp))
                     parameters["smooth_model_flux.{0}.kernel".format(aperture)] = kernel
 
                 else:
@@ -357,7 +360,7 @@ def optimise(observed_spectra, model, initial_samples=None):
 
         r_chi_sq = chi_sqs/(ndim - len(model.grid_points.dtype.names) - 1)
         
-        logging.debug(u"Optimisation is returning a reduced χ² = {0:.2f} for the point where {1}".format(
+        logger.debug(u"Optimisation is returning a reduced χ² = {0:.2f} for the point where {1}".format(
             r_chi_sq, ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, theta)])))
         
         if full_output:
@@ -369,14 +372,14 @@ def optimise(observed_spectra, model, initial_samples=None):
     returned_values = []
     random_points = []
 
-    logging.info("Random sampling...")
+    logger.info("Random sampling...")
     while initial_samples > len(random_points):
         p0 = [np.random.uniform(*model.grid_boundaries[parameter]) for parameter in model.grid_points.dtype.names]
         
         try:
             result = minimisation_function(p0, model, observed_spectra)
         except:
-            logging.exception("Failed to sample {0}".format(p0))
+            logger.exception("Failed to sample {0}".format(p0))
 
         else:
             returned_values.append(result)
@@ -384,7 +387,7 @@ def optimise(observed_spectra, model, initial_samples=None):
 
     best_index = np.argmin(returned_values)
 
-    logging.info(u"Optimising from {0} with initial reduced χ² = {1:.2f}".format(
+    logger.info(u"Optimising from {0} with initial reduced χ² = {1:.2f}".format(
         ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, random_points[best_index])]),
         returned_values[best_index]))
     result = scipy.optimize.minimize(minimisation_function, random_points[best_index],
@@ -453,7 +456,7 @@ def log_likelihood(theta, model, observations):
         return (-np.inf, blob + [-np.inf])
 
     # Any masks?
-    masks = model.masks(model_spectra)
+    # masks = model.masks(model_spectra)
     
     # Calculate chi^2 difference
     chi_sqs = {}
@@ -463,7 +466,7 @@ def log_likelihood(theta, model, observations):
         chi_sq = ((observed_spectrum.flux - modelled_spectrum.flux)**2) * inverse_variance
 
         # Apply masks
-        chi_sq *= masks[aperture]
+        #chi_sq *= masks[aperture]
 
         # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
         useful_pixels = np.isfinite(chi_sq) 
@@ -605,19 +608,16 @@ def solve(observed_spectra, model):
                         
                         coefficient = initial_normalisation_coefficients[aperture][coefficient_index]
                         current_walker.append(coefficient)
-
                         continue
 
                     if dimension.startswith("doppler_shift."):
+                        # Sigma velocity of 5 km/s
                         current_walker.append(random.normal(parameters[dimension], 5))
                         continue
 
-                    if dimension.startswith("smooth_model_flux."):
-                        current_walker.append(random.normal(parameters[dimension], 0.1))
-                        continue
-
                     if dimension in model.grid_points.dtype.names:
-                        current_walker.append(random.normal(parameters[dimension], 0.10 * np.ptp(model.grid_boundaries[dimension])))
+                        # Have a sigma that's 5% of the dynamic range
+                        current_walker.append(random.normal(parameters[dimension], 0.05 * np.ptp(model.grid_boundaries[dimension])))
                         continue
 
                     # Explicit priors
