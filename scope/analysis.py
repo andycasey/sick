@@ -392,8 +392,10 @@ def optimise(observed_spectra, model, initial_samples=None):
         returned_values[best_index]))
     result = scipy.optimize.minimize(minimisation_function, random_points[best_index],
         args=(model, observed_spectra))
+
     logger.info(u"Sampling from {0} with reduced χ² = {1:.2f}".format(
-        ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, result["x"])])))
+        ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, result["x"])]),
+        result["fun"]))
 
     return minimisation_function(result["x"], model, observed_spectra, full_output=True)
     
