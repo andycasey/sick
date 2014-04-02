@@ -36,7 +36,7 @@ def main():
 	parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
 	parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
 	parser.add_argument("--debug", dest="debug", action="store_true", default=False)
-	parser.add_argument("-pf", "--plot-format", dest="plot_format", dest="store", type="str", default="jpg")
+	parser.add_argument("-pf", "--plot-format", dest="plot_format", action="store", type=str, default="jpg")
 	args = parser.parse_args()
 
 	if not os.path.exists(args.model):
@@ -72,7 +72,7 @@ def main():
 
 		all_spectra = sorted_spectra
 	else:
-		all_spectra = [all_spectra]
+		all_spectra = sum(all_spectra, [])
 
 	# Load the model
 	model = scope.Model(args.model)
@@ -307,7 +307,7 @@ def main():
 			# Delete some things
 			del sampler, chain, primary_hdu, table_hdu, hdulist
 
-	logger.info("Fin.")
+	logging.info("Fin.")
 
 if __name__ == "__main__":
 	main()

@@ -335,7 +335,7 @@ def optimise(observed_spectra, model, initial_samples=None):
                 if model.configuration["smooth_model_flux"][aperture]["kernel"] == "free":
 
                     # For the moment, at least some smoothing information is required in the model file
-                    kernel = float(model.configuration["priors"]["smooth_model_flux.{0}.kernel".format(aperture)].split("(")[0].split(",")[0])
+                    kernel = float(model.configuration["priors"]["smooth_model_flux.{0}.kernel".format(aperture)].split("(")[1].split(",")[0])
 
                     # Estimate kernel value
                     #kernel = abs(scipy.optimize.minimize(fit_smoothing, [0],
