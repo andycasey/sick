@@ -37,7 +37,7 @@ setup(name="spectroscope",
       packages=["scope"],
       url="http://www.github.com/andycasey/spectroscope/",
       license="MIT",
-      description="Infer stellar parameters from spectra",
+      description="Infer astrophysical parameters from spectra",
       long_description=readfile(os.path.join(os.path.dirname(__file__), "README.md")),
       install_requires=readfile(
           os.path.join(os.path.dirname(__file__), "requirements.txt")).split("\n"),

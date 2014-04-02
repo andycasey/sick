@@ -95,6 +95,10 @@ def main():
 	
 	# For each spectra, analyse
 	for i, spectra in enumerate(all_spectra):
+		# Force spectra as a list
+		if not isinstance(spectra, (list, tuple)):
+			spectra = [spectra]
+
 		# Create metadata and put header information in
 		if args.skip > i:
 			logging.info("Skipping star #{0}".format(i))
@@ -104,10 +108,6 @@ def main():
 		args.number_to_solve == (i + 1 + args.skip):
 			logging.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
 			break
-
-		if not isinstance(spectra, (list, tuple)):
-			spectra = [spectra]
-			default_metadata["filenames"] = args.spectra[i]
 
 		metadata = {}
 		header_columns = []

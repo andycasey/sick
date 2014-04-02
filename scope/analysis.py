@@ -77,7 +77,7 @@ def initialise_priors(model, observations):
                             flux_indices[range_indices[0]:range_indices[1]] = True
                             flux_indices *= np.isfinite(spectrum.flux) * (spectrum.flux > 0)
                             
-                            logger.info("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
+                            logger.debug("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
                                 aperture, np.min(spectrum.disp[flux_indices]), np.max(spectrum.disp[flux_indices])))
                         else:
                             flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
@@ -392,6 +392,8 @@ def optimise(observed_spectra, model, initial_samples=None):
         returned_values[best_index]))
     result = scipy.optimize.minimize(minimisation_function, random_points[best_index],
         args=(model, observed_spectra))
+    logger.info(u"Sampling from {0} with reduced χ² = {1:.2f}".format(
+        ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, result["x"])])))
 
     return minimisation_function(result["x"], model, observed_spectra, full_output=True)
     
