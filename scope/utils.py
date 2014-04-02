@@ -15,7 +15,7 @@ __all__ = ["human_readable_digit", "find_spectral_overlap", "latexify",
 def latexify(labels, overwrite_common_labels=None):
 
     common_labels = {
-        "teff": "$T_{eff}$ [K]",
+        "teff": "$T_{\\rm eff}$ [K]",
         "feh": "[Fe/H]",
         "logg": "$\log{g}$",
         "alpha": "[$\\alpha$/Fe]",
