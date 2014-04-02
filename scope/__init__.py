@@ -1,9 +1,9 @@
 # coding: utf-8
 
-""" Spectral Comparison and Parameter Evaluation """
+""" Spectroscopic inference of astrophysical quantities """
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
-__version__ = "0.084"
+__version__ = "0.0843"
 
 __all__ = ["config", "Model", "specutils", "Spectrum", "utils"]
 
