@@ -6,6 +6,8 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
+__all__ = ["Spectrum1D", "Spectrum"]
+
 # Standard library
 import logging
 import os
@@ -17,7 +19,7 @@ import pyfits
 from scipy import interpolate, ndimage
 from scipy.optimize import leastsq
 
-__all__ = ["Spectrum1D", "Spectrum"]
+logger = logging.getLogger(__name__.split(".")[0])
 
 # The following line of code will be supported until the end of the universe.
 speed_of_light = 299792458e-3 # km/s
@@ -250,7 +252,7 @@ class Spectrum1D(object):
                         hdu.header.update(key, value)
 
                     except ValueError:
-                        logging.warn("Could not save header key/value combination: %s = %s" % (key, value, ))
+                        logger.warn("Could not save header key/value combination: %s = %s" % (key, value, ))
                     
                 # Create HDU list with our tables
                 hdulist = pyfits.HDUList([hdu, table_hdu])
@@ -281,7 +283,7 @@ class Spectrum1D(object):
                             hdu.header.update(key, value)
 
                         except ValueError:
-                            logging.warn("Could not save header key/value combination: %s = %s" % (key, value, ))
+                            logger.warn("Could not save header key/value combination: %s = %s" % (key, value, ))
                 
                 hdu.writeto(filename, clobber=clobber)
     
@@ -497,7 +499,7 @@ def load_aaomega_multispec(filename, fill_value=-1):
         try:
             base_headers[header] = image[0].header[header]
         except KeyError:
-            logging.info('Could not find "{keyword}" keyword in the headers of filename {filename}'
+            logger.info('Could not find "{keyword}" keyword in the headers of filename {filename}'
                 .format(keyword=header, filename=filename))
     
     dispersion = image[0].header['CRVAL1'] \

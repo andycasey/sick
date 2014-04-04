@@ -6,6 +6,8 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
+__all__ = ["Model"]
+
 # Standard library
 import cPickle as pickle
 import json
@@ -26,9 +28,7 @@ from scipy import interpolate, ndimage
 from utils import find_spectral_overlap, human_readable_digit 
 from specutils import Spectrum1D
 
-logger = logging.getLogger(__name__)
-
-__all__ = ["Model"]
+logger = logging.getLogger(__name__.split(".")[0])
 
 # This is a hacky global variable that is used for when pre-loading and
 # multiprocessing are employed

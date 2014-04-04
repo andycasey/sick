@@ -6,11 +6,10 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
-import numpy as np
-
 __all__ = ["human_readable_digit", "find_spectral_overlap", "latexify",
     "unique_preserved_list"]
 
+import numpy as np
 
 def latexify(labels, overwrite_common_labels=None):
 
