@@ -34,13 +34,24 @@ def initialise_priors(model, observations):
     walkers = model.configuration["solver"].get("walkers", 1)
 
     if model.configuration.has_key("priors"):
-        for i in xrange(walkers):
+        while walkers > len(walker_priors):
 
             current_walker = []
             interpolated_flux = {}
             initial_normalisation_coefficients = {}
             for j, dimension in enumerate(model.dimensions):
 
+                # Have we just finished doing the model dimensions?
+                # If so then we can interpolate to a model flux
+                if len(current_walker) == len(model.grid_points.dtype.names):
+                    interpolated_flux = model.interpolate_flux(current_walker)
+
+                    if np.all(~np.isfinite(interpolated_flux.values()[0])):
+                        # None of the flux in the first beam are finite.
+                        current_walker = []
+                        break
+
+                # Jitter
                 if dimension == "jitter" or dimension.startswith("jitter."):
                     # Uniform prior between 0 and 1
                     current_walker.append(random.uniform(0, 1))
@@ -48,13 +59,6 @@ def initialise_priors(model, observations):
 
                 # Implicit priors
                 if dimension.startswith("normalise_observed."):
-
-                    if len(interpolated_flux) == 0:
-                        interpolated_flux = model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)])
-                        if np.all(~np.isfinite(interpolated_flux.values()[0])):
-                            interpolated_flux = {}
-                            for aperture in model.apertures:
-                                interpolated_flux[aperture] = np.ones(len(model.dispersion[aperture]))
 
                     aperture = dimension.split(".")[1]
                     coefficient_index = int(dimension.split(".")[-1].lstrip("a"))
@@ -108,7 +112,7 @@ def initialise_priors(model, observations):
                         # Only works on stellar parameter values.
                         possible_points = model.grid_points[dimension].view(np.float)
 
-                        if i == 0: # Only print initialisation for the first walker
+                        if len(walker_priors) == 0: # Only print initialisation for the first walker
                             logger.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
                                 dimension, np.min(possible_points), np.max(possible_points)))
                         current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
@@ -116,7 +120,7 @@ def initialise_priors(model, observations):
                     elif prior_value.lower().startswith("normal"):
                         mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
-                        if i == 0: # Only print initialisation for the first walker
+                        if len(walker_priors) == 0: # Only print initialisation for the first walker
                             logger.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
                                 dimension, mu, sigma))
                         current_walker.append(random.normal(mu, sigma))
@@ -124,37 +128,41 @@ def initialise_priors(model, observations):
                     elif prior_value.lower().startswith("uniform"):
                         minimum, maximum = map(float, prior_value.split("(")[1].rstrip(")").split(","))
 
-                        if i == 0: # Only print initialisation for the first walker
+                        if len(walker_priors) == 0: # Only print initialisation for the first walker
                             logger.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
                                 dimension, minimum, maximum))
                         current_walker.append(random.uniform(minimum, maximum))
 
                     elif prior_value.lower() == "cross_correlate":
-                        # At this stage we have the stellar parameters for this sample, so we can actually cross-correlate the observed
-                        # spectra in order to obtain a good estimate of the RV.
-                        if len(interpolated_flux) == 0:
-                            interpolated_flux = model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)])
-                    
-                        model_aperture_spectrum = specutils.Spectrum1D(model.dispersion[aperture], interpolated_flux[aperture])
-                        v_rad, u_v_rad, R = observations[aperture].cross_correlate(model_aperture_spectrum)
-                        current_walker.append(random.normal(v_rad, u_v_rad))
+                        current_walker.append(random.normal(0, 100))
+
+                        #aperture = dimension.split(".")[1]
+                        #observed_spectrum = observations[model._mapped_apertures.index(aperture)]
+
+                        #model_aperture_spectrum = specutils.Spectrum1D(model.dispersion[aperture], interpolated_flux[aperture])
+                        #v_rad, u_v_rad, R = observed_spectrum.cross_correlate(model_aperture_spectrum)
+                        #current_walker.append(random.normal(v_rad, u_v_rad))
 
                     else:
                         raise TypeError("prior type not valid for {dimension}".format(dimension=dimension))
 
                 else:
-                    if i == 0: # Only print initialisation for the first walker
+                    if len(walker_priors) == 0: # Only print initialisation for the first walker
                         logger_fn = logger.info if walkers == 1 else logger.warn
                         logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(dimension, prior_value))
 
                     current_walker.append(prior_value)
 
-            # Add the walker
-            if walkers == 1:
-                walker_priors = current_walker
             
-            else:
-                walker_priors.append(current_walker)
+            # Was the walker actually valid?
+            if len(current_walker) > 0:
+
+                # Add the walker
+                if walkers == 1:
+                    walker_priors = current_walker
+                
+                else:
+                    walker_priors.append(current_walker)
 
         walker_priors = np.array(walker_priors)
 
