@@ -12,5 +12,5 @@ from analysis import solve
 from models import Model
 from specutils import Spectrum
 
-logger = logging.getLogger(__module__)
-logger.setLevel(logging.INFO)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("scope")
