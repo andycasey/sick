@@ -30,7 +30,7 @@ def main():
 	parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
 		type=str, default=os.getcwd())
 	parser.add_argument("-p", "--filename-prefix", dest="filename_prefix", default="scope")
-	parser.add_argument("-mb", "--multi-beam", dest="multi_beam", default=False)
+	parser.add_argument("-mb", "--multi-beam", action="store_true", default=False)
 	parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all")
 	parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0)
 	parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
@@ -40,12 +40,16 @@ def main():
 	args = parser.parse_args()
 
 	if not os.path.exists(args.model):
-		raise IOError("model filename does not exist")
+		raise IOError("model filename {0} does not exist".format(args.model))
 
 	available = ("pdf", "jpg", "png", "eps")
 	if args.plotting and args.plot_format.lower() not in available:
 		raise ValueError("plotting format '{0}' not available. Options: {1}".format(args.plot_format.lower(),
 			", ".join(available)))
+
+	# Initialise logging
+	logger = logging.getLogger("scope")
+	logger.setLevel(logging.DEBUG if args.debug else logging.INFO)
 
 	all_spectra = [scope.Spectrum.load(filename) for filename in args.spectra]
 
@@ -76,7 +80,7 @@ def main():
 
 	# Load the model
 	model = scope.Model(args.model)
-	logging.info("Model information: {0}".format(model))
+	logger.info("Model information: {0}".format(model))
 
 	# Define headers that we want in the results filename 
 	default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
@@ -87,7 +91,7 @@ def main():
 		"scope_version": scope.__version__,
 		"walkers": model.configuration["solver"]["walkers"],
 		"burn": model.configuration["solver"]["burn"],
-		"sample": model.configuration["solver"]["sample"],
+		"sample": model.configuration["solver"]["max_sample"] - model.configuration["solver"]["burn"],
 		"final_mean_acceptance_fraction": 0
 	}
 
@@ -95,18 +99,20 @@ def main():
 	
 	# For each spectra, analyse
 	for i, spectra in enumerate(all_spectra):
+		logger.info("Starting on star #{0}".format(i + 1))
+
 		# Force spectra as a list
 		if not isinstance(spectra, (list, tuple)):
 			spectra = [spectra]
 
 		# Create metadata and put header information in
 		if args.skip > i:
-			logging.info("Skipping star #{0}".format(i))
+			logger.info("Skipping star #{0}".format(i))
 			continue
 
 		if isinstance(args.number_to_solve, (int, float)) and \
 		args.number_to_solve == (i + 1 + args.skip):
-			logging.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
+			logger.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
 			break
 
 		metadata = {}
@@ -128,7 +134,7 @@ def main():
 
 			
 		except:
-			logging.exception("Failed to analyse #{0}:".format(i))
+			logger.exception("Failed to analyse #{0}:".format(i))
 			if args.debug: raise
 
 			try: all_results
@@ -146,9 +152,9 @@ def main():
 			# Set some filename variables
 			filename_prefix = os.path.join(args.output_dir, "{0}-{1}".format(args.filename_prefix, i))
 			state_filename = "{0}.state".format(filename_prefix)
-			pp_observed_spectra_filenames = ["{0}-pp-obs-{1}.{2}".format(filename_prefix, aperture, args.plot_format) \
+			pp_observed_spectra_filenames = ["{0}-pp-obs-{1}.fits".format(filename_prefix, aperture) \
 				for aperture in model._mapped_apertures]
-			pp_modelled_spectra_filenames = ["{0}-pp-mod-{1}.{2}".format(filename_prefix, aperture, args.plot_format) \
+			pp_modelled_spectra_filenames = ["{0}-pp-mod-{1}.fits".format(filename_prefix, aperture) \
 				for aperture in model._mapped_apertures]
 
 			if args.plotting:
@@ -162,6 +168,7 @@ def main():
 
 			# Save information related to the analysis
 			metadata.update({
+				"sample": len(mean_acceptance_fractions) - metadata["burn"],
 				"state_filename": state_filename,
 				"chain_filename": chain_filename,
 				"acceptance_plot_filename": acceptance_plot_filename,
@@ -171,13 +178,13 @@ def main():
 				"pp_modelled_spectra_filenames": ",".join(pp_modelled_spectra_filenames),
 				"time_elapsed": int(time() - t_init),
 				"final_mean_acceptance_fraction": mean_acceptance_fractions[-1],
-				"last_100_mean_acceptance_fraction_sigma": np.std(mean_acceptance_fractions[-100:])
+				"sample_sigma_mean_acceptance_fraction": np.std(mean_acceptance_fractions[-model.configuration["solver"]["sample"]:])
 			})
 
 			# Update results with the posteriors
-			logging.info("Posteriors:")
+			logger.info("Posteriors:")
 			for dimension, (posterior_value, pos_uncertainty, neg_uncertainty) in posteriors.iteritems():
-				logging.info("\t{0:15s}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension, posterior_value,
+				logger.info("\t{0:15s}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension, posterior_value,
 					pos_uncertainty, neg_uncertainty))
 
 				metadata.update({
@@ -228,7 +235,7 @@ def main():
 						metadata_columns.append(prefix + column)
 
 				# Time elapsed, model
-				metadata_columns.extend(["time_elapsed", "final_mean_acceptance_fraction", "last_100_mean_acceptance_fraction_sigma", 
+				metadata_columns.extend(["time_elapsed", "final_mean_acceptance_fraction", "sample_sigma_mean_acceptance_fraction", 
 					"model", "run_id", "walkers", "burn", "sample", "input_filenames", "chain_filename", "state_filename", 
 					"acceptance_plot_filename", "corner_plot_filename", "pp_spectra_plot_filename", "pp_observed_spectra_filenames",
 					"pp_modelled_spectra_filenames"])
@@ -284,9 +291,8 @@ def main():
 				# Plot spectra
 				fig = plt.figure()
 				for i, (aperture, modelled_aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, pp_observed_spectra)):
-					print("PLOTTING SPECTRUM {0}".format(i))
-					ax = fig.add_subplot(len(spectra), 1, i+1)
 
+					ax = fig.add_subplot(len(spectra), 1, i+1)
 					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b')
 					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k')
 
@@ -297,8 +303,6 @@ def main():
 
 						ax.set_xlim(full_extent)
 
-					ax.set_ylim(0.0, 1.1)
-
 				fig.savefig(pp_spectra_plot_filename)
 
 				# Closing the figures isn't enough; matplotlib leaks memory
@@ -307,7 +311,7 @@ def main():
 			# Delete some things
 			del sampler, chain, primary_hdu, table_hdu, hdulist
 
-	logging.info("Fin.")
+	logger.info("Fin.")
 
 if __name__ == "__main__":
 	main()
