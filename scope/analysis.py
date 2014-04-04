@@ -6,6 +6,8 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
+__all__ = ["initialise_priors", "log_likelihood", "solve"]
+
 # Standard library
 import logging
 import os
@@ -20,9 +22,8 @@ import scipy.optimize
 # Module
 import models, utils, specutils
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[0])
 
-__all__ = ["initialise_priors", "log_likelihood", "solve"]
 
 def initialise_priors(model, observations):
     """ Initialise the priors (or initial conditions) for the analysis """
@@ -128,9 +129,15 @@ def initialise_priors(model, observations):
                                 dimension, minimum, maximum))
                         current_walker.append(random.uniform(minimum, maximum))
 
-                    elif prior_value.lower().startswith("cross_correlate"):
-                        # cross_correlate('data/sun.ms.fits', 8400, 8800)
-                        raise NotImplementedError
+                    elif prior_value.lower() == "cross_correlate":
+                        # At this stage we have the stellar parameters for this sample, so we can actually cross-correlate the observed
+                        # spectra in order to obtain a good estimate of the RV.
+                        if len(interpolated_flux) == 0:
+                            interpolated_flux = model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)])
+                    
+                        model_aperture_spectrum = specutils.Spectrum1D(model.dispersion[aperture], interpolated_flux[aperture])
+                        v_rad, u_v_rad, R = observations[aperture].cross_correlate(model_aperture_spectrum)
+                        current_walker.append(random.normal(v_rad, u_v_rad))
 
                     else:
                         raise TypeError("prior type not valid for {dimension}".format(dimension=dimension))
@@ -138,8 +145,7 @@ def initialise_priors(model, observations):
                 else:
                     if i == 0: # Only print initialisation for the first walker
                         logger_fn = logger.info if walkers == 1 else logger.warn
-                        logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(
-                            dimension, prior_value))
+                        logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(dimension, prior_value))
 
                     current_walker.append(prior_value)
 
@@ -478,7 +484,7 @@ def log_likelihood(theta, model, observations):
             logger.debug("Returning -np.inf log-likelihood because there were no useful pixels")
             return (-np.inf, blob + [-np.inf])
 
-        chi_sqs[aperture] = np.sum(chi_sq[useful_pixels]) - np.sum(np.log(inverse_variance[useful_pixels]))
+        chi_sqs[aperture] = np.sum(chi_sq[useful_pixels] - np.log(inverse_variance[useful_pixels]))
 
         # Update the masks values:
         #> -2: Not interested in this region, and it was non-finite (not used).
@@ -493,6 +499,7 @@ def log_likelihood(theta, model, observations):
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
    
     return (likelihood, blob + [likelihood])
+
 
 
 
@@ -538,7 +545,7 @@ def solve(observed_spectra, model):
 
         # Ensure we have the number of walkers and steps specified in the configuration
         walkers, nsteps = model.configuration["solver"]["walkers"], \
-            model.configuration["solver"]["burn"] + model.configuration["solver"]["sample"]
+            model.configuration["solver"]["max_sample"]
 
         lnprob0, rstate0 = None, None
         threads = model.configuration["solver"].get("threads", 1)
@@ -597,7 +604,7 @@ def solve(observed_spectra, model):
                                 flux_indices[range_indices[0]:range_indices[1]] = True
                                 flux_indices *= np.isfinite(spectrum.flux) * (spectrum.flux > 0)
                                 
-                                logger.info("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
+                                logger.debug("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
                                     aperture, np.min(spectrum.disp[flux_indices]), np.max(spectrum.disp[flux_indices])))
                             else:
                                 flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
@@ -690,8 +697,7 @@ def solve(observed_spectra, model):
                 logger.info("\tParameter {0} - mean: {1:.2e}, std: {2:.2e}, min: {3:.2e}, max: {4:.2e}".format(
                     dimension, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
             else:
-                logger.info("\tParameter {0} - initial point: {1:.2e}".format(
-                    dimension, p0[i]))
+                logger.info("\tParameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
 
         # Initialise the sampler
         sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_likelihood,
@@ -709,37 +715,29 @@ def solve(observed_spectra, model):
             logger.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
                 fraction_complete * 100, i + 1, mean_acceptance_fractions[i]))
 
+            # Are we *probably* converged?
+            if i > (model.configuration["solver"]["burn"] + model.configuration["solver"]["sample"]) \
+            and model.configuration["solver"].get("sigma_acceptance_fraction_tolerance", 5e-4) > np.std(mean_acceptance_fractions[i - model.configuration["solver"]["sample"]:i]):
+                logger.info("We have probably converged, so we are exiting the MCMC prematurely.")
+                mean_acceptance_fractions = mean_acceptance_fractions[:i+1]
+                break
+
             if mean_acceptance_fractions[i] == 0:
                 logger.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
                 break
 
         # Convert state to posteriors
-        logger.info("The final mean acceptance fraction is {0:.3f}".format(
-            mean_acceptance_fractions[-1]))
+        logger.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fractions[-1]))
 
         # Blobs contain all the sampled parameters and likelihoods        
         sampled = np.array(sampler.blobs).reshape((-1, len(model.dimensions) + 1))
-
         sampled = sampled[-int(model.configuration["solver"]["sample"] * walkers):]
-        sampled_theta, sampled_log_likelihood = sampled[:, :-1], sampled[:, -1]
-
-        # Get the maximum estimate
-        most_probable_index = np.argmax(sampled_log_likelihood)
-        
-        if not np.isfinite(sampled_log_likelihood[most_probable_index]):
-            # You should probably check your configuration file for something peculiar
-            raise ValueError("most probable sampled point was non-finite")
-        
-        # Get Maximum Likelihood values
-        me_parameters = {}
-        for parameter_name, value in zip(model.dimensions, sampled_theta[most_probable_index]):
-            me_parameters[parameter_name] = value
 
         # Get the quantiles
         posteriors = {}
         for parameter_name, (quantile_50, quantile_16, quantile_84) in zip(model.dimensions, 
             map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), zip(*np.percentile(sampled, [16, 50, 84], axis=0)))):
-            posteriors[parameter_name] = (me_parameters[parameter_name], quantile_16, quantile_84)
+            posteriors[parameter_name] = (quantile_50, quantile_16, quantile_84)
 
         return (posteriors, sampler, mean_acceptance_fractions) 
 
