@@ -450,8 +450,8 @@ class Spectrum1D(object):
         functions = []
         for point in points:
             idx = np.searchsorted(interp_x, point)
-            f = interpolate.interp1d(interp_x[idx-3:idx+3], observed_slice.disp[idx-3:idx+3], bounds_error=True, kind='cubic')
-
+            f = interpolate.interp1d(interp_x[idx-3:idx+3], observed_slice.disp[idx-3:idx+3], bounds_error=False, kind='cubic')
+            
             functions.append(f)
 
         # 0, p1, sigma
