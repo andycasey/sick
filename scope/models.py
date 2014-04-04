@@ -152,7 +152,7 @@ class Model(object):
             fluxes = [] 
             for i, aperture in enumerate(self.apertures):
                 if not "flux_filename" in self.configuration["model"][aperture]:
-                    logging.warn("No flux filename specified for {0} aperture".format(aperture))
+                    logger.warn("No flux filename specified for {0} aperture".format(aperture))
                     continue
                 fluxes.append(np.memmap(self.configuration["model"][aperture]["flux_filename"], mode="r", dtype=np.float32).reshape((num_points, -1)))
 
@@ -712,22 +712,22 @@ class Model(object):
             interpolated_flux = self.interpolate_flux(grid_point)
 
         except:
-            logging.debug("No model flux could be determined for {0}".format(
+            logger.debug("No model flux could be determined for {0}".format(
                 ", ".join(["{0} = {1:.2f}".format(parameter, value) \
                     for parameter, value in zip(self.grid_points.dtype.names, grid_point)])))
             return None
 
-        logging.debug("Interpolated model flux at {0}".format(
+        logger.debug("Interpolated model flux at {0}".format(
             ", ".join(["{0} = {1:.2f}".format(parameter, value) \
                 for parameter, value in zip(self.grid_points.dtype.names, grid_point)])))
 
         if interpolated_flux == {}:
-            logging.debug("No apertures of interpolated flux found")
+            logger.debug("No apertures of interpolated flux found")
             return None
 
         for aperture, flux in interpolated_flux.iteritems():
             if np.all(~np.isfinite(flux)):
-                logging.debug("{0} aperture returned all non-finite values for interpolated flux".format(aperture))
+                logger.debug("{0} aperture returned all non-finite values for interpolated flux".format(aperture))
                 return None
 
         # Create spectra
@@ -743,7 +743,7 @@ class Model(object):
                 coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
                     for n in xrange(num_coefficients_expected)]
 
-                continuum = np.polyval(coefficients, modified_spectrum.disp)
+                continuum = np.polyval(coefficients, self.dispersion[aperture])
                 interpolated_flux *= continuum
 
             model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture],
@@ -761,7 +761,7 @@ class Model(object):
                 # Apply a single smoothing value
                 kernel = self.configuration["smooth_model_flux"][aperture]["kernel"]
                 model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kernel)
-                logging.debug("Smoothed model flux for '{0}' aperture with kernel {1}".format(
+                logger.debug("Smoothed model flux for '{0}' aperture with kernel {1}".format(
                     aperture, kernel))
         
         # Interpolate synthetic to observed dispersion map
@@ -788,7 +788,7 @@ class Model(object):
             The observed spectra.
         """
 
-        logging.debug("Preparing observed spectra for comparison...")
+        logger.debug("Preparing observed spectra for comparison...")
 
         doppler_shifted_spectra = []
         for aperture, spectrum in zip(self._mapped_apertures, observations):        
