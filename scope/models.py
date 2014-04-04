@@ -733,6 +733,19 @@ class Model(object):
         # Create spectra
         model_spectra = {}
         for aperture, interpolated_flux in interpolated_flux.iteritems():
+                
+            # Normalise to the data
+            if self.configuration["normalise_observed"][aperture]["perform"]:
+            
+                # Since we need to perform normalisation, the normalisation coefficients
+                # should be in kwargs
+                num_coefficients_expected = self.configuration["normalise_observed"][aperture]["order"] + 1
+                coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
+                    for n in xrange(num_coefficients_expected)]
+
+                continuum = np.polyval(coefficients, modified_spectrum.disp)
+                interpolated_flux *= continuum
+
             model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture],
                 flux=interpolated_flux)
 
@@ -777,32 +790,18 @@ class Model(object):
 
         logging.debug("Preparing observed spectra for comparison...")
 
-        modified_spectra = []
-        for aperture, spectrum in zip(self._mapped_apertures, observations):
-            
-            modified_spectrum = spectrum.copy()
-
-            # Any normalisation to perform?
-            if self.configuration["normalise_observed"][aperture]["perform"]:
-            
-                # Since we need to perform normalisation, the normalisation coefficients
-                # should be in kwargs
-                num_coefficients_expected = self.configuration["normalise_observed"][aperture]["order"] + 1
-                coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
-                    for n in xrange(num_coefficients_expected)]
-
-                continuum = np.polyval(coefficients, modified_spectrum.disp)
-                modified_spectrum.flux /= continuum
+        doppler_shifted_spectra = []
+        for aperture, spectrum in zip(self._mapped_apertures, observations):        
 
             # Any doppler shift to perform?
             if self.configuration["doppler_shift"][aperture]["perform"]:
 
                 velocity = kwargs["doppler_shift.{0}".format(aperture)]
-                modified_spectrum = modified_spectrum.doppler_shift(-velocity)
+                doppler_shifted_spectrum = spectrum.doppler_shift(-velocity)
 
-            modified_spectra.append(modified_spectrum)
+            doppler_shifted_spectra.append(doppler_shifted_spectrum)
 
-        return modified_spectra
+        return doppler_shifted_spectra
 
 
     def masks(self, model_spectra):
