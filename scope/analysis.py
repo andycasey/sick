@@ -48,7 +48,7 @@ def initialise_priors(model, observations):
 
                     if np.all(~np.isfinite(interpolated_flux.values()[0])):
                         # None of the flux in the first beam are finite.
-                        current_walker = []
+
                         break
 
                 # Jitter
@@ -454,10 +454,9 @@ def log_likelihood(theta, model, observations):
         A callback to apply after completing the comparison.
     """
 
-    blob = list(theta)
     if not np.isfinite(log_prior(theta, model)):
         logger.debug("Returning -inf log-likelihood because log-prior was -inf")
-        return (-np.inf, blob + [-np.inf])
+        return -np.inf
 
     parameters = dict(zip(model.dimensions, theta))
 
@@ -465,13 +464,13 @@ def log_likelihood(theta, model, observations):
     observed_spectra = model.observed_spectra(observations, **parameters)
     if observed_spectra is None:
         logger.debug("Returning -inf log-likelihood because modified observed spectra is invalid")
-        return (-np.inf, blob + [-np.inf])
+        return -np.inf
 
     # Prepare the model spectra: smoothing? re-sample to observed dispersion?
     model_spectra = model.model_spectra(observations=observed_spectra, **parameters)
     if model_spectra is None:
         logger.debug("Returning -inf log-likelihood because modified model spectra is invalid")
-        return (-np.inf, blob + [-np.inf])
+        return -np.inf
 
     # Any masks?
     # masks = model.masks(model_spectra)
@@ -480,7 +479,7 @@ def log_likelihood(theta, model, observations):
     chi_sqs = {}
     for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observed_spectra)):
 
-        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + parameters["jitter.{0}".format(aperture)])
+        inverse_variance = 1.0/(observed_spectrum.uncertainty**2)# + parameters["jitter.{0}".format(aperture)])
         chi_sq = ((observed_spectrum.flux - modelled_spectrum.flux)**2) * inverse_variance
 
         # Apply masks
@@ -490,9 +489,9 @@ def log_likelihood(theta, model, observations):
         useful_pixels = np.isfinite(chi_sq) 
         if sum(useful_pixels) == 0:
             logger.debug("Returning -np.inf log-likelihood because there were no useful pixels")
-            return (-np.inf, blob + [-np.inf])
+            return -np.inf
 
-        chi_sqs[aperture] = np.sum(chi_sq[useful_pixels] - np.log(inverse_variance[useful_pixels]))
+        chi_sqs[aperture] = np.sum(chi_sq[useful_pixels])# - np.log(inverse_variance[useful_pixels]))
 
         # Update the masks values:
         #> -2: Not interested in this region, and it was non-finite (not used).
@@ -506,7 +505,7 @@ def log_likelihood(theta, model, observations):
     logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
    
-    return (likelihood, blob + [likelihood])
+    return likelihood
 
 
 
@@ -553,7 +552,7 @@ def solve(observed_spectra, model):
 
         # Ensure we have the number of walkers and steps specified in the configuration
         walkers, nsteps = model.configuration["solver"]["walkers"], \
-            model.configuration["solver"]["max_sample"]
+            model.configuration["solver"]["burn"]
 
         lnprob0, rstate0 = None, None
         threads = model.configuration["solver"].get("threads", 1)
@@ -563,138 +562,37 @@ def solve(observed_spectra, model):
         # Initialise priors and set up arguments for optimization
         if model.configuration["solver"].get("optimise", True):
 
-            r_chi_sq, parameters = optimise(observed_spectra, model)
+            r_chi_sq, op_pars = optimise(observed_spectra, model)
 
-            walker_priors = []
-            initial_normalisation_coefficients = {}
+            # Create a sample ball around the result point
+            ball_point = [op_pars.get(dimension, 0) for dimension in model.dimensions]
+            jitter_indices = []
+            dimensional_std = []
+            for di, dimension in enumerate(model.dimensions):
 
-            for i in xrange(walkers):
+                if dimension in model.grid_points.dtype.names:
+                    dimensional_std.append(0.10 * np.ptp(model.grid_boundaries[dimension]))
 
-                current_walker = []
-                interpolated_flux = {}
-                initial_normalisation_coefficients = {}
-                for j, dimension in enumerate(model.dimensions):
+                elif dimension.startswith("doppler_shift."):
+                    dimensional_std.append(10)
 
-                    if dimension == "jitter" or dimension.startswith("jitter."):
-                        # Uniform prior between 0 and 1
-                        current_walker.append(random.uniform(0, 1))
-                        continue
+                elif dimension.startswith("smooth_model_flux."):
+                    dimensional_std.append(0.10)
 
-                    # Implicit priors
-                    if dimension.startswith("normalise_observed."):
+                elif dimension.startswith("normalise_observed."):
+                    dimensional_std.append(0.10)
 
-                        if len(interpolated_flux) == 0:
-                            interpolated_flux = model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)])
-                            if np.all(~np.isfinite(interpolated_flux.values()[0])):
-                                interpolated_flux = {}
-                                for aperture in model.apertures:
-                                    interpolated_flux[aperture] = np.ones(len(model.dispersion[aperture]))
-
-                        aperture = dimension.split(".")[1]
-                        coefficient_index = int(dimension.split(".")[-1].lstrip("a"))
-
-                        # If we're at this stage we should have grid point dimensions
-                        if aperture not in initial_normalisation_coefficients:
-
-                            index = model._mapped_apertures.index(aperture)
-                            order = model.configuration["normalise_observed"][aperture]["order"]
-
-                            spectrum = observed_spectra[index]
-                            
-                            # Get the full range of spectra that will be normalised
-                            if "masks" in model.configuration and aperture in model.configuration["masks"]:
-                                
-                                ranges = np.array(model.configuration["masks"][aperture])
-                                min_range, max_range = np.min(ranges), np.max(ranges)
-                                range_indices = np.searchsorted(spectrum.disp, [min_range, max_range])
-
-                                flux_indices = np.zeros(len(spectrum.disp), dtype=bool)
-                                flux_indices[range_indices[0]:range_indices[1]] = True
-                                flux_indices *= np.isfinite(spectrum.flux) * (spectrum.flux > 0)
-                                
-                                logger.debug("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
-                                    aperture, np.min(spectrum.disp[flux_indices]), np.max(spectrum.disp[flux_indices])))
-                            else:
-                                flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
-
-                            # Fit the spectrum with a polynomial of order X
-                            resampled_interpolated_flux = np.interp(spectrum.disp[flux_indices], model.dispersion[aperture],
-                                interpolated_flux[aperture])
-                            coefficients = np.polyfit(spectrum.disp[flux_indices], spectrum.flux[flux_indices]/resampled_interpolated_flux, order)
-                            
-                            # Save the coefficients and variances
-                            initial_normalisation_coefficients[aperture] = coefficients
-                        
-                        coefficient = initial_normalisation_coefficients[aperture][coefficient_index]
-                        current_walker.append(coefficient)
-                        continue
-
-                    if dimension.startswith("doppler_shift."):
-                        # Sigma velocity of 5 km/s
-                        current_walker.append(random.normal(parameters[dimension], 5))
-                        continue
-
-                    if dimension in model.grid_points.dtype.names:
-                        # Have a sigma that's 5% of the dynamic range
-                        current_walker.append(random.normal(parameters[dimension], 0.05 * np.ptp(model.grid_boundaries[dimension])))
-                        continue
-
-                    # Explicit priors
-                    prior_value = model.configuration["priors"][dimension]
-                    try:
-                        prior_value = float(prior_value)
-
-                    except:
-
-                        # We probably need to evaluate this.
-                        if prior_value.lower() == "uniform":
-                            # Only works on stellar parameter values.
-                            possible_points = model.grid_points[dimension].view(np.float)
-
-                            if i == 0: # Only print initialisation for the first walker
-                                logger.info("Initialised {0} parameter with uniform distribution between {1:.2e} and {2:.2e}".format(
-                                    dimension, np.min(possible_points), np.max(possible_points)))
-                            current_walker.append(random.uniform(np.min(possible_points), np.max(possible_points)))
-
-                        elif prior_value.lower().startswith("normal"):
-                            mu, sigma = map(float, prior_value.split("(")[1].rstrip(")").split(","))
-
-                            if i == 0: # Only print initialisation for the first walker
-                                logger.info("Initialised {0} parameter with a normal distribution with $\mu$ = {1:.2e}, $\sigma$ = {2:.2e}".format(
-                                    dimension, mu, sigma))
-                            current_walker.append(random.normal(mu, sigma))
-
-                        elif prior_value.lower().startswith("uniform"):
-                            minimum, maximum = map(float, prior_value.split("(")[1].rstrip(")").split(","))
-
-                            if i == 0: # Only print initialisation for the first walker
-                                logger.info("Initialised {0} parameter with a uniform distribution between {1:.2e} and {2:.2e}".format(
-                                    dimension, minimum, maximum))
-                            current_walker.append(random.uniform(minimum, maximum))
-
-                        elif prior_value.lower().startswith("cross_correlate"):
-                            # cross_correlate('data/sun.ms.fits', 8400, 8800)
-                            raise NotImplementedError
-
-                        else:
-                            raise TypeError("prior type not valid for {dimension}".format(dimension=dimension))
-
-                    else:
-                        if i == 0: # Only print initialisation for the first walker
-                            logger_fn = logger.info if walkers == 1 else logger.warn
-                            logger_fn("Initialised {0} parameter as a single value: {1:.2e}".format(
-                                dimension, prior_value))
-
-                        current_walker.append(prior_value)
-
-                # Add the walker
-                if walkers == 1:
-                    walker_priors = current_walker
-                
                 else:
-                    walker_priors.append(current_walker)
+                    # Jitter, which will be over-written anyways
+                    dimensional_std.append(1)
+                    jitter_indices.append(di)
 
-            p0 = np.array(walker_priors)
+
+            p0 = emcee.utils.sample_ball(ball_point, dimensional_std, size=walkers)
+
+            # Write over jitter priors
+            for ji in jitter_indices:
+                p0[:, ji] = np.random.uniform(0, 1, size=walkers)
 
         else:
             p0 = initialise_priors(model, observed_spectra)
@@ -720,7 +618,7 @@ def solve(observed_spectra, model):
             mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
 
             # Announce progress
-            logger.info("Sampler is {0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
+            logger.info("Sampler is >{0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
                 fraction_complete * 100, i + 1, mean_acceptance_fractions[i]))
 
             # Are we *probably* converged?
@@ -737,14 +635,18 @@ def solve(observed_spectra, model):
         # Convert state to posteriors
         logger.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fractions[-1]))
 
-        # Blobs contain all the sampled parameters and likelihoods        
-        sampled = np.array(sampler.blobs).reshape((-1, len(model.dimensions) + 1))
-        sampled = sampled[-int(model.configuration["solver"]["sample"] * walkers):]
+        sampler.reset()
+        pos, lnprob, rstate = sampler_state[:3]
 
+        logger.info("Sampling...")
+
+        final_state = sampler.run_mcmc(pos, model.configuration["solver"]["sample"])
+        
         # Get the quantiles
         posteriors = {}
         for parameter_name, (quantile_50, quantile_16, quantile_84) in zip(model.dimensions, 
-            map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), zip(*np.percentile(sampled, [16, 50, 84], axis=0)))):
+            map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
+                zip(*np.percentile(sampler.chain.reshape(-1, len(model.dimensions)), [16, 50, 84], axis=0)))):
             posteriors[parameter_name] = (quantile_50, quantile_16, quantile_84)
 
         return (posteriors, sampler, mean_acceptance_fractions) 

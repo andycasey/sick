@@ -309,19 +309,19 @@ class Spectrum1D(object):
             headers=self.headers)
         
 
-    def doppler_shift(self, velocity):
+    def doppler_shift(self, v):
         """Performs a Doppler correction on the given `Spectrum1D` object by the
         amount required.
         
         Inputs
         ------
-        velocity : float
+        v : float
             The velocity (in km/s) to correct the `Spectrum1D` object by.
         """
         
-        #new_disp = self.disp * (1 + velocity/speed_of_light)
         # Relatavistic:
-        new_disp = (self.disp * (1 + velocity/speed_of_light))/np.sqrt(1 - pow(velocity/speed_of_light, 2))
+        c = speed_of_light
+        new_disp = self.disp * np.sqrt((1 + v/c)/(1 - v/c))
         return self.__class__(new_disp, self.flux, uncertainty=self.uncertainty, headers=self.headers)
 
     

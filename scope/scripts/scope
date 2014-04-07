@@ -49,7 +49,7 @@ def main():
 
 	# Initialise logging
 	logger = logging.getLogger("scope")
-	logger.setLevel(logging.DEBUG if args.debug else logging.INFO)
+	logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
 	all_spectra = [scope.Spectrum.load(filename) for filename in args.spectra]
 
@@ -148,6 +148,7 @@ def main():
 				all_results = np.append(all_results, row)
 
 		else:
+			raise foo
 			
 			# Set some filename variables
 			filename_prefix = os.path.join(args.output_dir, "{0}-{1}".format(args.filename_prefix, i))
@@ -194,19 +195,18 @@ def main():
 					"u_neg_{0}".format(dimension): neg_uncertainty,
 				})
 
-			# Save the sampler chain
-			blobs = np.array(sampler.blobs)
-			blobs = blobs.reshape((-1, 1 + len(model.dimensions)))
-
+			
 			# Append an sample and step number
 			walkers = model.configuration["solver"]["walkers"]
+			chain_length = sampler.chain.shape[0] * sampler.chain.shape[1]
 			chain = np.core.records.fromarrays(
 				np.vstack([
-					np.arange(1, 1 + len(blobs)),
-					np.floor(np.arange(1, 1 + len(blobs)/walkers, 1.0/walkers)),
-					blobs.T
+					np.arange(1, 1 + chain_length),
+					np.arange(1, 1 + chain_length) % walkers,
+					sampler.chain.reshape(-1, len(model.dimensions)).T,
+					sampler.lnprobability.reshape(-1, 1).T
 				]),
-				names=["Iteration", "Sample"] + model.dimensions + ["log(likelihood)"],
+				names=["Iteration", "Sample"] + model.dimensions + ["ln_likelihood"],
 				formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
 
 			# Save the chain
@@ -285,7 +285,8 @@ def main():
 
 				# Make a corner plot with just the parameters of interest
 				indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-				fig = triangle.corner(blobs[-int(model.configuration["solver"]["sample"] * model.configuration["solver"]["walkers"]):, indices], labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(model.grid_points.dtype.names))
+				fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[-int(model.configuration["solver"]["sample"] * model.configuration["solver"]["walkers"]):, indices],
+					labels=scope.utils.latexify(model.grid_points.dtype.names))
 				fig.savefig(corner_plot_filename)
 
 				# Plot spectra
