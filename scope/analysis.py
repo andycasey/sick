@@ -263,11 +263,8 @@ def initialise_priors(model, observations):
     return walker_priors
 
 
-def optimise(observed_spectra, model, initial_samples=None):
+def optimise(observed_spectra, model, initial_samples=1000):
     """ Optimise the model parameters prior to MCMC sampling """
-
-    if initial_samples is None:
-        initial_samples = model.configuration["solver"].get("initial_samples", 1000)
 
     # Define a function to fit the smoothing
     def fit_smoothing(kernel, obs_flux, obs_sigma, model_flux):
@@ -304,8 +301,8 @@ def optimise(observed_spectra, model, initial_samples=None):
                 v_rad = 0
 
             # Put the interpolated flux onto the same scale as the observed_spectrum
-            observed_rest_aperture = observed_aperture.doppler_shift(-v_rad)
-            resampled_model_aperture = model_aperture.interpolate(observed_rest_aperture.disp)
+            observed_aperture = observed_aperture.doppler_shift(-v_rad)
+            model_aperture = model_aperture.interpolate(observed_aperture.disp)
 
             # Define masks if necessary
             if "masks" in model.configuration and aperture in model.configuration["masks"]:
@@ -325,18 +322,18 @@ def optimise(observed_spectra, model, initial_samples=None):
                 # Get normalisation coefficients
                 order = model.configuration["normalise_observed"][aperture]["order"]
 
-                # Fit the divided spectrum with a polynomial of order X
-                divided_flux = (observed_rest_aperture.flux/resampled_model_aperture.flux)[flux_indices]
+                # Fit the continuum with a polynomial of order X
+                divided_flux = (observed_aperture.flux/model_aperture.flux)[flux_indices]
                 isfinite = np.isfinite(divided_flux)
 
-                coefficients = np.polyfit(resampled_model_aperture.disp[flux_indices][isfinite], divided_flux[isfinite], order)
-
+                coefficients = np.polyfit(model_aperture.disp[flux_indices][isfinite], divided_flux[isfinite], order)
+                
                 # Save the coefficients                
                 for i, coefficient in enumerate(coefficients):
                     parameters["normalise_observed.{0}.a{1}".format(aperture, i)] = coefficient
 
-                # Normalise the model spectra
-                resampled_model_aperture.flux *= np.polyval(coefficients, resampled_model_aperture.disp)
+                # Fit the model spectra to the observations
+                model_aperture.flux *= np.polyval(coefficients, model_aperture.disp)
 
             # Any smoothing to perform?
             if model.configuration["smooth_model_flux"][aperture]["perform"]:
@@ -349,26 +346,22 @@ def optimise(observed_spectra, model, initial_samples=None):
 
                     # Estimate kernel value
                     #kernel = abs(scipy.optimize.minimize(fit_smoothing, [0],
-                    #    args=(observed_normalised_aperture_flux, observed_aperture.uncertainty[flux_indices], resampled_model_aperture.flux[flux_indices]))["x"])
+                    #    args=(observed_normalised_aperture_flux, observed_aperture.uncertainty[flux_indices], model_aperture.flux[flux_indices]))["x"])
 
                     # Scale kernel to a fwhm
-                    #kernel *= (2 * (2*np.log(2))**0.5) * np.mean(np.diff(resampled_model_aperture.disp))
+                    #kernel *= (2 * (2*np.log(2))**0.5) * np.mean(np.diff(model_aperture.disp))
                     parameters["smooth_model_flux.{0}.kernel".format(aperture)] = kernel
 
                 else:
                     kernel = model.configuration["smooth_model_flux"][aperture]["kernel"]
 
-                resampled_model_aperture = resampled_model_aperture.gaussian_smooth(kernel)
-
-            else:
-                resampled_model_aperture = resampled_model_aperture
+                model_aperture = model_aperture.gaussian_smooth(kernel)
 
             # Calculate the chi-sq values
-            chi_sq = (observed_rest_aperture.flux - resampled_model_aperture.flux)**2/observed_aperture.uncertainty
+            chi_sq = ((observed_aperture.flux - model_aperture.flux)**2)/observed_aperture.uncertainty**2
             ndim += sum(np.isfinite(chi_sq))
             chi_sqs += sum(chi_sq[np.isfinite(chi_sq)])
-
-
+            
         r_chi_sq = chi_sqs/(ndim - len(model.grid_points.dtype.names) - 1)
         
         logger.debug(u"Optimisation is returning a reduced χ² = {0:.2f} for the point where {1}".format(
@@ -397,6 +390,8 @@ def optimise(observed_spectra, model, initial_samples=None):
             random_points.append(p0)
 
     best_index = np.argmin(returned_values)
+    if returned_values[best_index] > 1e50:
+        raise RuntimeError("Failed to find reasonable starting point")
 
     logger.info(u"Optimising from {0} with initial reduced χ² = {1:.2f}".format(
         ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, random_points[best_index])]),
@@ -472,7 +467,7 @@ def log_likelihood(theta, model, observations):
     chi_sqs = {}
     for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observed_spectra)):
 
-        inverse_variance = 1.0/(observed_spectrum.uncertainty + modelled_spectrum.flux**2 * np.exp(2 * parameters["jitter.{0}".format(aperture)]))
+        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + modelled_spectrum.flux**2 * np.exp(2 * parameters["jitter.{0}".format(aperture)]))
         chi_sq = (observed_spectrum.flux - modelled_spectrum.flux)**2 * inverse_variance
 
         # Apply masks
@@ -510,13 +505,13 @@ def sample_ball(point, observed_spectra, model):
     for di, dimension in enumerate(model.dimensions):
 
         if dimension in model.grid_points.dtype.names:
-            dimensional_std.append(0.30 * np.ptp(model.grid_boundaries[dimension]))
+            dimensional_std.append(0.10 * np.ptp(model.grid_boundaries[dimension]))
 
         elif dimension.startswith("doppler_shift."):
-            dimensional_std.append(100)
+            dimensional_std.append(10)
 
         elif dimension.startswith("smooth_model_flux."):
-            dimensional_std.append(0.30)
+            dimensional_std.append(0.15)
 
         elif dimension.startswith("normalise_observed."):
             # This depends on the value of the coefficient:
@@ -531,7 +526,6 @@ def sample_ball(point, observed_spectra, model):
             # Example:
             # p0 of order 2 with flux_variance ~ 50 and blue aperture so ~5000 Angstroms
             # pN_std = (1/3) * 50 * (1/5000.)^(3 - 0)
-
             aperture = dimension.split(".")[1]
             num_coefficients = 1 + model.configuration["normalise_observed"][aperture]["order"]
 
@@ -545,7 +539,7 @@ def sample_ball(point, observed_spectra, model):
 
         else:
             # Jitter, which will be over-written anyways
-            dimensional_std.append(1)
+            dimensional_std.append(0)
             jitter_indices.append(di)
 
     walkers = model.configuration["solver"]["walkers"]
@@ -554,7 +548,6 @@ def sample_ball(point, observed_spectra, model):
     # Write over jitter priors
     for ji in jitter_indices:
         p0[:, ji] = np.random.uniform(-10, 1, size=walkers)
-
 
     return p0
 
@@ -588,7 +581,8 @@ def solve(observed_spectra, model):
     
     # Perform any optimisation and initialise priors
     if model.configuration["solver"].get("optimise", True):
-        r_chi_sq, op_pars = optimise(observed_spectra, model)
+        r_chi_sq, op_pars = optimise(observed_spectra, model,
+            initial_samples=model.configuration["solver"].get("initial_samples", 1000))
         p0 = sample_ball(op_pars, observed_spectra, model)
 
     else:
