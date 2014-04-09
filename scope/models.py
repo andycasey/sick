@@ -247,10 +247,11 @@ class Model(object):
         num_models = len(self.grid_points) * num_apertures
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return "{module}.Model({num_models} models; {num_apertures} apertures: {apertures}; {num_parameters}"\
-            " parameters: {parameters}; ~{num_pixels} pixels)".format(module=self.__module__, num_models=num_models,
-            num_apertures=num_apertures, apertures=', '.join(self.apertures), num_pixels=human_readable_digit(num_pixels),
-            num_parameters=len(self.grid_points.dtype.names), parameters=', '.join(self.grid_points.dtype.names))
+        return "{module}.Model({num_models} models; {num_apertures} apertures: {apertures}; {num_total_parameters}"\
+            " total parameters; {num_grid_parameters} explicit grid parameters: {parameters}; ~{num_pixels} pixels)".format(
+            module=self.__module__, num_models=num_models, num_apertures=num_apertures, apertures=', '.join(self.apertures),
+            num_pixels=human_readable_digit(num_pixels), num_total_parameters=len(self.dimensions), 
+            num_grid_parameters=len(self.grid_points.dtype.names), parameters=', '.join(self.grid_points.dtype.names))
 
     @property
     def hash(self):
