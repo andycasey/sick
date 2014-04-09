@@ -519,7 +519,7 @@ def load_aaomega_multispec(filename, fill_value=-1):
             headers[header] = image[2].data[index][header]
         
         flux = np.array(image[0].data[index], dtype=np.float)
-        uncertainty = 1.0/np.sqrt(flux)
+        uncertainty = np.sqrt(flux)
         
         # Check if it's worthwhile having these
         if all(~np.isfinite(flux)):

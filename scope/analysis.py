@@ -13,8 +13,8 @@ import logging
 import os
 
 # Third-party
+import acor
 import emcee
-import matplotlib.pyplot as plt
 import numpy as np
 import numpy.random as random
 import scipy.optimize
@@ -54,7 +54,7 @@ def initialise_priors(model, observations):
                 # Jitter
                 if dimension == "jitter" or dimension.startswith("jitter."):
                     # Uniform prior between 0 and 1
-                    current_walker.append(random.uniform(0, 1))
+                    current_walker.append(random.uniform(-10, 1))
                     continue
 
                 # Implicit priors
@@ -80,12 +80,12 @@ def initialise_priors(model, observations):
 
                             flux_indices = np.zeros(len(spectrum.disp), dtype=bool)
                             flux_indices[range_indices[0]:range_indices[1]] = True
-                            flux_indices *= np.isfinite(spectrum.flux) * (spectrum.flux > 0)
+                            flux_indices *= np.isfinite(spectrum.flux)
                             
                             logger.debug("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
                                 aperture, np.min(spectrum.disp[flux_indices]), np.max(spectrum.disp[flux_indices])))
                         else:
-                            flux_indices = np.isfinite(spectrum.flux) * (spectrum.flux > 0) 
+                            flux_indices = np.isfinite(spectrum.flux)
 
                         # Fit the spectrum with a polynomial of order X
                         resampled_interpolated_flux = np.interp(spectrum.disp[flux_indices], model.dispersion[aperture],
@@ -177,7 +177,7 @@ def initialise_priors(model, observations):
             for j, dimension in enumerate(model.dimensions):
 
                 if dimension == "jitter" or dimension.startswith("jitter."):
-                    current_walker.append(random.uniform(0, 1))
+                    current_walker.append(random.uniform(-10, 1))
                     continue
 
                 # Is it a model dimension?
@@ -235,12 +235,12 @@ def initialise_priors(model, observations):
 
                             flux_indices = np.zeros(len(observed_spectrum.disp), dtype=bool)
                             flux_indices[range_indices[0]:range_indices[1]] = True
-                            flux_indices *= np.isfinite(observed_spectrum.flux) * (observed_spectrum.flux > 0)
+                            flux_indices *= np.isfinite(observed_spectrum.flux)
                             
                             logger.debug("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
                                 aperture, np.min(observed_spectrum.disp[flux_indices]), np.max(observed_spectrum.disp[flux_indices])))
                         else:
-                            flux_indices = np.isfinite(observed_spectrum.flux) * (observed_spectrum.flux > 0)
+                            flux_indices = np.isfinite(observed_spectrum.flux)
 
                         # Put the interpolated flux onto the same scale as the observed_spectrum
                         interpolated_resampled_flux = np.interp(observed_spectrum.disp[flux_indices], model.dispersion[aperture], interpolated_flux[aperture],
@@ -298,7 +298,6 @@ def optimise(observed_spectra, model, initial_samples=None):
                 else:
                     if abs(v_rad) > 500:
                         return fail_value
-
                 parameters["doppler_shift.{0}".format(aperture)] = v_rad
 
             else: 
@@ -316,10 +315,10 @@ def optimise(observed_spectra, model, initial_samples=None):
 
                 flux_indices = np.zeros(len(observed_aperture.disp), dtype=bool)
                 flux_indices[range_indices[0]:range_indices[1]] = True
-                flux_indices *= np.isfinite(observed_aperture.flux) * (observed_aperture.flux > 0)
+                flux_indices *= np.isfinite(observed_aperture.flux)
 
             else:
-                flux_indices = np.isfinite(observed_aperture.flux) * (observed_aperture.flux > 0)
+                flux_indices = np.isfinite(observed_aperture.flux)
 
             # Any normalisation to perform?
             if model.configuration["normalise_observed"][aperture]["perform"]:
@@ -330,17 +329,14 @@ def optimise(observed_spectra, model, initial_samples=None):
                 divided_flux = (observed_rest_aperture.flux/resampled_model_aperture.flux)[flux_indices]
                 isfinite = np.isfinite(divided_flux)
 
-                coefficients = np.polyfit(observed_rest_aperture.disp[flux_indices][isfinite], divided_flux[isfinite], order)
+                coefficients = np.polyfit(resampled_model_aperture.disp[flux_indices][isfinite], divided_flux[isfinite], order)
 
                 # Save the coefficients                
                 for i, coefficient in enumerate(coefficients):
                     parameters["normalise_observed.{0}.a{1}".format(aperture, i)] = coefficient
 
-                # Normalise the observed spectra
-                observed_normalised_aperture_flux = (observed_rest_aperture.flux/np.polyval(coefficients, observed_rest_aperture.disp))[flux_indices]
-
-            else:
-                observed_normalised_aperture_flux = observed_rest_aperture.flux[flux_indices]
+                # Normalise the model spectra
+                resampled_model_aperture.flux *= np.polyval(coefficients, resampled_model_aperture.disp)
 
             # Any smoothing to perform?
             if model.configuration["smooth_model_flux"][aperture]["perform"]:
@@ -362,15 +358,16 @@ def optimise(observed_spectra, model, initial_samples=None):
                 else:
                     kernel = model.configuration["smooth_model_flux"][aperture]["kernel"]
 
-                convolved_model_aperture = resampled_model_aperture.gaussian_smooth(kernel)
+                resampled_model_aperture = resampled_model_aperture.gaussian_smooth(kernel)
 
             else:
-                convolved_model_aperture = resampled_model_aperture
+                resampled_model_aperture = resampled_model_aperture
 
             # Calculate the chi-sq values
-            chi_sq = (observed_normalised_aperture_flux - convolved_model_aperture.flux[flux_indices])**2/observed_aperture.uncertainty[flux_indices]**2
+            chi_sq = (observed_rest_aperture.flux - resampled_model_aperture.flux)**2/observed_aperture.uncertainty
             ndim += sum(np.isfinite(chi_sq))
             chi_sqs += sum(chi_sq[np.isfinite(chi_sq)])
+
 
         r_chi_sq = chi_sqs/(ndim - len(model.grid_points.dtype.names) - 1)
         
@@ -416,21 +413,17 @@ def optimise(observed_spectra, model, initial_samples=None):
 
 def log_prior(theta, model):
     
-    parameters = dict(zip(model.dimensions, theta))
-    for parameter, value in parameters.iteritems():
-        # Check doppler shifts. Anything more than 500 km/s is considered implausible
-        if parameter.startswith("doppler_shift.") and abs(value) > 500:
-            return -np.inf
-
-        # Check smoothing values. Any negative value is considered unrealistic
-        if parameter.startswith("smooth_model_flux.") and (0 > value or value > 5):
+    for parameter, value in zip(model.dimensions, theta):
+        # Check smoothing values
+        if parameter.startswith("smooth_model_flux.") and 0 > value:
             return -np.inf
 
         # Check for jitter
-        if (parameter == "jitter" or parameter.startswith("jitter.")) and not (1 > value > 0):
+        if (parameter == "jitter" or parameter.startswith("jitter.")) \
+        and not -10. < value < 1.:
             return -np.inf
 
-        # Check if point is within the grid boundaries?
+        # Check if point is within the grid boundaries
         if parameter in model.grid_boundaries:
             min_value, max_value = model.grid_boundaries[parameter]
             if value > max_value or min_value > value:
@@ -454,9 +447,10 @@ def log_likelihood(theta, model, observations):
         A callback to apply after completing the comparison.
     """
 
-    if not np.isfinite(log_prior(theta, model)):
+    prior = log_prior(theta, model)
+    if not np.isfinite(prior):
         logger.debug("Returning -inf log-likelihood because log-prior was -inf")
-        return -np.inf
+        return prior
 
     parameters = dict(zip(model.dimensions, theta))
 
@@ -475,12 +469,11 @@ def log_likelihood(theta, model, observations):
     # Any masks?
     # masks = model.masks(model_spectra)
     
-    # Calculate chi^2 difference
     chi_sqs = {}
     for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observed_spectra)):
 
-        inverse_variance = 1.0/(observed_spectrum.uncertainty**2)# + parameters["jitter.{0}".format(aperture)])
-        chi_sq = ((observed_spectrum.flux - modelled_spectrum.flux)**2) * inverse_variance
+        inverse_variance = 1.0/(observed_spectrum.uncertainty + modelled_spectrum.flux**2 * np.exp(2 * parameters["jitter.{0}".format(aperture)]))
+        chi_sq = (observed_spectrum.flux - modelled_spectrum.flux)**2 * inverse_variance
 
         # Apply masks
         #chi_sq *= masks[aperture]
@@ -491,7 +484,7 @@ def log_likelihood(theta, model, observations):
             logger.debug("Returning -np.inf log-likelihood because there were no useful pixels")
             return -np.inf
 
-        chi_sqs[aperture] = np.sum(chi_sq[useful_pixels])# - np.log(inverse_variance[useful_pixels]))
+        chi_sqs[aperture] = np.sum(chi_sq[useful_pixels] - np.log(inverse_variance[useful_pixels]))
 
         # Update the masks values:
         #> -2: Not interested in this region, and it was non-finite (not used).
@@ -505,9 +498,65 @@ def log_likelihood(theta, model, observations):
     logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
    
-    return likelihood
+    return prior + likelihood
 
 
+def sample_ball(point, observed_spectra, model):
+
+    # Create a sample ball around the result point
+    ball_point = [point.get(dimension, 0) for dimension in model.dimensions]
+    jitter_indices = []
+    dimensional_std = []
+    for di, dimension in enumerate(model.dimensions):
+
+        if dimension in model.grid_points.dtype.names:
+            dimensional_std.append(0.30 * np.ptp(model.grid_boundaries[dimension]))
+
+        elif dimension.startswith("doppler_shift."):
+            dimensional_std.append(100)
+
+        elif dimension.startswith("smooth_model_flux."):
+            dimensional_std.append(0.30)
+
+        elif dimension.startswith("normalise_observed."):
+            # This depends on the value of the coefficient:
+            # For order = 2, p0 +/- 0.10 scales flux as 0.1*(lambda)^2 * flux
+            #                p1 +/- 0.10 scales flux as 0.1*(lambda)^1 * flux
+            #                p2 +/- 0.10 scales flux as 0.1*(lambda)^0 * flux
+            # Ideally we want the total flux scale to vary approximately by ~5x the
+            # flux variance, with roughly equal contributions from each coefficient
+
+            # pN_std = (1/num_coefficients) * mean_flux_variance * (1/lambda)^(num_coefficients - 1 - coefficient)
+
+            # Example:
+            # p0 of order 2 with flux_variance ~ 50 and blue aperture so ~5000 Angstroms
+            # pN_std = (1/3) * 50 * (1/5000.)^(3 - 0)
+
+            aperture = dimension.split(".")[1]
+            num_coefficients = 1 + model.configuration["normalise_observed"][aperture]["order"]
+
+            coefficient = int(dimension.split(".")[2].lstrip("a"))
+
+            # Get a level of the flux variance
+            observed_aperture = observed_spectra[model._mapped_apertures.index(aperture)]
+            mean_flux = np.mean(observed_aperture.flux[np.isfinite(observed_aperture.flux)])
+
+            dimensional_std.append((1./num_coefficients) * mean_flux * (1/np.mean(observed_aperture.disp))**(num_coefficients - 1 - coefficient))
+
+        else:
+            # Jitter, which will be over-written anyways
+            dimensional_std.append(1)
+            jitter_indices.append(di)
+
+    walkers = model.configuration["solver"]["walkers"]
+    p0 = emcee.utils.sample_ball(ball_point, dimensional_std, size=walkers)
+
+    # Write over jitter priors
+    for ji in jitter_indices:
+        p0[:, ji] = np.random.uniform(-10, 1, size=walkers)
+
+
+    return p0
 
 
 def solve(observed_spectra, model):
@@ -532,125 +581,86 @@ def solve(observed_spectra, model):
     if not isinstance(model, models.Model):
         model = models.Model(model)
 
-    # Get the aperture mapping from observed spectra to model spectra
+    # Set the aperture mapping from observed spectra to model spectra
     # For example, which index in our list of spectra corresponds to
-    # 'blue', or 'red' in our model 
-    aperture_mapping = model.map_apertures(observed_spectra)
+    # 'blue', or 'red' in our model
+    model.map_apertures(observed_spectra)
     
-    # Make fmin_powell the default
-    if model.configuration["solver"].get("method", "powell") == "powell":
+    # Perform any optimisation and initialise priors
+    if model.configuration["solver"].get("optimise", True):
+        r_chi_sq, op_pars = optimise(observed_spectra, model)
+        p0 = sample_ball(op_pars, observed_spectra, model)
 
-        # Optimze the dimensions of the spectral grid only
-        # Calculate velocity from cross-correlation
-        # Get smoothing from power spectral density
+    else:
+        p0 = initialise_priors(model, observed_spectra)
 
-        r_chi_sq, parameters = optimise(observed_spectra, model)
-        
-        return result
-        
-    elif model.configuration["solver"]["method"] == "emcee":
-
-        # Ensure we have the number of walkers and steps specified in the configuration
-        walkers, nsteps = model.configuration["solver"]["walkers"], \
-            model.configuration["solver"]["burn"]
-
-        lnprob0, rstate0 = None, None
-        threads = model.configuration["solver"].get("threads", 1)
-
-        mean_acceptance_fractions = np.zeros(nsteps)
-        
-        # Initialise priors and set up arguments for optimization
-        if model.configuration["solver"].get("optimise", True):
-
-            r_chi_sq, op_pars = optimise(observed_spectra, model)
-
-            # Create a sample ball around the result point
-            ball_point = [op_pars.get(dimension, 0) for dimension in model.dimensions]
-            jitter_indices = []
-            dimensional_std = []
-            for di, dimension in enumerate(model.dimensions):
-
-                if dimension in model.grid_points.dtype.names:
-                    dimensional_std.append(0.10 * np.ptp(model.grid_boundaries[dimension]))
-
-                elif dimension.startswith("doppler_shift."):
-                    dimensional_std.append(10)
-
-                elif dimension.startswith("smooth_model_flux."):
-                    dimensional_std.append(0.10)
-
-                elif dimension.startswith("normalise_observed."):
-                    dimensional_std.append(0.10)
-
-                else:
-                    # Jitter, which will be over-written anyways
-                    dimensional_std.append(1)
-                    jitter_indices.append(di)
-
-
-            p0 = emcee.utils.sample_ball(ball_point, dimensional_std, size=walkers)
-
-            # Write over jitter priors
-            for ji in jitter_indices:
-                p0[:, ji] = np.random.uniform(0, 1, size=walkers)
-
+    logger.info("Priors summary:")
+    for i, dimension in enumerate(model.dimensions):
+        if len(p0.shape) > 1 and p0.shape[1] > 1:
+            logger.info("\tParameter {0} - mean: {1:.2e}, std: {2:.2e}, min: {3:.2e}, max: {4:.2e}".format(
+                dimension, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
         else:
-            p0 = initialise_priors(model, observed_spectra)
+            logger.info("\tParameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
 
-        logger.info("Priors summary:")
-        for i, dimension in enumerate(model.dimensions):
-            if len(p0.shape) > 1 and p0.shape[1] > 1:
-                logger.info("\tParameter {0} - mean: {1:.2e}, std: {2:.2e}, min: {3:.2e}, max: {4:.2e}".format(
-                    dimension, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
-            else:
-                logger.info("\tParameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
+    # Get the number of walkers, etc
+    walkers, steps = [model.configuration["solver"][k] for k in ("walkers", "max_sample")]
+    mean_acceptance_fractions = np.zeros(steps)
+    autocorrelation_time = np.zeros((steps, len(model.dimensions)))
 
-        # Initialise the sampler
-        sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_likelihood,
-            args=(model, observed_spectra), threads=threads)
+    # Initialise the sampler
+    sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_likelihood,
+        args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
-        # Sample_data contains all the inputs, and the \chi^2 and L 
-        # sampler_state = (pos, lnprob, state[, blobs])
-        for i, sampler_state in enumerate(sampler.sample(
-            p0, lnprob0=lnprob0, rstate0=rstate0, iterations=nsteps)):
-
-            fraction_complete = (i + 1)/nsteps
-            mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
-
-            # Announce progress
-            logger.info("Sampler is >{0:.2f}% complete (step {1:.0f}) with a mean acceptance fraction of {2:.3f}".format(
-                fraction_complete * 100, i + 1, mean_acceptance_fractions[i]))
-
-            # Are we *probably* converged?
-            if i > (model.configuration["solver"]["burn"] + model.configuration["solver"]["sample"]) \
-            and model.configuration["solver"].get("sigma_acceptance_fraction_tolerance", 5e-4) > np.std(mean_acceptance_fractions[i - model.configuration["solver"]["sample"]:i]):
-                logger.info("We have probably converged, so we are exiting the MCMC prematurely.")
-                mean_acceptance_fractions = mean_acceptance_fractions[:i+1]
-                break
-
-            if mean_acceptance_fractions[i] == 0:
-                logger.warn("Mean acceptance fraction is zero. Breaking out of MCMC!")
-                break
-
-        # Convert state to posteriors
-        logger.info("The final mean acceptance fraction is {0:.3f}".format(mean_acceptance_fractions[-1]))
-
-        sampler.reset()
-        pos, lnprob, rstate = sampler_state[:3]
-
-        logger.info("Sampling...")
-
-        final_state = sampler.run_mcmc(pos, model.configuration["solver"]["sample"])
+    # Start sampling
+    converged = False
+    posterior_index = 0
+    for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, iterations=steps)):
+        mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
         
-        # Get the quantiles
-        posteriors = {}
-        for parameter_name, (quantile_50, quantile_16, quantile_84) in zip(model.dimensions, 
-            map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
-                zip(*np.percentile(sampler.chain.reshape(-1, len(model.dimensions)), [16, 50, 84], axis=0)))):
-            posteriors[parameter_name] = (quantile_50, quantile_16, quantile_84)
+        # Announce progress
+        logger.info(u"Sampler has finished step {0:.0f} with〈a_f〉= {1:.3f}, max(acor) = {2:.0f}".format(
+            i + 1, mean_acceptance_fractions[i], np.max(sampler.acor)))
 
-        return (posteriors, sampler, mean_acceptance_fractions) 
+        # Check for convergence
+        if i > 10*np.max(sampler.acor) and (0.5 >= mean_acceptance_fractions[i] >= 0.2) and not converged:
+            logger.info("Achievement unlocked: Convergence.")
 
+            converged, count = True, int(np.max(sampler.acor))
+            logger.info("Sampling another {0} times before breaking simulation.".format(count))
+
+            posterior_index = i * walkers
+            count += i
+
+        elif converged and i >= count:
+            break
+
+        if mean_acceptance_fractions[i] in (0, 1):
+            raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
             
     else:
-        raise NotImplementedError("well well well, how did we find ourselves here, Mr Bond?")
+        # Max samples exceeded and no convergence detected!
+        logger.warn("No convergence detected after {0} samples!".format(i + 1))
+
+    mean_acceptance_fractions = mean_acceptance_fractions[:i + 1]
+    chain, lnprobability = sampler.chain[:, :i + 1, :], sampler.lnprobability[:, :i + 1]
+
+    # Get the quantiles
+    posteriors = {}
+    for parameter_name, (median, quantile_16, quantile_84) in zip(model.dimensions, 
+        map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
+            zip(*np.percentile(chain.reshape(-1, len(model.dimensions))[posterior_index:], [16, 50, 84], axis=0)))):
+        posteriors[parameter_name] = (median, quantile_16, quantile_84)
+
+    # Send back additional information
+    additional_info = {
+        "posterior_chain_index": posterior_index,
+        "priors": p0,
+        "samples": i + 1,
+        "converged": converged,
+        "chain": chain,
+        "lnprobability": lnprobability,
+        "mean_acceptance_fractions": mean_acceptance_fractions
+    }
+
+    return (posteriors, sampler, additional_info)
+

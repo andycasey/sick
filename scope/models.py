@@ -30,7 +30,7 @@ from specutils import Spectrum1D
 
 logger = logging.getLogger(__name__.split(".")[0])
 
-# This is a hacky global variable that is used for when pre-loading and
+# This is a hacky (yet necessary) global variable that is used for when pre-loading and
 # multiprocessing are employed
 _scope_interpolator_ = None
 
@@ -55,10 +55,6 @@ def load_model_data(filename, **kwargs):
         # Put in our preferred keyword arguments
         kwargs.setdefault('mode', 'c')
         kwargs.setdefault('dtype', np.float32)
-
-        # Wrapping the data as a new array so that it is pickleable across
-        # multiprocessing without the need to share the memmap. See:
-        # http://stackoverflow.com/questions/15986133/why-does-a-memmap-need-a-filename-when-i-try-to-reshape-a-numpy-array
         data = np.memmap(filename, **kwargs)
 
     else:
@@ -448,9 +444,8 @@ class Model(object):
                         for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
 
         # Append jitter dimension
-        #if self.configuration["solver"].get("walkers", 1) > 1:
-        #    for aperture in self.apertures:
-        #        dimensions.append("jitter.{0}".format(aperture))
+        for aperture in self.apertures:
+            dimensions.append("jitter.{0}".format(aperture))
         
         setattr(self, "_dimensions", dimensions)
         

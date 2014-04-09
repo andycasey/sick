@@ -18,7 +18,7 @@ def latexify(labels, overwrite_common_labels=None):
         "feh": "[Fe/H]",
         "logg": "$\log{g}$",
         "alpha": "[$\\alpha$/Fe]",
-        "jitter": "$\delta$"
+        "jitter": "$lnf$"
     }
 
     if overwrite_common_labels is not None:
@@ -32,7 +32,7 @@ def latexify(labels, overwrite_common_labels=None):
         
         elif label.startswith("jitter."):
             aperture = label.split(".")[1]
-            latex_labels.append("$\delta_{{{0}}}$".format(aperture))
+            latex_labels.append("$ln(f_{{{0}}})$".format(aperture))
 
         elif label.startswith("doppler_shift."):
             aperture = label.split(".")[1]
