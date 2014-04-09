@@ -1,4 +1,3 @@
-
 SPECTROSCOPE
 ------------
 
@@ -22,31 +21,31 @@ Installation
 
 Usage
 -----
-Running SCOPE should be as easy as:
+Running SCOPE is as easy as:
 
-``scope model.yml blue_spectrum.fits red_spectrum.fits``
+``scope model.yaml my_spectrum.fits``
 
-If ``blue_spectrum.fits`` and ``red_spectrum.fits`` have multiple apertures (e.g., multiplexing) then all spectra will be analysed. Or you can analyse spectra directly within Python:
+If you have multiple spectra in different channels (e.g., multiplexing) then you can analyse all spectra just as easily:
+
+``scope model.yaml --multi-beam blue_channel.fits red_channel.fits``
+
+Or you can analyse the data in a Python script:
 
 ````
 import scope
 
 # A single spectrum:
-posteriors, sampler, mean_acceptance_fractions = \
-    scope.solve("sun.ms.fits", "model.yaml")
+posteriors, sampler, info = scope.solve("sun.ms.fits", "model.yaml")
 
 # Multiple spectra of the same star:
 # (As long as your model apertures are defined, the order of input spectra does not matter..)
-posteriors, sampler, mean_acceptance_fractions = \
-    scope.solve(["red.fits", "blue.fits"], "model.yaml")
+posteriors, sampler, info = scope.solve(["red.fits", "blue.fits"], "model.yaml")
 
 # Or you can load the model first and use it for many stars:
 model = scope.models.Model("model.yaml")
-sun_posteriors, sun_sampler, sun_mean_acceptance_fractions = \
-    scope.solve("sun.ms.fits", model)
+sun_posteriors, sun_sampler, sun_info = scope.solve("sun.ms.fits", model)
 
-arcturus_posteriors, arcturus_sampler, arcturus_mean_acceptance_fractions = \
-    scope.solve("arcturus.fits", model)
+arcturus_posteriors, arcturus_sampler, arcturus_info = scope.solve("arcturus.fits", model)
 ````
 
 Model Example
@@ -56,9 +55,9 @@ In the usage example above, the ``model.yaml`` file contains all the model infor
 ````
 solver:
   method: emcee
+  optimise: yes
   walkers: 200
-  burn: 300
-  sample: 200
+  max_sample: 200
   threads: 8
 
 models:
@@ -104,43 +103,6 @@ smooth_model_flux:
   red:
     perform: true 
     kernel: free
-
-# We will set explicit priors for our model dimensions
-priors:
-  # We are going to assume we know nothing about these stars a priori.
-  # That means the initial guesses will be uniformly distributed random
-  # guesses across the full extent of the parameter space.
-  teff: uniform 
-  logg: uniform 
-  feh: uniform
-
-  # For any star, the a priori heliocentric velocity probability is a
-  # Gaussian centered on 0 km/s with a dispersion around 100 km/s
-  doppler_shift.blue: normal(0, 100)
-  doppler_shift.red:  normal(0, 100)
-
-  # The synthetic spectra have been pre-convolved to a lower resolution,
-  # but not the exact resolution of our data. This is because the exact
-  # amount of smoothing can vary slightly depending on the star.
-  # The a priori values of these parameters can be estimated from the
-  # spectral resolution.
-  smooth_model_flux.blue.kernel: normal(3, 0.1)  
-  smooth_model_flux.red.kernel:  normal(0.4, 0.1)
-
-  # Note that we have not specified any explicit priors for our
-  # normalisation coefficients (normalise_observed.blue.a0, etc).
-  # If not specified, the mu and sigma for a reasonable normally-distributed
-  # prior will be determined automatically.
-
-# Masks are optional. When they are present, these regions specify the
-# regions to use for comparison. If no masks are specified, the entire
-# spectral region overlapping the model and observed spectra is used.
-masks:
-  blue:
-    - [4500, 5775]
-    - [5880, 6000]
-  red:
-    - [8450, 8750]
 ````
 
 **License**
