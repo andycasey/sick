@@ -263,6 +263,10 @@ def main():
 			# Plot results
 			if args.plotting:
 
+				colours = ("#002F2F", "#046380", "#A7A373", "#8E2800", "#B64926", '#FFB03B', '#468966',
+					"#A989CD", "#1695A3", "#EB7F00", "#2E0927", "#D90000", "#04756F", "#FF8C00", "#2185C5",
+					"#3E454C")
+
 				# Some filenames
 				autocorrelation_plot_filename = output("acor.{}".format(args.plot_format))
 				acceptance_plot_filename = output("acceptance.{}".format(args.plot_format))
@@ -287,7 +291,7 @@ def main():
 
 					ax = fig.add_subplot(chains_per_plot, 1, (1 + j) % chains_per_plot)
 					for k in xrange(walkers):
-						ax.plot(info["chain"][k, :, j], c="k", alpha=0.1)
+						ax.plot(info["chain"][k, :, j], c=colours[j], alpha=0.25)
 					ax.set_ylabel(scope.utils.latexify([model.dimensions[j]])[0])
 					ax.yaxis.set_major_locator(MaxNLocator(4))
 					ax.set_xlim(0, info["samples"])
@@ -310,7 +314,7 @@ def main():
 				rho_tau = [acor.function(np.mean(info["chain"][:, :, j], axis=0)) for j in xrange(len(model.dimensions))]
 
 				for i, dimension in enumerate(model.dimensions):
-					ax.plot(rho_tau[i], "k", lw=2)
+					ax.plot(rho_tau[i], c=colours[i], lw=2)
 				ax.axhline(0, c="#666666")
 				ax.set_xlabel("$\\tau$")
 				ax.set_ylabel("$\\rho(\\tau)$")
@@ -327,20 +331,28 @@ def main():
 				for i, (aperture, modelled_aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, pp_observed_spectra)):
 
 					ax = fig.add_subplot(len(spectra), 1, i+1)
-					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
-					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
-					
-					ax.yaxis.set_major_locator(MaxNLocator(4))
-					#ax.set_ylim(0.95 * observed_aperture.flux.min(), 1.05 * observed_aperture.flux.max())
-					ax.set_ylabel("Flux, $F_\lambda$")
-
 
 					# Get the full boundaries
 					if "masks" in model.configuration and aperture in model.configuration["masks"]:
 						full_extent = \
 							(np.min(model.configuration["masks"][aperture]), np.max(model.configuration["masks"][aperture]))
 
+					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
+					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
+					
+					ax.yaxis.set_major_locator(MaxNLocator(4))
+					ax.set_ylabel("Flux, $F_\lambda$")
+
+					if "masks" in model.configuration and aperture in model.configuration["masks"]:
 						ax.set_xlim(full_extent)
+
+						indices = observed_aperture.disp.searchsorted(full_extent)
+						relevant_fluxes = observed_aperture.flux[indices[0]:indices[1]]
+
+						ax.set_ylim(
+							0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
+							1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
+						)
 
 				ax.set_xlabel("Wavelength, $\lambda$")
 				fig.savefig(pp_spectra_plot_filename)
