@@ -510,32 +510,88 @@ def sample_ball(point, observed_spectra, model):
         elif dimension.startswith("doppler_shift."):
             dimensional_std.append(10)
 
-        elif dimension.startswith("smooth_model_flux."):
+        elif dimension.startswith("smooth_model_flux."): 
             dimensional_std.append(0.15)
 
         elif dimension.startswith("normalise_observed."):
-            # This depends on the value of the coefficient:
-            # For order = 2, p0 +/- 0.10 scales flux as 0.1*(lambda)^2 * flux
-            #                p1 +/- 0.10 scales flux as 0.1*(lambda)^1 * flux
-            #                p2 +/- 0.10 scales flux as 0.1*(lambda)^0 * flux
-            # Ideally we want the total flux scale to vary approximately by ~5x the
-            # flux variance, with roughly equal contributions from each coefficient
 
-            # pN_std = (1/num_coefficients) * mean_flux_variance * (1/lambda)^(num_coefficients - 1 - coefficient)
-
-            # Example:
-            # p0 of order 2 with flux_variance ~ 50 and blue aperture so ~5000 Angstroms
-            # pN_std = (1/3) * 50 * (1/5000.)^(3 - 0)
             aperture = dimension.split(".")[1]
-            num_coefficients = 1 + model.configuration["normalise_observed"][aperture]["order"]
-
             coefficient = int(dimension.split(".")[2].lstrip("a"))
+            num_coefficients = 1 + model.configuration["normalise_observed"][aperture]["order"]
+            
+            # This depends on the value of the polynomial coefficient, the dispersion, as well
+            # as the order of the polynomial to fit the flux.
+
+            # In the example below we will use an order 2 (3 coefficient) polynomial to fit the
+            # flux y from dispersion x such that the coefficients (a, b, c) exist:
+           
+            # y = a*x^2 + b*x + c
+
+            # What we really want is to vary the values of a, b, and c such that they will cause
+            # a known level of variance in the flux. The variance in the flux is chosen to be 
+            # somewhere around the level of flux uncertainty.
+
+            # Corresponding change:
+            # sigma(y|a) = (a + sigma(a))*x^2 + b*x + c
+            # sigma(y|a) = a*x^2 + 2*a*sigma(a) + sigma(a)*x^2 + b*x + c
+            # sigma(y|a) = [sigma(a)*x^2 + 2*a*sigma(a)] + a*x^2 + b*x + c
+            # sigma(y) = [sigma(a)*x^2 + 2*a*sigma(a)]
+
+            # We want sigma(y) to be 3 times the flux uncertainty
+            # 3*flux_variance = [sigma(a)*x^2 + 2*a*sigma(a)]
+            # 3*flux_variance = sigma(a)*[x^2 + 2*a]
+            # sigma(a) = [3 * flux_variance]/[x^2 + 2*a]
+
+            # Similarly for sigma(b):
+            # y = a*x^2 + b*x + c
+            # sigma(y|b) = a*x^2 + (b + sigma(b))*x + c
+            # sigma(y|b) = a*x^2 + b*x + sigma(b)*x + c
+            # sigma(y|b) = [sigma(b)*x] + a*x^2 + b*x + c
+            # sigma(b) = [3 * flux_variance]/[x]
+
+            # More generally we can represent this as a binomial expansion:
+            # (p_n + sigma(p_n))^(order - n) = .....
+
+            # This can obviously be generalised to more cases, but for the moment since we are using
+            # optimisation and not explicit priors, we will just issue a warning to the user
 
             # Get a level of the flux variance
             observed_aperture = observed_spectra[model._mapped_apertures.index(aperture)]
-            mean_flux = np.mean(observed_aperture.flux[np.isfinite(observed_aperture.flux)])
+            min_dispersion = observed_aperture.disp.min()
+            flux_scale = 30. * observed_aperture.uncertainty[np.isfinite(observed_aperture.uncertainty)].max()
 
-            dimensional_std.append((1./num_coefficients) * mean_flux * (1/np.mean(observed_aperture.disp))**(num_coefficients - 1 - coefficient))
+
+            # coefficient, num_coefficients = order + 1
+            # n = order - coefficient
+            # (a + sigma_a)^(n) = \sum_{k=0}^{n} (n|k) * a^(k) * sigma(a)^(n - k)
+
+            if num_coefficients == 1:
+
+                if coefficient == 0:
+                    dimensional_std.append(flux_scale)
+
+            elif num_coefficients == 2:
+
+                if coefficient == 0:
+                    dimensional_std.append(flux_scale/(num_coefficients * min_dispersion))
+
+                else:
+                    dimensional_std.append(flux_scale/num_coefficients)
+
+            elif num_coefficients == 3:
+
+                if coefficient == 0:
+                    dimensional_std.append(flux_scale/(num_coefficients * (min_dispersion**2 + 2*point[dimension])))
+
+                elif coefficient == 1:
+                    dimensional_std.append(flux_scale/(num_coefficients * min_dispersion))
+
+                else:
+                    dimensional_std.append(flux_scale/num_coefficients)
+
+            else:
+                raise NotImplementedError("priors for optimised normalisation coefficients with order >= 3 are not generalised yet")
+
 
         else:
             # Jitter, which will be over-written anyways
@@ -581,8 +637,7 @@ def solve(observed_spectra, model):
     
     # Perform any optimisation and initialise priors
     if model.configuration["solver"].get("optimise", True):
-        r_chi_sq, op_pars = optimise(observed_spectra, model,
-            initial_samples=model.configuration["solver"].get("initial_samples", 1000))
+        r_chi_sq, op_pars = optimise(observed_spectra, model)
         p0 = sample_ball(op_pars, observed_spectra, model)
 
     else:
@@ -606,8 +661,8 @@ def solve(observed_spectra, model):
         args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
     # Start sampling
-    converged = False
-    posterior_index = 0
+    #converged = False
+    #posterior_index = 0
     for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, iterations=steps)):
         mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
         
@@ -616,33 +671,36 @@ def solve(observed_spectra, model):
             i + 1, mean_acceptance_fractions[i], np.max(sampler.acor)))
 
         # Check for convergence
-        if i > 10*np.max(sampler.acor) and (0.5 >= mean_acceptance_fractions[i] >= 0.2) and not converged:
-            logger.info("Achievement unlocked: Convergence.")
+        #if i > 10*np.max(sampler.acor) and (0.5 >= mean_acceptance_fractions[i] >= 0.2) and not converged:
+        #    logger.info("Achievement unlocked: Convergence (probably).")
+        #    converged, count, posterior_index = True, 2 * i, 1.5 * i * walkers
 
-            converged, count = True, int(np.max(sampler.acor))
-            logger.info("Sampling another {0} times before breaking simulation.".format(count))
-
-            posterior_index = i * walkers
-            count += i
-
-        elif converged and i >= count:
-            break
+        #elif converged and i >= count:
+        #    break
 
         if mean_acceptance_fractions[i] in (0, 1):
             raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
             
-    else:
-        # Max samples exceeded and no convergence detected!
-        logger.warn("No convergence detected after {0} samples!".format(i + 1))
+    #else:
+    #    # Max samples exceeded and no convergence detected!
+    #    logger.warn("No convergence detected after {0} samples!".format(i + 1))
 
+    converged, posterior_index = None, -100 * walkers
     mean_acceptance_fractions = mean_acceptance_fractions[:i + 1]
-    chain, lnprobability = sampler.chain[:, :i + 1, :], sampler.lnprobability[:, :i + 1]
+    chain, lnprobability, random_state = sampler.chain[:, :i + 1, :], sampler.lnprobability[:, :i + 1], sampler.random_state
+
+    #logger.info("Resetting chain...")
+    #sampler.reset()
+    #logger.info("Sampling 'posterior'?")
+    #sampler.run_mcmc(pos, 100)
+
+    #converged, posterior_index = None, 0
 
     # Get the quantiles
     posteriors = {}
     for parameter_name, (median, quantile_16, quantile_84) in zip(model.dimensions, 
         map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
-            zip(*np.percentile(chain.reshape(-1, len(model.dimensions))[posterior_index:], [16, 50, 84], axis=0)))):
+            zip(*np.percentile(sampler.chain.reshape(-1, len(model.dimensions))[posterior_index:], [16, 50, 84], axis=0)))):
         posteriors[parameter_name] = (median, quantile_16, quantile_84)
 
     # Send back additional information
@@ -653,6 +711,7 @@ def solve(observed_spectra, model):
         "converged": converged,
         "chain": chain,
         "lnprobability": lnprobability,
+        "random_state": random_state,
         "mean_acceptance_fractions": mean_acceptance_fractions
     }
 
