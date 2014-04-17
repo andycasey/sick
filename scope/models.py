@@ -369,9 +369,9 @@ class Model(object):
                 raise ValueError("aperture name '{0}' cannot contain a full-stop character".format(aperture))
 
         # Check dispersion maps of standards don't overlap
-        overlap_wavelength = find_spectral_overlap(self.dispersion.values())
-        if overlap_wavelength is not None:
-            raise ValueError("dispersion maps overlap near {0:.0f}".format(overlap_wavelength))
+        #overlap_wavelength = find_spectral_overlap(self.dispersion.values())
+        #if overlap_wavelength is not None:
+        #    raise ValueError("dispersion maps overlap near {0:.0f}".format(overlap_wavelength))
 
 
     def _validate_masks(self):
@@ -426,29 +426,38 @@ class Model(object):
         if hasattr(self, "_dimensions"):
             return self._dimensions
 
-        # Get explicit priors
         dimensions = [] + list(self.grid_points.dtype.names)
-        for dimension in self.configuration["priors"].keys():
-            if dimension.startswith("doppler_shift") \
-            or dimension.startswith("smooth_model_flux"):
-                aperture = dimension.split(".")[1]
-                if aperture not in self.apertures:
-                    continue
-            if dimension in dimensions: continue
+        for dimension in self.configuration.keys():
 
-            dimensions.append(dimension)
+            # Protected keywords
+            if dimension in ("solver", "model"): continue
 
-        # Get implicit normalisation priors
-        for aperture in self.apertures:     
-            if self.configuration["normalise_observed"][aperture]["perform"]:
-                dimensions.extend(
-                    ["normalise_observed.{0}.a{1}".format(aperture, i) \
-                        for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
+            # Add all smoothing-related dimensions
+            elif dimension == "smooth_model_flux":
+                for aperture in self.apertures:
+                    if self.configuration[dimension][aperture]["perform"] \
+                    and self.configuration[dimension][aperture]["kernel"] == "free":
+                        dimensions.append("smooth_model_flux.{0}.kernel".format(aperture))
 
-        # Append jitter dimension
+            # Add doppler-related dimensions
+            elif dimension == "doppler_shift":
+                for aperture in self.apertures:
+                    if self.configuration[dimension][aperture]["perform"]:
+                        dimensions.append("doppler_shift.{0}".format(aperture))
+
+            # Add normalisation-related dimensions
+            elif dimension == "normalise_observed":
+                for aperture in self.apertures:
+                    if self.configuration[dimension][aperture]["perform"]:
+                        dimensions.extend(
+                            ["normalise_observed.{0}.a{1}".format(aperture, i) \
+                                for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
+
+        # Append jitter dimensions
         for aperture in self.apertures:
             dimensions.append("jitter.{0}".format(aperture))
         
+        # Cache for future
         setattr(self, "_dimensions", dimensions)
         
         return dimensions
@@ -665,8 +674,12 @@ class Model(object):
                     .format(wl_start=observed_wlmin, wl_end=observed_wlmax))
 
             elif len(apertures_found) > 1:
-                raise ValueError("multiple model apertures found for observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
-                    .format(wl_start=observed_wlmin, wl_end=observed_wlmax))
+                index = np.argmin(np.abs(np.mean(spectrum.disp) - map(np.mean, [self.dispersion[aperture] for aperture in apertures_found])))
+                apertures_found = [apertures_found[index]]
+
+                logging.warn("Multiple model apertures found for observed aperture {0} ({1:.0f} to {2:.0f}). Using '{0}'"
+                    " because it's closest by mean dispersion.".format(i, observed_wlmin, observed_wlmax, apertures_found[0]))
+
 
             mapped_apertures.append(apertures_found[0])
 
@@ -739,8 +752,7 @@ class Model(object):
                 coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
                     for n in xrange(num_coefficients_expected)]
 
-                continuum = np.polyval(coefficients, self.dispersion[aperture])
-                interpolated_flux *= continuum
+                interpolated_flux *= np.polyval(coefficients, self.dispersion[aperture])
 
             model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture],
                 flux=interpolated_flux)
@@ -760,44 +772,19 @@ class Model(object):
                 logger.debug("Smoothed model flux for '{0}' aperture with kernel {1}".format(
                     aperture, kernel))
         
+        # Shift the spectra onto the requested wavelengths
+        for aperture in self.apertures:
+            if self.configuration["doppler_shift"][aperture]["perform"]:
+
+                velocity = kwargs["doppler_shift.{0}".format(aperture)]
+                model_spectra[aperture] = model_spectra[aperture].doppler_shift(velocity)
+
         # Interpolate synthetic to observed dispersion map
         if observations is not None:
             for aperture, observed_spectrum in zip(self._mapped_apertures, observations):
                 model_spectra[aperture] = model_spectra[aperture].interpolate(observed_spectrum.disp)
 
         return [model_spectra[aperture] for aperture in self._mapped_apertures]
-
-
-    def observed_spectra(self, observations, **kwargs):
-        """ Prepares the observed spectra for comparison with model spectra
-        by performing normalisation and doppler shifts.
-
-        Inputs
-        ------
-        parameters : list of floats
-            The input parameters that were provdided to the `chi_squared_fn` function.
-
-        parameter_names : list of str, should be same length as `parameters`.
-            The names for the input parameters.
-
-        observations : list of `Spectrum1D` objects
-            The observed spectra.
-        """
-
-        logger.debug("Preparing observed spectra for comparison...")
-
-        doppler_shifted_spectra = []
-        for aperture, spectrum in zip(self._mapped_apertures, observations):        
-
-            # Any doppler shift to perform?
-            if self.configuration["doppler_shift"][aperture]["perform"]:
-
-                velocity = kwargs["doppler_shift.{0}".format(aperture)]
-                doppler_shifted_spectrum = spectrum.doppler_shift(-velocity)
-
-            doppler_shifted_spectra.append(doppler_shifted_spectrum)
-
-        return doppler_shifted_spectra
 
 
     def masks(self, model_spectra):
@@ -813,12 +800,12 @@ class Model(object):
 
         if "masks" not in self.configuration:
             masks = {}
-            for aperture, spectrum in model_spectra.iteritems():
+            for aperture, spectrum in zip(self.apertures, model_spectra):
                 masks[aperture] = np.ones(len(spectrum.disp))
 
         else:
             masks = {}
-            for aperture, spectrum in model_spectra.iteritems():
+            for aperture, spectrum in zip(self.apertures, model_spectra):
                 if aperture not in self.configuration["masks"]:
                     masks[aperture] = np.ones(len(spectrum.disp))
                 
@@ -828,7 +815,7 @@ class Model(object):
                     if self.configuration["masks"][aperture] is not None:
                         for region in self.configuration["masks"][aperture]:
                             index_start, index_end = np.searchsorted(spectrum.disp, region)
-                            mask[index_start:index_end] = 1
+                            mask[index_start:index_end] = 1.
 
                     masks[aperture] = mask
 

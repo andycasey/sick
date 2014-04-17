@@ -145,6 +145,9 @@ class Spectrum1D(object):
                 #disp -= header['LTV1'] if header.has_key('LTV1') else 0
                 flux = image[0].data
             
+                # Check for logarithmic dispersion
+                if "CTYPE1" in header.keys() and header["CTYPE1"] == "AWAV-LOG":
+                    disp = np.exp(disp)
 
             # Add the headers in
             headers = {}
@@ -520,10 +523,12 @@ def load_aaomega_multispec(filename, fill_value=-1):
         
         flux = np.array(image[0].data[index], dtype=np.float)
         uncertainty = np.sqrt(abs(flux))
-        
+
         # Check if it's worthwhile having these
         if all(~np.isfinite(flux)):
             flux = np.array([fill_value] * len(flux), dtype=np.float)
+
+        flux[0 >= flux] = np.nan
 
         spectrum = Spectrum1D(dispersion, flux, uncertainty=uncertainty, headers=headers)
         spectra.append(spectrum)

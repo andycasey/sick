@@ -77,7 +77,7 @@ def main():
 
 		all_spectra = sorted_spectra
 	else:
-		all_spectra = sum(all_spectra, [])
+		all_spectra = [all_spectra]
 
 	# Load the model
 	model = scope.Model(args.model)
@@ -253,11 +253,12 @@ def main():
 			with open(output("model.state"), "wb") as fp:
 				pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
-			pp_parameters = dict(zip(posteriors.keys(), [posteriors[k][0] for k in posteriors.keys()]))
+			# Get the most likely sample
+			ml_index = np.argmax(info["lnprobability"])
+			pp_parameters = dict(zip(model.dimensions, info["chain"].reshape(-1, len(model.dimensions))[ml_index]))
 			
-			pp_observed_spectra = model.observed_spectra(spectra, **pp_parameters)
-			pp_modelled_spectra = model.model_spectra(observations=pp_observed_spectra, **pp_parameters)
-			[spectrum.save(filename) for spectrum, filename in zip(pp_observed_spectra, pp_observed_spectra_filenames)]
+			pp_modelled_spectra = model.model_spectra(observations=spectra, **pp_parameters)
+			[spectrum.save(filename) for spectrum, filename in zip(spectra, pp_observed_spectra_filenames)]
 			[spectrum.save(filename) for spectrum, filename in zip(pp_modelled_spectra, pp_modelled_spectra_filenames)]
 
 			# Plot results
@@ -291,7 +292,7 @@ def main():
 
 					ax = fig.add_subplot(chains_per_plot, 1, (1 + j) % chains_per_plot)
 					for k in xrange(walkers):
-						ax.plot(info["chain"][k, :, j], c=colours[j], alpha=0.25)
+						ax.plot(info["chain"][k, :, j], c=colours[j % len(colours)], alpha=0.25)
 					ax.set_ylabel(scope.utils.latexify([model.dimensions[j]])[0])
 					ax.yaxis.set_major_locator(MaxNLocator(4))
 					ax.set_xlim(0, info["samples"])
@@ -314,7 +315,7 @@ def main():
 				rho_tau = [acor.function(np.mean(info["chain"][:, :, j], axis=0)) for j in xrange(len(model.dimensions))]
 
 				for i, dimension in enumerate(model.dimensions):
-					ax.plot(rho_tau[i], c=colours[i], lw=2)
+					ax.plot(rho_tau[i], c=colours[i % len(colours)], lw=2)
 				ax.axhline(0, c="#666666")
 				ax.set_xlabel("$\\tau$")
 				ax.set_ylabel("$\\rho(\\tau)$")
@@ -322,13 +323,14 @@ def main():
 
 				# Make a corner plot with just the parameters of interest
 				indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-				fig = triangle.corner(info["chain"].reshape(-1, len(model.dimensions))[info["posterior_chain_index"]:, indices],
-					labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices))
+				fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
+					labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices),
+					quantiles=[16, 50, 84])
 				fig.savefig(corner_plot_filename)
 
 				# Plot spectra
 				fig = plt.figure()
-				for i, (aperture, modelled_aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, pp_observed_spectra)):
+				for i, (aperture, modelled_aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, spectra)):
 
 					ax = fig.add_subplot(len(spectra), 1, i+1)
 
