@@ -465,7 +465,7 @@ def log_likelihood(theta, model, observations):
     masks = model.masks(model_spectra)
     
     chi_sqs = {}
-    for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observed_spectra)):
+    for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observations)):
 
         inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + modelled_spectrum.flux**2 * np.exp(2. * parameters["jitter.{0}".format(aperture)]))
         chi_sq = (observed_spectrum.flux - modelled_spectrum.flux)**2 * inverse_variance
@@ -593,8 +593,7 @@ def sample_ball(point, observed_spectra, model):
 
             # Get some normalisation coefficients
             coefficients = np.polyfit(model_aperture.disp[finite], continuum[finite], n-1)
-            print("COEFFICIENTS ARE ", coefficients)
-
+            
             # Write over the prior values
             for j, coefficient in enumerate(coefficients):
                 index = model.dimensions.index("normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=j))
