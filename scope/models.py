@@ -751,8 +751,9 @@ class Model(object):
                 num_coefficients_expected = self.configuration["normalise_observed"][aperture]["order"] + 1
                 coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
                     for n in xrange(num_coefficients_expected)]
-
+		
                 interpolated_flux *= np.polyval(coefficients, self.dispersion[aperture])
+		logger.debug("interpolated flux is {0} {1}".format(np.mean(interpolated_flux), np.std(interpolated_flux)))
 
             model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture],
                 flux=interpolated_flux)
@@ -771,13 +772,18 @@ class Model(object):
                 model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kernel)
                 logger.debug("Smoothed model flux for '{0}' aperture with kernel {1}".format(
                     aperture, kernel))
-        
+       
+
+ 
         # Shift the spectra onto the requested wavelengths
         for aperture in self.apertures:
             if self.configuration["doppler_shift"][aperture]["perform"]:
 
                 velocity = kwargs["doppler_shift.{0}".format(aperture)]
                 model_spectra[aperture] = model_spectra[aperture].doppler_shift(velocity)
+
+	for aperture in self.apertures:
+	    logging.debug("ap {0} {1} {2}".format(aperture, np.mean(model_spectra[aperture].flux), np.std(model_spectra[aperture].flux)))
 
         # Interpolate synthetic to observed dispersion map
         if observations is not None:
