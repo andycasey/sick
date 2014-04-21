@@ -25,6 +25,106 @@ import models, utils, specutils
 logger = logging.getLogger(__name__.split(".")[0])
 
 
+def implicit_prior(model, observations, size=1):
+    """Generate implicit priors for all dimensions in the given model"""
+
+    priors = []
+    while size > len(priors):
+
+        walker_prior = []
+        normalisation_coefficients = {}
+
+        for i, dimension in enumerate(model.dimensions):
+
+            # Is this a grid dimension?
+            # If it is, let's assume it's uniformly distributed
+            if dimension in model.grid_points.dtype.names:
+                walker_prior.append(random.uniform(*model.grid_boundaries[dimension]))
+                continue
+
+            # The grid dimensions come first in model.dimensions, so once the length
+            # of walker_prior matches model.grid_points.dtype.names, we have what we
+            # need to interpolate a flux. The interpolated flux will can be used for
+            # the other priors
+            if len(model.grid_points.dtype.names) == len(walker_prior):
+                # Attempt to interpolate a flux
+                interpolated_fluxes = model.interpolate_flux(walker_prior)
+
+                non_finite = lambda _: np.all(~np.isfinite(_))
+                if all(map(non_finite, interpolated_fluxes.values())): 
+                    break
+
+                # We will use the interpolated flux to determine approximate normalisation
+                # coefficients
+                for aperture, model_flux in interpolated_fluxes.iteritems():
+                    if not model.configuration["normalise_observed"][aperture]["perform"]: continue
+
+                    order = model.configuration["normalise_observed"][aperture]["order"]
+                    aperture_index = model._mapped_apertures.index(aperture)
+                    observed_aperture = observations[aperture_index]
+
+                    # Get masks
+                    # TODO
+
+                    interpolated_model_flux = np.interp(observed_aperture.disp,
+                        model.dispersion[aperture], model_flux, left=np.nan, right=np.nan)
+                    continuum = observed_aperture.flux/interpolated_model_flux
+
+                    finite = np.isfinite(continuum)
+                    coefficients = np.polyfit(observed_aperture.disp[finite], continuum[finite], order)
+                    
+                    normalisation_coefficients[aperture] = coefficients
+
+            # Velocities
+            if dimension.startswith("doppler_shift."):
+                # Assumes a velocity, not a redshift
+                velocity = random.normal(0, 100)
+                walker_prior.append(velocity)
+
+            # Smoothing
+            elif dimension.startswith("smooth_model_flux."):
+
+                aperture = dimension.split(".")[1]
+
+                # Estimate this by the observed spectral resolution
+                observed_aperture = observations[model._mapped_apertures.index(aperture)]
+                observed_spectral_resolution = observed_aperture.disp[1:]/np.diff(observed_aperture.disp)
+
+                model_spectral_resolution = model.dispersion[aperture][1:]/np.diff(model.dispersion[aperture])
+
+                resolution_difference = np.mean(model_spectral_resolution)/np.mean(observed_spectral_resolution)
+
+                resolution_difference /= (2 * (2 * np.log(2))**0.5)
+
+                walker_prior.append(random.normal(resolution_difference, 0.1 * resolution_difference))
+
+
+            # Normalisation
+            elif dimension.startswith("normalise_observed."):
+
+                aperture = dimension.split(".")[1]
+                coefficient = int(dimension.split(".")[2].lstrip("a"))
+                walker_prior.append(normalisation_coefficients[aperture][coefficient])
+
+            # Jitter
+            elif dimension == "jitter" or dimension.startswith("jitter."):
+                # Uniform between -10 and 1
+                walker_prior.append(random.uniform(-10, 1))
+
+            else:
+                raise RuntimeError("don't know how to generate implicit priors from dimension {0}".format(dimension))
+
+        else:
+            priors.append(walker_prior)
+
+    return np.array(priors)
+
+
+
+
+
+
+
 def initialise_priors(model, observations):
     """ Initialise the priors (or initial conditions) for the analysis """
 
@@ -167,98 +267,7 @@ def initialise_priors(model, observations):
         walker_priors = np.array(walker_priors)
 
     else:
-        # No explicit priors given. Work it out!
-        cross_correlation_peaks = np.zeros((walkers, len(model.apertures)))
-        for i in xrange(walkers):
-            
-            current_walker = []
-            interpolated_flux = {}
-            normalisation_coefficients = {}
-            for j, dimension in enumerate(model.dimensions):
-
-                if dimension == "jitter" or dimension.startswith("jitter."):
-                    current_walker.append(random.uniform(-10, 1))
-                    continue
-
-                # Is it a model dimension?
-                if dimension in model.grid_points.dtype.names:
-                    # Sample uniformly
-                    current_walker.append(random.uniform(*model.grid_boundaries[dimension]))
-                    continue
-
-                else:
-                    # Since the grid point parameters come first in model.dimensions, the first
-                    # time this else is run means we can interpolate flux
-                    if len(interpolated_flux) == 0:
-                        interpolated_flux.update(model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)]))
-                        if np.any([np.all(~np.isfinite(value)) for value in interpolated_flux.values()]):
-                            
-                            k, keep_trying = 0, True
-                            while keep_trying:
-                                current_walker = [random.uniform(*model.grid_boundaries[dimension]) for dimension in model.grid_points.dtype.names]
-                                interpolated_flux = model.interpolate_flux(current_walker[:len(model.grid_points.dtype.names)])
-
-                                if k > walkers:
-                                    raise ValueError("could not initialise priors with any finite flux points")
-
-                                if not np.any([np.all(~np.isfinite(value)) for value in interpolated_flux.values()]):
-                                    break
-
-
-                # Is it a smoothing parameter? Estimate from resolution
-
-                # Is it a velocity parameter? Estimate from cross-correlation with interpolated flux?
-                if dimension.startswith("doppler_shift."):
-                    aperture = dimension.split(".")[1]
-                    observed_spectrum = observations[model._mapped_apertures.index(aperture)]
-                    
-                    template = specutils.Spectrum1D(model.dispersion[aperture], interpolated_flux[aperture])
-                    vrad, u_vrad, R = observed_spectrum.cross_correlate(template)
-                    current_walker.append(random.normal(vrad, u_vrad))
-
-                    cross_correlation_peaks[i, int(model.apertures.index(aperture))] = R
-
-                # Is it a normalisation parameter? Estimate from division with spectra at point
-                elif dimension.startswith("normalise_observed."):
-                    aperture, coefficient = dimension.split(".")[1:3]
-
-                    if not normalisation_coefficients.has_key(aperture):
-                        # Get the full range of spectra that will be normalised
-                        observed_spectrum = observations[model._mapped_apertures.index(aperture)]
-                        order = model.configuration["normalise_observed"][aperture]["order"]
-
-                        if "masks" in model.configuration and aperture in model.configuration["masks"]:
-                            
-                            ranges = np.array(model.configuration["masks"][aperture])
-                            min_range, max_range = np.min(ranges), np.max(ranges)
-                            range_indices = np.searchsorted(observed_spectrum.disp, [min_range, max_range])
-
-                            flux_indices = np.zeros(len(observed_spectrum.disp), dtype=bool)
-                            flux_indices[range_indices[0]:range_indices[1]] = True
-                            flux_indices *= np.isfinite(observed_spectrum.flux)
-                            
-                            logger.debug("Normalising from {1:.0f} to {2:.0f} Angstroms in {0} aperture".format(
-                                aperture, np.min(observed_spectrum.disp[flux_indices]), np.max(observed_spectrum.disp[flux_indices])))
-                        else:
-                            flux_indices = np.isfinite(observed_spectrum.flux)
-
-                        # Put the interpolated flux onto the same scale as the observed_spectrum
-                        interpolated_resampled_flux = np.interp(observed_spectrum.disp[flux_indices], model.dispersion[aperture], interpolated_flux[aperture],
-                            left=np.nan, right=np.nan)
-
-                        # Fit the divided spectrum with a polynomial of order X
-                        divided_flux = observed_spectrum.flux[flux_indices]/interpolated_resampled_flux
-                        isfinite = np.isfinite(divided_flux)
-
-                        coefficients = np.polyfit(observed_spectrum.disp[flux_indices][isfinite], divided_flux[isfinite], order)
-                        normalisation_coefficients[aperture] = coefficients
-
-                    current_walker.append(normalisation_coefficients[aperture][int(coefficient[1:])])
-
-            walker_priors.append(map(float, current_walker))
-
-        walker_priors = np.array(walker_priors)
-        raise a
+        walker_priors = implicit_prior(model, observations, size=walkers)
 
     return walker_priors
 
@@ -416,8 +425,11 @@ def log_prior(theta, model):
     
     for parameter, value in zip(model.dimensions, theta):
         # Check smoothing values
-        if parameter.startswith("smooth_model_flux.") and 0 > value:
+        if parameter.startswith("smooth_model_flux.") and not 10 > value > 0:
             return -np.inf
+
+	if parameter.startswith("doppler_shift.") and abs(value) > 500:
+	    return -np.inf
 
         # Check for jitter
         if (parameter == "jitter" or parameter.startswith("jitter.")) \
@@ -456,22 +468,19 @@ def log_likelihood(theta, model, observations):
     parameters = dict(zip(model.dimensions, theta))
 
     # Prepare the model spectra
+    logger.debug("Obs flux details {0} {1} {2} {3} {4} {5}".format(np.mean(observations[0].disp), np.std(observations[0].disp), np.mean(observations[0].flux[np.isfinite(observations[0].flux)]), np.std(observations[0].flux[np.isfinite(observations[0].flux)]), np.mean(observations[0].uncertainty), np.std(observations[0].uncertainty)))
     model_spectra = model.model_spectra(observations=observations, **parameters)
+
     if model_spectra is None:
         logger.debug("Returning -inf log-likelihood because modified model spectra is invalid")
         return -np.inf
 
-    # Any masks?
-    masks = model.masks(model_spectra)
-    
+    logger.debug("Mod flux details {0} {1} {2} {3}".format(np.mean(model_spectra[0].disp), np.std(model_spectra[0].disp), np.mean(model_spectra[0].flux[np.isfinite(model_spectra[0].flux)]), np.std(model_spectra[0].flux[np.isfinite(model_spectra[0].flux)])))
     chi_sqs = {}
     for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model._mapped_apertures, model_spectra, observations)):
 
         inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + modelled_spectrum.flux**2 * np.exp(2. * parameters["jitter.{0}".format(aperture)]))
         chi_sq = (observed_spectrum.flux - modelled_spectrum.flux)**2 * inverse_variance
-
-        # Apply masks
-        chi_sq *= masks[aperture]
 
         # Useful_pixels of 1 indicates that we should use it, 0 indicates it was masked.
         useful_pixels = np.isfinite(chi_sq) 
@@ -481,13 +490,7 @@ def log_likelihood(theta, model, observations):
 
         chi_sqs[aperture] = np.sum(chi_sq[useful_pixels] - np.log(inverse_variance[useful_pixels]))
 
-        # Update the masks values:
-        #> -2: Not interested in this region, and it was non-finite (not used).
-        #> -1: Interested in this region, but it was non-finite (not used).
-        #>  0: Not interested in this region, it was finite (not used).
-        #>  1: Interested in this region, it was finite (used for parameter determination)
-        masks[aperture][~useful_pixels] -= 2
-
+    logger.debug("Chisq values: {0}".format(chi_sqs.values()))
     likelihood = -0.5 * np.sum(chi_sqs.values())
 
     logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
@@ -652,8 +655,8 @@ def solve(observed_spectra, model):
         mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
         
         # Announce progress
-        logger.info(u"Sampler has finished step {0:.0f} with〈a_f〉= {1:.3f}".format(
-            i + 1, mean_acceptance_fractions[i]))
+        logger.info(u"Sampler has finished step {0:.0f} with〈a_f〉= {1:.3f}, maximum log likelihood in last step was {2:.3e}".format(
+            i + 1, mean_acceptance_fractions[i], np.max(sampler.lnprobability[:, i])))
 
         if mean_acceptance_fractions[i] in (0, 1):
             raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
