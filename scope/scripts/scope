@@ -245,7 +245,7 @@ def main():
 				json.dump(metadata, fp)
 
 			# Close sampler pool
-			if model.configuration["solver"].get("walkers", 1) > 1:
+			if model.configuration["solver"].get("threads", 1) > 1:
 				sampler.pool.close()
 				sampler.pool.join()
 
@@ -325,7 +325,7 @@ def main():
 				indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
 				fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
 					labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices),
-					quantiles=[16, 50, 84])
+					quantiles=[.16, .50, .84])
 				fig.savefig(corner_plot_filename)
 
 				# Plot spectra
