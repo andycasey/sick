@@ -146,15 +146,19 @@ class Model(object):
 
             num_points = len(self.grid_points)
             fluxes = [] 
+            maybe_warn = []
             for i, aperture in enumerate(self.apertures):
                 if not "flux_filename" in self.configuration["model"][aperture]:
-                    logger.warn("No flux filename specified for {0} aperture".format(aperture))
+                    maybe_warn.append(aperture)
                     continue
                 fluxes.append(np.memmap(self.configuration["model"][aperture]["flux_filename"], mode="r", dtype=np.float32).reshape((num_points, -1)))
 
             total_pixels = sum([each.shape[1] for each in fluxes])
             total_expected_pixels = sum(map(len, [self.dispersion[aperture] for aperture in self.apertures]))
             if total_pixels != total_expected_pixels:
+                for aperture in maybe_warn:
+                    logger.warn("No flux filename specified for {0} aperture".format(aperture))
+
                 raise ValueError("the total flux pixels for a spectrum ({0}) was different to "\
                     "what was expected ({1})".format(total_pixels, total_expected_pixels))
 
@@ -247,7 +251,7 @@ class Model(object):
         num_models = len(self.grid_points) * num_apertures
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return "{module}.Model({num_models} models; {num_total_parameters} parameters: {num_nuisance_parameters} nuisance parameters,"\
+        return "{module}.Model({num_models} models; {num_total_parameters} parameters: {num_nuisance_parameters} additional parameters,"\
             " {num_grid_parameters} grid parameters: {parameters}; {num_apertures} apertures: {apertures}; ~{num_pixels} pixels)".format(
             module=self.__module__, num_models=num_models, num_apertures=num_apertures, apertures=', '.join(self.apertures),
             num_pixels=human_readable_digit(num_pixels), num_total_parameters=len(self.dimensions),
@@ -488,7 +492,7 @@ class Model(object):
             wavelength_indices = {}
             for aperture in self.apertures:
                 pixels = len(self.dispersion[aperture])
-                n_pixels.append(int(np.floor(pixels/sampling[aperture])))
+                n_pixels.append(int(np.ceil(pixels/float(sampling[aperture]))))
                 wavelength_indices[aperture] = np.array([0, pixels])
 
         else:
@@ -499,7 +503,7 @@ class Model(object):
                 wavelength_indices[aperture] = np.array([start, end])
 
                 pixels = end - start 
-                n_pixels.append(int(np.floor(pixels/sampling[aperture])))
+                n_pixels.append(int(np.ceil(pixels/float(sampling[aperture]))))
 
         # Create the grid points filename
         with open(grid_points_filename, "wb") as fp:
@@ -530,7 +534,7 @@ class Model(object):
         for aperture, dispersion_filename in dispersion_filenames.iteritems():
             si, ei = wavelength_indices[aperture]
 
-            disp = np.memmap(dispersion_filename, dtype=np.float32, mode="w+", shape=(int((ei - si)/sampling[aperture]), ))
+            disp = np.memmap(dispersion_filename, dtype=np.float32, mode="w+", shape=self.dispersion[aperture][si:ei:sampling[aperture]].shape)
             disp[:] = self.dispersion[aperture][si:ei:sampling[aperture]]
             del disp
 
@@ -636,8 +640,6 @@ class Model(object):
 
             except:
                 raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
-
-        return interpolated_fluxes
     
 
     def map_apertures(self, observations):
@@ -726,74 +728,59 @@ class Model(object):
                     for parameter, value in zip(self.grid_points.dtype.names, grid_point)])))
             return None
 
-        logger.debug("Interpolated model flux at {0}".format(
-            ", ".join(["{0} = {1:.2f}".format(parameter, value) \
-                for parameter, value in zip(self.grid_points.dtype.names, grid_point)])))
-
-        if interpolated_flux == {}:
-            logger.debug("No apertures of interpolated flux found")
+        if any([np.all(~np.isfinite(flux)) for flux in interpolated_flux.values()]):
+            logger.debug("an aperture returned all non-finite values for interpolated flux")
             return None
-
-        for aperture, flux in interpolated_flux.iteritems():
-            if np.all(~np.isfinite(flux)):
-                logger.debug("{0} aperture returned all non-finite values for interpolated flux".format(aperture))
-                return None
 
         # Create spectra
         model_spectra = {}
         for aperture, interpolated_flux in interpolated_flux.iteritems():
                 
-            # Normalise to the data
+            model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture].copy(), flux=interpolated_flux.copy())
+
+            # Scale to the data
             if self.configuration["normalise_observed"][aperture]["perform"]:
             
-                # Since we need to perform normalisation, the normalisation coefficients
-                # should be in kwargs
+                # Since we need to perform normalisation, the normalisation coefficients should be in the kwargs
                 num_coefficients_expected = self.configuration["normalise_observed"][aperture]["order"] + 1
                 coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
                     for n in xrange(num_coefficients_expected)]
-		
-                interpolated_flux *= np.polyval(coefficients, self.dispersion[aperture])
-		logger.debug("interpolated flux is {0} {1}".format(np.mean(interpolated_flux), np.std(interpolated_flux)))
-
-            model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture],
-                flux=interpolated_flux)
-
-        # Any synthetic smoothing to apply?
-        for aperture in self.apertures:
-            key = "smooth_model_flux.{aperture}.kernel".format(aperture=aperture)
+                model_spectra[aperture].flux *= np.polyval(coefficients, model_spectra[aperture].disp)
+    
+            # Any synthetic smoothing to apply?
+            smoothing_kwarg = "smooth_model_flux.{0}.kernel".format(aperture)
 
             # Is the smoothing a free parameter?
-            if key in kwargs:
-                model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kwargs[key])
+            fwhm = 0
+            if smoothing_kwarg in kwargs:
+                fwhm = kwargs[smoothing_kwarg]
+                #model_spectra[aperture] = model_spectra[aperture].gaussian_smooth()
 
             elif self.configuration["smooth_model_flux"][aperture]["perform"]:
                 # Apply a single smoothing value
-                kernel = self.configuration["smooth_model_flux"][aperture]["kernel"]
-                model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kernel)
-                logger.debug("Smoothed model flux for '{0}' aperture with kernel {1}".format(
-                    aperture, kernel))
-       
+                fwhm = self.configuration["smooth_model_flux"][aperture]["kernel"]
+                #model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kernel)
+            
+            if fwhm > 0:
+                profile_sigma = fwhm / (2.*(2*np.log(2))**0.5)
+                true_profile_sigma = profile_sigma / np.mean(np.diff(model_spectra[aperture].disp))
+                model_spectra[aperture].flux = ndimage.gaussian_filter1d(model_spectra[aperture].flux, true_profile_sigma)
 
- 
-        # Shift the spectra onto the requested wavelengths
-        for aperture in self.apertures:
-            if self.configuration["doppler_shift"][aperture]["perform"]:
+            # Doppler shift the spectra
+            doppler_shift_kwarg = "doppler_shift.{0}".format(aperture)
+            if doppler_shift_kwarg in kwargs:
+                c, v = 299792458e-3, kwargs[doppler_shift_kwarg]
+                model_spectra[aperture].disp *= np.sqrt((1 + v/c)/(1 - v/c))
 
-                velocity = kwargs["doppler_shift.{0}".format(aperture)]
-                model_spectra[aperture] = model_spectra[aperture].doppler_shift(velocity)
-
-	for aperture in self.apertures:
-	    logging.debug("ap {0} {1} {2}".format(aperture, np.mean(model_spectra[aperture].flux), np.std(model_spectra[aperture].flux)))
-
-        # Interpolate synthetic to observed dispersion map
-        if observations is not None:
-            for aperture, observed_spectrum in zip(self._mapped_apertures, observations):
-                model_spectra[aperture] = model_spectra[aperture].interpolate(observed_spectrum.disp)
+            # Interpolate synthetic to observed dispersion map
+            if observations is not None:
+                model_spectra[aperture] = model_spectra[aperture].interpolate(
+                    observations[self._mapped_apertures.index(aperture)].disp)
 
         return [model_spectra[aperture] for aperture in self._mapped_apertures]
 
 
-    def masks(self, model_spectra):
+    def masks(self, theta, model_spectra):
         """Returns pixel masks to apply to the model spectra
         based on the configuration provided.
 
@@ -817,11 +804,18 @@ class Model(object):
                 
                 else:
                     # We are required to build a mask.
-                    mask = np.zeros(len(spectrum.disp))
+                    mask = np.ones(len(spectrum.disp))
                     if self.configuration["masks"][aperture] is not None:
                         for region in self.configuration["masks"][aperture]:
+
+                            region = np.array(region)
+
+                            if "doppler_shift.{0}".format(aperture) in theta.keys():
+                                c, v = 299792458e-3, theta["doppler_shift.{0}".format(aperture)]
+                                region *= np.sqrt((1 + v/c)/(1 - v/c))
+                                
                             index_start, index_end = np.searchsorted(spectrum.disp, region)
-                            mask[index_start:index_end] = 1.
+                            mask[index_start:index_end] = 0
 
                     masks[aperture] = mask
 

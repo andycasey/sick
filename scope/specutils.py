@@ -476,7 +476,7 @@ class Spectrum1D(object):
         return [measured_vrad, measured_verr, R]
 
 
-def load_aaomega_multispec(filename, fill_value=-1):
+def load_aaomega_multispec(filename, fill_value=-1, clean=True):
     """
     Returns a list of Spectrum1D objects with headers from the main image
     and ones specific to that fibre (RA, DEC, X, Y, XERR, YERR, FIRE_NUM, etc)
@@ -492,7 +492,7 @@ def load_aaomega_multispec(filename, fill_value=-1):
     
     image = pyfits.open(filename)
     
-    req_image_headers = ['MEANRA', 'MEANDEC', 'DATE', 'EPOCH', 'EXPOSED', 'TOTALEXP', 'UTDATE',
+    req_image_headers = ['MEANRA', 'MEANDEC', 'EPOCH', 'EXPOSED', 'TOTALEXP', 'UTDATE',
         'UTSTART', 'UTEND', 'EXPOSED', 'ELAPSED', 'TOTALEXP', 'RO_GAIN', 'RO_NOISE', 'TELESCOP',
         'ALT_OBS', 'LAT_OBS', 'LONG_OBS', 'OBJECT' ]
     req_fibre_headers = ['NAME', 'RA', 'DEC', 'X', 'Y', 'XERR', 'YERR', 'MAGNITUDE', 'COMMENT']
@@ -523,6 +523,14 @@ def load_aaomega_multispec(filename, fill_value=-1):
         
         flux = np.array(image[0].data[index], dtype=np.float)
         uncertainty = np.sqrt(abs(flux))
+        #uncertainty = np.abs(np.random.normal(0, np.sqrt(np.median(np.abs(flux))), size=len(flux)))
+
+        # Remove 1 pixel from each where there is a nan
+        if clean:
+            non_finite_diffs = np.where(np.diff(np.array(np.isfinite(flux), dtype=int)) > 0)[0]
+            # Set each pixel +/- 1 of the non_finite_diffs as non_finite
+            for pixel in non_finite_diffs:
+                flux[pixel - 1: pixel + 2] = np.nan
 
         # Check if it's worthwhile having these
         if all(~np.isfinite(flux)):

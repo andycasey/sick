@@ -64,7 +64,7 @@ def main():
 
 	# Are there multiple spectra in each aperture?
 	if args.multi_beam:
-		# If so, they should all have the same length (e.g. same number of stars)
+		# If so, they should all have the same length (e.g. same number of objects)
 		if len(set(map(len, all_spectra))) > 1:
 			raise IOError("filenames contain different number of spectra")
 
@@ -102,12 +102,12 @@ def main():
 		if not isinstance(spectra, (list, tuple)):
 			spectra = [spectra]
 
-		logger.info("Starting on star #{0} (RA {1}, DEC {2} -- {3})".format(i, spectra[0].headers.get("RA", "None"),
+		logger.info("Starting on object #{0} (RA {1}, DEC {2} -- {3})".format(i, spectra[0].headers.get("RA", "None"),
 			spectra[0].headers.get("DEC", "None"), spectra[0].headers.get("OBJECT", "Unknown")))
 
 		# Create metadata and put header information in
 		if args.skip > i - 1:
-			logger.info("Skipping star #{0}".format(i))
+			logger.info("Skipping object #{0}".format(i))
 			continue
 
 		if isinstance(args.number_to_solve, (int, float)) and \
@@ -125,7 +125,7 @@ def main():
 		# Set defaults for metadata
 		metadata.update({"run_id": i})
 		metadata.update(default_metadata)
-
+		
 		t_init = time()
 		try:
 			posteriors, sampler, info = scope.solve(spectra, model)
@@ -171,8 +171,6 @@ def main():
 			
 			# Save information related to the analysis
 			metadata.update({
-				"converged": info["converged"],
-				"samples": info["samples"],
 				"chain_filename": chain_filename,
 				"pp_observed_spectra_filenames": ",".join(pp_observed_spectra_filenames),
 				"pp_modelled_spectra_filenames": ",".join(pp_modelled_spectra_filenames),
@@ -188,7 +186,7 @@ def main():
 					np.arange(1, 1 + chain_length),
 					np.arange(1, 1 + chain_length) % walkers,
 					info["chain"].reshape(-1, len(model.dimensions)).T,
-					info["lnprobability"].reshape(-1, 1).T
+					info["ln_probability"].reshape(-1, 1).T
 				]),
 				names=["Iteration", "Sample"] + model.dimensions + ["ln_likelihood"],
 				formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
@@ -254,10 +252,10 @@ def main():
 				pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
 			# Get the most likely sample
-			ml_index = np.argmax(info["lnprobability"])
-			pp_parameters = dict(zip(model.dimensions, info["chain"].reshape(-1, len(model.dimensions))[ml_index]))
+			ml_index = np.argmax(sampler.lnprobability.reshape(-1))
+			pp_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
 			
-			pp_modelled_spectra = model.model_spectra(observations=spectra, **pp_parameters)
+			pp_modelled_spectra = model.model_spectra(**pp_parameters)
 			[spectrum.save(filename) for spectrum, filename in zip(spectra, pp_observed_spectra_filenames)]
 			[spectrum.save(filename) for spectrum, filename in zip(pp_modelled_spectra, pp_modelled_spectra_filenames)]
 
@@ -276,7 +274,7 @@ def main():
 
 				# Plot the chains
 				ndim = len(model.dimensions)
-				chain_to_plot = info["chain"].reshape(-1, ndim)
+				chain_to_plot = sampler.chain.reshape(-1, ndim)
 				chains_per_plot = len(model.grid_points.dtype.names)
 
 				n = 1
@@ -292,10 +290,10 @@ def main():
 
 					ax = fig.add_subplot(chains_per_plot, 1, (1 + j) % chains_per_plot)
 					for k in xrange(walkers):
-						ax.plot(info["chain"][k, :, j], c=colours[j % len(colours)], alpha=0.25)
+						ax.plot(info["chain"][k, :, j], c=colours[j % len(colours)], alpha=0.5)
 					ax.set_ylabel(scope.utils.latexify([model.dimensions[j]])[0])
 					ax.yaxis.set_major_locator(MaxNLocator(4))
-					ax.set_xlim(0, info["samples"])
+					ax.set_xlim(0, ax.get_xlim()[1])
 
 				[axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
 				ax.set_xlabel("Step Number")
@@ -325,7 +323,7 @@ def main():
 				indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
 				fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
 					labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices),
-					quantiles=[.16, .50, .84])
+					quantiles=[.16, .50, .84], verbose=False)
 				fig.savefig(corner_plot_filename)
 
 				# Plot spectra
@@ -335,9 +333,10 @@ def main():
 					ax = fig.add_subplot(len(spectra), 1, i+1)
 
 					# Get the full boundaries
-					if "masks" in model.configuration and aperture in model.configuration["masks"]:
-						full_extent = \
-							(np.min(model.configuration["masks"][aperture]), np.max(model.configuration["masks"][aperture]))
+					full_extent = [
+						np.max([modelled_aperture.disp[0], observed_aperture.disp[0]]),
+						np.min([modelled_aperture.disp[-1], observed_aperture.disp[-1]])
+					]
 
 					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
 					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
@@ -345,16 +344,15 @@ def main():
 					ax.yaxis.set_major_locator(MaxNLocator(4))
 					ax.set_ylabel("Flux, $F_\lambda$")
 
-					if "masks" in model.configuration and aperture in model.configuration["masks"]:
-						ax.set_xlim(full_extent)
+					ax.set_xlim(full_extent)
 
-						indices = observed_aperture.disp.searchsorted(full_extent)
-						relevant_fluxes = observed_aperture.flux[indices[0]:indices[1]]
+					indices = observed_aperture.disp.searchsorted(full_extent)
+					relevant_fluxes = observed_aperture.flux[indices[0]:indices[1]]
 
-						ax.set_ylim(
-							0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
-							1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
-						)
+					ax.set_ylim(
+						0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
+						1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
+					)
 
 				ax.set_xlabel("Wavelength, $\lambda$")
 				fig.savefig(pp_spectra_plot_filename)
