@@ -516,7 +516,7 @@ def load_aaomega_multispec(filename, fill_value=-1, clean=True):
     for i, index in enumerate(program_indices):
     
         headers = base_headers.copy()
-        headers['FIBRE_NUM'] = i + 1
+        headers['FIBRE_NUM'] = index + 1
         
         for header in req_fibre_headers:
             headers[header] = image[2].data[index][header]
