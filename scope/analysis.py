@@ -56,27 +56,6 @@ def implicit_prior(model, observations, size=1):
                 if all(map(non_finite, interpolated_fluxes.values())): 
                     break
 
-                # We will use the interpolated flux to determine approximate normalisation
-                # coefficients
-                for aperture, model_flux in interpolated_fluxes.iteritems():
-                    if not model.configuration["normalise_observed"][aperture]["perform"]: continue
-
-                    order = model.configuration["normalise_observed"][aperture]["order"]
-                    aperture_index = model._mapped_apertures.index(aperture)
-                    observed_aperture = observations[aperture_index]
-
-                    # Get masks
-                    # TODO
-
-                    interpolated_model_flux = np.interp(observed_aperture.disp,
-                        model.dispersion[aperture], model_flux, left=np.nan, right=np.nan)
-                    continuum = observed_aperture.flux/interpolated_model_flux
-
-                    finite = np.isfinite(continuum)
-                    coefficients = np.polyfit(observed_aperture.disp[finite], continuum[finite], order)
-                    
-                    normalisation_coefficients[aperture] = coefficients
-
             # Velocities
             if dimension.startswith("doppler_shift."):
                 # Assumes a velocity, not a redshift
@@ -123,7 +102,32 @@ def implicit_prior(model, observations, size=1):
             # Normalisation
             elif dimension.startswith("normalise_observed."):
 
+                # We will use the interpolated flux to determine approximate normalisation
+                # coefficients
                 aperture = dimension.split(".")[1]
+                if aperture not in normalisation_coefficients.keys():
+
+                    if not model.configuration["normalise_observed"][aperture]["perform"] \
+                    or model.configuration["normalise_observed"][aperture]["method"] == "spline": continue
+
+                    model_flux = interpolated_fluxes[aperture]
+
+                    order = model.configuration["normalise_observed"][aperture]["order"]
+                    aperture_index = model._mapped_apertures.index(aperture)
+                    observed_aperture = observations[aperture_index]
+
+                    # Get masks
+                    # TODO
+
+                    interpolated_model_flux = np.interp(observed_aperture.disp,
+                        model.dispersion[aperture], model_flux, left=np.nan, right=np.nan)
+                    continuum = observed_aperture.flux/interpolated_model_flux
+
+                    finite = np.isfinite(continuum)
+                    coefficients = np.polyfit(observed_aperture.disp[finite], continuum[finite], order)
+                    
+                    normalisation_coefficients[aperture] = coefficients
+
                 coefficient = int(dimension.split(".")[2].lstrip("a"))
                 walker_prior.append(normalisation_coefficients[aperture][coefficient])
 
@@ -296,155 +300,6 @@ def initialise_priors(model, observations):
     return walker_priors
 
 
-def optimise(observed_spectra, model, initial_samples=1000):
-    """ Optimise the model parameters prior to MCMC sampling """
-
-    # Define a function to fit the smoothing
-    def fit_smoothing(fwhm, observed_aperture, model_aperture):
-
-        profile_sigma = abs(fwhm[0]) / (2 * (2*np.log(2))**0.5)
-        
-        # The requested FWHM is in Angstroms, but the dispersion between each
-        # pixel is likely less than an Angstrom, so we must calculate the true
-        # smoothing value
-        true_profile_sigma = profile_sigma / np.mean(np.diff(observed_aperture.disp))
-        smoothed_flux = scipy.ndimage.gaussian_filter1d(model_aperture.flux, true_profile_sigma)
-
-        chi_sq = ((smoothed_flux - observed_aperture.flux)**2)/(observed_aperture.uncertainty**2)
-        return np.sum(chi_sq[np.isfinite(chi_sq)])
-
-    # Define our minimisation function
-    def minimisation_function(theta, model, observed, full_output=False):
-
-        # Here theta contains only the dimensions of the grid
-        interpolated_flux = model.interpolate_flux(theta)
-        if sum(map(lambda x: sum(np.isfinite(x)), interpolated_flux.values())) == 0:
-            return fail_value
-
-        parameters = dict(zip(model.grid_points.dtype.names, theta))
-
-        ndim, chi_sqs = 0, 0
-        for aperture, observed_aperture in zip(model._mapped_apertures, observed):
-            model_aperture = specutils.Spectrum1D(disp=model.dispersion[aperture], flux=interpolated_flux[aperture])
-
-            # Get doppler shift
-            if model.configuration["doppler_shift"][aperture]["perform"]:
-                try:
-                    v_rad, v_err, r = observed_aperture.cross_correlate(model_aperture)
-                except:
-                    return fail_value
-
-                else:
-                    if abs(v_rad) > 500:
-                        return fail_value
-                parameters["doppler_shift.{0}".format(aperture)] = v_rad
-
-            else: 
-                v_rad = 0
-
-            # Put the interpolated flux onto the same scale as the observed_spectrum
-            observed_aperture = observed_aperture.doppler_shift(-v_rad)
-            model_aperture = model_aperture.interpolate(observed_aperture.disp)
-
-            # Define masks if necessary
-            if "masks" in model.configuration and aperture in model.configuration["masks"]:
-                ranges = np.array(model.configuration["masks"][aperture])
-                min_range, max_range = np.min(ranges), np.max(ranges)
-                range_indices = np.searchsorted(observed_aperture.disp, [min_range, max_range])
-
-                flux_indices = np.zeros(len(observed_aperture.disp), dtype=bool)
-                flux_indices[range_indices[0]:range_indices[1]] = True
-                flux_indices *= np.isfinite(observed_aperture.flux)
-
-            else:
-                flux_indices = np.isfinite(observed_aperture.flux)
-
-            # Any normalisation to perform?
-            if model.configuration["normalise_observed"][aperture]["perform"]:
-                # Get normalisation coefficients
-                order = model.configuration["normalise_observed"][aperture]["order"]
-
-                # Fit the continuum with a polynomial of order X
-                divided_flux = (observed_aperture.flux/model_aperture.flux)[flux_indices]
-                isfinite = np.isfinite(divided_flux)
-
-                coefficients = np.polyfit(model_aperture.disp[flux_indices][isfinite], divided_flux[isfinite], order)
-                
-                # Save the coefficients                
-                for i, coefficient in enumerate(coefficients):
-                    parameters["normalise_observed.{0}.a{1}".format(aperture, i)] = coefficient
-
-                # Fit the model spectra to the observations
-                model_aperture.flux *= np.polyval(coefficients, model_aperture.disp)
-
-            # Any smoothing to perform?
-            if model.configuration["smooth_model_flux"][aperture]["perform"]:
-
-                # Do we have a free kernel?
-                if model.configuration["smooth_model_flux"][aperture]["kernel"] == "free":
-
-                    # Estimate kernel value
-                    #kernel = abs(scipy.optimize.minimize(fit_smoothing, [1.], args=(observed_aperture, model_aperture), method="nelder-mead")["x"])
-                    
-                    kernel = 1.8 if aperture == "blue" else 0.8
-                    parameters["smooth_model_flux.{0}.kernel".format(aperture)] = kernel
-
-                else:
-                    kernel = model.configuration["smooth_model_flux"][aperture]["kernel"]
-
-                model_aperture = model_aperture.gaussian_smooth(kernel)
-
-            # Calculate the chi-sq values
-            chi_sq = ((observed_aperture.flux - model_aperture.flux)**2)/observed_aperture.uncertainty**2
-            ndim += sum(np.isfinite(chi_sq))
-            chi_sqs += sum(chi_sq[np.isfinite(chi_sq)])
-            
-        r_chi_sq = chi_sqs/(ndim - len(model.grid_points.dtype.names) - 1)
-        
-        logger.debug(u"Optimisation is returning a reduced χ² = {0:.2f} for the point where {1}".format(
-            r_chi_sq, ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, theta)])))
-        
-        if full_output:
-            return (r_chi_sq, parameters)
-
-        return r_chi_sq
-
-    fail_value = +9e99
-    returned_values = []
-    random_points = []
-
-    logger.info("Random sampling...")
-    while initial_samples > len(random_points):
-        p0 = [np.random.uniform(*model.grid_boundaries[parameter]) for parameter in model.grid_points.dtype.names]
-        
-        try:
-            result = minimisation_function(p0, model, observed_spectra)
-
-        except:
-            logger.exception("Failed to sample {0}".format(p0))
-            raise
-
-        else:
-            returned_values.append(result)
-            random_points.append(p0)
-
-    best_index = np.argmin(returned_values)
-    if returned_values[best_index] > 1e50:
-        raise RuntimeError("Failed to find reasonable starting point")
-
-    logger.info(u"Optimising from {0} with initial reduced χ² = {1:.2f}".format(
-        ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, random_points[best_index])]),
-        returned_values[best_index]))
-    result = scipy.optimize.minimize(minimisation_function, random_points[best_index],
-        args=(model, observed_spectra))
-
-    logger.info(u"Sampling from {0} with reduced χ² = {1:.2f}".format(
-        ", ".join(["{0} = {1:.2f}".format(dim, value) for dim, value in zip(model.grid_points.dtype.names, result["x"])]),
-        result["fun"]))
-
-    return minimisation_function(result["x"], model, observed_spectra, full_output=True)
-    
-
 def log_prior(theta, model):
     
     for parameter, value in zip(model.dimensions, theta):
@@ -600,18 +455,19 @@ def sample_ball(point, observed_spectra, model):
         model_apertures = model.model_spectra(observations=observed_spectra, **pi_parameters)
         if model_apertures is None: continue
 
-        for aperture, observed_aperture, model_aperture in zip(model.apertures, observed_spectra, model_apertures):
+        if n > 0:
+            for aperture, observed_aperture, model_aperture in zip(model.apertures, observed_spectra, model_apertures):
 
-            continuum = (observed_aperture.flux + np.random.normal(0, observed_aperture.uncertainty))/model_aperture.flux
-            finite = np.isfinite(continuum)
+                continuum = (observed_aperture.flux + np.random.normal(0, observed_aperture.uncertainty))/model_aperture.flux
+                finite = np.isfinite(continuum)
 
-            # Get some normalisation coefficients
-            coefficients = np.polyfit(model_aperture.disp[finite], continuum[finite], n-1)
-            
-            # Write over the prior values
-            for j, coefficient in enumerate(coefficients):
-                index = model.dimensions.index("normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=j))
-                p0[i, index] = coefficient
+                # Get some normalisation coefficients
+                coefficients = np.polyfit(model_aperture.disp[finite], continuum[finite], n-1)
+                
+                # Write over the prior values
+                for j, coefficient in enumerate(coefficients):
+                    index = model.dimensions.index("normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=j))
+                    p0[i, index] = coefficient
 
 
     return p0

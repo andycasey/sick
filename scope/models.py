@@ -197,13 +197,8 @@ class Model(object):
 
                     if match is not None:
                         if len(dimensions) == 0:
-                            
-                            groups = match.groups()
-                            groupdict = match.groupdict()
-
-                            for value in match.groupdict().itervalues():
-                                dimensions.append(match.groupdict().keys()[groups.index(value)])
-
+                            dimensions = sorted(match.groupdict().keys(), key=re_match.index)
+           
                         points.append(map(float, match.groups()))
                         matched_filenames.append(filename)
 
@@ -274,7 +269,6 @@ class Model(object):
         self._validate_solver()
         self._validate_doppler()
         self._validate_masks()
-        self._validate_weights()
     
         return True
 
@@ -301,13 +295,39 @@ class Model(object):
 
             # If perform is false then we don't need order
             if settings["perform"]:
-                if "order" not in settings:
-                    raise KeyError("configuration setting 'normalise_observed.{aperture}.{required_setting}' not found".format(
-                        aperture=aperture, required_setting=required_setting))
 
-                elif not isinstance(settings["order"], (float, int)):
-                    raise TypeError("configuration setting 'normalise_observed.{aperture}.order'"
-                        " is expected to be an integer-like object".format(aperture=aperture))
+                method = settings.get("method", "polynomial")
+                if method == "spline":
+
+                    if "knots" not in settings:
+                        raise KeyError("configuration setting 'normalise_observed.{aperture}.knots' not found".format(
+                            aperture=aperture))
+
+                    elif not isinstance(settings["knots"], (int, )):
+                        # Could be a list-type of rest wavelength points
+                        if not isinstance(settings["knots"], (tuple, list, np.ndarray)):
+                            raise TypeError("configuration setting 'normalise_observed.{aperture}.knots' is expected"
+                                "to be an integer or a list-type of rest wavelength points".format(aperture=aperture))
+
+                        try:
+                            map(float, settings["knots"])
+                        except (TypeError, ValueError):
+                            raise TypeError("configuration setting 'normalise_observed.{aperture}.knots' is expected"
+                                "to be an integer or a list-type of rest wavelength points".format(aperture=aperture))
+
+                elif method == "polynomial":
+
+                    if "order" not in settings:
+                        raise KeyError("configuration setting 'normalise_observed.{aperture}.order' not found".format(
+                            aperture=aperture))
+
+                    elif not isinstance(settings["order"], (float, int)):
+                        raise TypeError("configuration setting 'normalise_observed.{aperture}.order'"
+                            " is expected to be an integer-like object".format(aperture=aperture))
+
+                else:
+                    raise ValueError("configuration setting 'normalise_observed.{aperture}.method' not recognised"
+                        " -- must be spline or polynomial".format(aperture=aperture))
 
         return True
 
@@ -400,27 +420,6 @@ class Model(object):
         return True
 
 
-    def _validate_weights(self):
-
-        if "weights" not in self.configuration.keys():
-            return True
-
-        for aperture in self.configuration["weights"]:
-            if aperture not in self.apertures: continue
-
-            test_weighting_func = lambda disp, flux: eval(self.configuration["weights"][aperture],
-                {"disp": disp, "flux": flux, "np": np})
-
-            try:
-                test_weighting_func(1, 1)
-                test_weighting_func(np.arange(10), np.ones(10))
-
-            except:
-                raise ValueError("weighting function for {0} aperture is improper".format(aperture))
-
-        return True
-
-
     @property
     def dimensions(self):
         """Returns all dimension names for a given configuration, which can
@@ -452,9 +451,10 @@ class Model(object):
             elif dimension == "normalise_observed":
                 for aperture in self.apertures:
                     if self.configuration[dimension][aperture]["perform"]:
-                        dimensions.extend(
-                            ["normalise_observed.{0}.a{1}".format(aperture, i) \
-                                for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
+                        if self.configuration[dimension][aperture].get("method", "polynomial") == "polynomial":
+                            dimensions.extend(
+                                ["normalise_observed.{0}.a{1}".format(aperture, i) \
+                                    for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
 
         # Append jitter dimensions
         for aperture in self.apertures:
@@ -701,6 +701,7 @@ class Model(object):
         return mapped_apertures
 
 
+
     def model_spectra(self, observations=None, **kwargs):
         """ Interpolates flux values for a set of stellar parameters and
         applies any relevant smoothing or normalisation of the data. 
@@ -737,15 +738,6 @@ class Model(object):
                 
             model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture].copy(), flux=interpolated_flux.copy())
 
-            # Scale to the data
-            if self.configuration["normalise_observed"][aperture]["perform"]:
-            
-                # Since we need to perform normalisation, the normalisation coefficients should be in the kwargs
-                num_coefficients_expected = self.configuration["normalise_observed"][aperture]["order"] + 1
-                coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
-                    for n in xrange(num_coefficients_expected)]
-                model_spectra[aperture].flux *= np.polyval(coefficients, model_spectra[aperture].disp)
-    
             # Any synthetic smoothing to apply?
             smoothing_kwarg = "smooth_model_flux.{0}.kernel".format(aperture)
 
@@ -775,6 +767,49 @@ class Model(object):
             if observations is not None:
                 model_spectra[aperture] = model_spectra[aperture].interpolate(
                     observations[self._mapped_apertures.index(aperture)].disp)
+
+            # Scale to the data
+            if self.configuration["normalise_observed"][aperture]["perform"]:
+            
+                if self.configuration["normalise_observed"][aperture].get("method", "polynomial") == "polynomial":
+
+                    # Since we need to perform normalisation, the normalisation coefficients should be in the kwargs
+                    num_coefficients_expected = self.configuration["normalise_observed"][aperture]["order"] + 1
+                    coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
+                        for n in xrange(num_coefficients_expected)]
+                    model_spectra[aperture].flux *= np.polyval(coefficients, model_spectra[aperture].disp)
+    
+                elif observations is not None:
+                    num_knots = self.configuration["normalise_observed"][aperture]["knots"]
+                    observed_aperture = observations[self._mapped_apertures.index(aperture)]
+                    
+                    # Divide the observed spectrum by the model aperture spectrum
+                    continuum = observed_aperture.flux/model_spectra[aperture].flux
+
+                    # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
+                    # to all observed pixels (regardless of how much overlap there is)
+                    finite = np.isfinite(continuum)
+
+                    if isinstance(num_knots, (float, int)):
+                        # Produce equi-spaced internal knot points
+                        # Divide the spectral range by <N> + 1
+                        spacing = np.ptp(observed_aperture.disp[finite])/(num_knots + 1.)
+
+                        knots = np.arange(observed_aperture.disp[finite][0] + spacing,
+                            observed_aperture.disp[finite][-1], spacing)[:num_knots]
+
+                    else:
+                        # If num_knots is not actually a number then it is a list-type of actual knot points that
+                        # have been specified by the user
+                        knots = num_knots
+
+                    # TODO: Should S be free?
+                    # TODO: Should we be using the uncertainty to weight things
+                    tck = interpolate.splrep(observed_aperture.disp[finite], continuum[finite],
+                        w=observed_aperture.uncertainty[finite], t=knots, s=len(observed_aperture.disp))
+
+                    # Scale the model by the continuum function
+                    model_spectra[aperture].flux[finite] *= interpolate.splev(observed_aperture.disp[finite], tck)
 
         return [model_spectra[aperture] for aperture in self._mapped_apertures]
 
@@ -819,35 +854,4 @@ class Model(object):
                     masks[aperture] = mask
 
         return masks
-
-
-    def weights(self, model_spectra):
-        """Returns callable weighting functions to apply to the \chi^2 comparison.
-
-        Inputs
-        ------
-        model_spectra : dict
-            A dictionary containing aperture names as keys and specutils.Spectrum1D objects
-            as values.
-        """
-
-        if "weights" not in self.configuration:
-            weights = {}
-            for aperture, spectrum in model_spectra.iteritems():
-                # Equal weighting to all pixels
-                weights[aperture] = lambda disp, flux: np.ones(len(flux))
-
-        else:
-            weights = {}
-            for aperture, spectrum in model_spectra.iteritems():
-                if aperture not in self.configuration["weights"]:
-                    # Equal weighting to all pixels
-                    weights[aperture] = lambda disp, flux: np.ones(len(flux))
-
-                else:
-                    # Evaluate the expression, providing numpy (as np), disp, and flux as locals
-                    weights[aperture] = lambda disp, flux: eval(self.configuration["weights"][aperture], 
-                        {"disp": disp, "np": np, "flux": flux})
-
-        return weights
 

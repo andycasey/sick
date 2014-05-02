@@ -255,7 +255,7 @@ def main():
 			ml_index = np.argmax(sampler.lnprobability.reshape(-1))
 			pp_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
 			
-			pp_modelled_spectra = model.model_spectra(**pp_parameters)
+			pp_modelled_spectra = model.model_spectra(observations=spectra, **pp_parameters)
 			[spectrum.save(filename) for spectrum, filename in zip(spectra, pp_observed_spectra_filenames)]
 			[spectrum.save(filename) for spectrum, filename in zip(pp_modelled_spectra, pp_modelled_spectra_filenames)]
 
@@ -333,13 +333,18 @@ def main():
 					ax = fig.add_subplot(len(spectra), 1, i+1)
 
 					# Get the full boundaries
+					fmd = np.isfinite(modelled_aperture.disp)
+					fod = np.isfinite(observed_aperture.disp)
 					full_extent = [
-						np.max([modelled_aperture.disp[0], observed_aperture.disp[0]]),
-						np.min([modelled_aperture.disp[-1], observed_aperture.disp[-1]])
+						np.max([modelled_aperture.disp[fmd][0], observed_aperture.disp[fod][0]]),
+						np.min([modelled_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
 					]
 
+					interpolated_model_flux = np.interp(observed_aperture.disp, modelled_aperture.disp, modelled_aperture.flux,
+						left=np.nan, right=np.nan)
+
 					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
-					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
+					ax.plot(observed_aperture.disp, observed_aperture.flux/continuum, 'k', zorder=100)
 					
 					ax.yaxis.set_major_locator(MaxNLocator(4))
 					ax.set_ylabel("Flux, $F_\lambda$")
