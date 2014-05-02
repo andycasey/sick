@@ -202,7 +202,6 @@ class Model(object):
                             groupdict = match.groupdict()
 
                             for value in match.groupdict().itervalues():
-                                if groups.count(value) > 1: break
                                 dimensions.append(match.groupdict().keys()[groups.index(value)])
 
                         points.append(map(float, match.groups()))
