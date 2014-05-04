@@ -128,8 +128,14 @@ def implicit_prior(model, observations, size=1):
                     
                     normalisation_coefficients[aperture] = coefficients
 
-                coefficient = int(dimension.split(".")[2].lstrip("a"))
-                walker_prior.append(normalisation_coefficients[aperture][coefficient])
+                if model.configuration["normalise_observed"][aperture].get("method", "polynomial") == "polynomial":
+                    coefficient = int(dimension.split(".")[2].lstrip("a"))
+                    walker_prior.append(normalisation_coefficients[aperture][coefficient])
+
+                else:
+                    # Smoothing value
+                    m = sum(np.isfinite(interpolated_fluxes[aperture]))
+                    walker_prior.append(np.random.normal(m), np.sqrt(2*m))
 
             # Jitter
             elif dimension == "jitter" or dimension.startswith("jitter."):
@@ -305,6 +311,9 @@ def log_prior(theta, model):
     for parameter, value in zip(model.dimensions, theta):
         # Check smoothing values
         if parameter.startswith("smooth_model_flux.") and not 10 > value >= 0:
+            return -np.inf
+
+        if parameter.startswith("normalise_observed.") and endswith(".s") and value < 0:
             return -np.inf
 
         # Check for jitter

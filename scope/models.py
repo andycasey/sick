@@ -456,6 +456,9 @@ class Model(object):
                                 ["normalise_observed.{0}.a{1}".format(aperture, i) \
                                     for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
 
+                        else: #spline
+                            dimensions.append("normalise_observed.{0}.s".format(aperture))
+
         # Append jitter dimensions
         for aperture in self.apertures:
             dimensions.append("jitter.{0}".format(aperture))
@@ -779,37 +782,39 @@ class Model(object):
                         for n in xrange(num_coefficients_expected)]
                     model_spectra[aperture].flux *= np.polyval(coefficients, model_spectra[aperture].disp)
     
-                elif observations is not None:
-                    num_knots = self.configuration["normalise_observed"][aperture]["knots"]
-                    observed_aperture = observations[self._mapped_apertures.index(aperture)]
-                    
-                    # Divide the observed spectrum by the model aperture spectrum
-                    continuum = observed_aperture.flux/model_spectra[aperture].flux
+                else: #spline
+                    if observations is not None:
+                        num_knots = self.configuration["normalise_observed"][aperture]["knots"]
+                        observed_aperture = observations[self._mapped_apertures.index(aperture)]
+                        
+                        # Divide the observed spectrum by the model aperture spectrum
+                        continuum = observed_aperture.flux/model_spectra[aperture].flux
 
-                    # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
-                    # to all observed pixels (regardless of how much overlap there is)
-                    finite = np.isfinite(continuum)
+                        # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
+                        # to all observed pixels (regardless of how much overlap there is)
+                        finite = np.isfinite(continuum)
 
-                    if isinstance(num_knots, (float, int)):
-                        # Produce equi-spaced internal knot points
-                        # Divide the spectral range by <N> + 1
-                        spacing = np.ptp(observed_aperture.disp[finite])/(num_knots + 1.)
+                        if isinstance(num_knots, (float, int)):
+                            # Produce equi-spaced internal knot points
+                            # Divide the spectral range by <N> + 1
+                            spacing = np.ptp(observed_aperture.disp[finite])/(num_knots + 1.)
 
-                        knots = np.arange(observed_aperture.disp[finite][0] + spacing,
-                            observed_aperture.disp[finite][-1], spacing)[:num_knots]
+                            knots = np.arange(observed_aperture.disp[finite][0] + spacing,
+                                observed_aperture.disp[finite][-1], spacing)[:num_knots]
 
-                    else:
-                        # If num_knots is not actually a number then it is a list-type of actual knot points that
-                        # have been specified by the user
-                        knots = num_knots
+                        else:
+                            # If num_knots is not actually a number then it is a list-type of actual knot points that
+                            # have been specified by the user
+                            knots = num_knots
 
-                    # TODO: Should S be free?
-                    # TODO: Should we be using the uncertainty to weight things
-                    tck = interpolate.splrep(observed_aperture.disp[finite], continuum[finite],
-                        w=observed_aperture.uncertainty[finite], t=knots, s=len(observed_aperture.disp))
+                        # TODO: Should S be free?
+                        # TODO: Should we be using the uncertainty to weight things
+                        tck = interpolate.splrep(observed_aperture.disp[finite], continuum[finite],
+                            w=observed_aperture.uncertainty[finite], t=knots,
+                            s=kwargs["normalise_observed.{0}.s".format(aperture)])
 
-                    # Scale the model by the continuum function
-                    model_spectra[aperture].flux[finite] *= interpolate.splev(observed_aperture.disp[finite], tck)
+                        # Scale the model by the continuum function
+                        model_spectra[aperture].flux[finite] *= interpolate.splev(observed_aperture.disp[finite], tck)
 
         return [model_spectra[aperture] for aperture in self._mapped_apertures]
 
