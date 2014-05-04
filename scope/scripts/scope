@@ -178,6 +178,7 @@ def main():
 			
 			# Save information related to the analysis
 			metadata.update({
+				"warnflag": warnflag,
 				"chain_filename": chain_filename,
 				"pp_observed_spectra_filenames": ",".join(pp_observed_spectra_filenames),
 				"pp_modelled_spectra_filenames": ",".join(pp_modelled_spectra_filenames),
