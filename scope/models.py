@@ -699,7 +699,7 @@ class Model(object):
 
         # Get the grid point and interpolate
         point = [kwargs[parameter] for parameter in self.grid_points.dtype.names]
-        interpolated_flux = self.interpolate_flux(grid_point)
+        interpolated_flux = self.interpolate_flux(point)
 
         all_non_finite = lambda fluxes: np.all(~np.isfinite(fluxes))
         if any(map(all_non_finite, interpolated_flux.values())):
