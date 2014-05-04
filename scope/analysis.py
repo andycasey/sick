@@ -245,6 +245,9 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
         else:
             results = [__log_prob_of_initial_theta(model, observed_spectra) for _ in xrange(initial_samples)]
 
+        logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
+            initial_samples, time() - ta))
+
     else:
 
         if not isinstance(initial_thetas[0], (list, tuple, np.ndarray)):
@@ -262,11 +265,13 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
         else:
             results = [__log_prob_of_explicit_theta(initial_theta, model, observed_spectra) for initial_theta in initial_thetas]
 
+        logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
+            len(initial_thetas), time() - ta))
+
     index = np.argmax([result[1] for result in results])
     p0 = results[index][0]
 
-    logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
-        initial_samples, time() - ta))
+    
 
     return p0
 
