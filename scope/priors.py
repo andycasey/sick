@@ -31,6 +31,8 @@ def implicit(model, observations, size=1):
         walker_prior = []
         normalisation_coefficients = {}
 
+        failed_v_rad_indices = []
+        success_v_rad_indices = []
         for i, dimension in enumerate(model.dimensions):
 
             # Is this a grid dimension?
@@ -64,13 +66,16 @@ def implicit(model, observations, size=1):
                     v_rad, u_v_rad, r = observed_aperture.cross_correlate(model_aperture)
 
                 except (ValueError, ):
+                    failed_v_rad_indices.append(i)
                     walker_prior.append(random.normal(0, 100))
                     
                 else:
                     if abs(v_rad) > 500:
+                        failed_v_rad_indices.append(i)
                         walker_prior.append(random.normal(0, 100))
 
                     else:
+                        success_v_rad_indices.append(i)
                         walker_prior.append(v_rad)
 
             # Smoothing
@@ -139,6 +144,10 @@ def implicit(model, observations, size=1):
                 raise RuntimeError("don't know how to generate implicit priors from dimension {0}".format(dimension))
 
         else:
+            for index in failed_v_rad_indices:
+                if len(success_v_rad_indices) > 0:
+                    walker_prior[index] = walker_prior[success_v_rad_indices[0]]
+
             priors.append(walker_prior)
 
     priors = np.array(priors)
