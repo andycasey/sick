@@ -77,14 +77,13 @@ def log_likelihood(theta, model, observations):
 
     chi_sqs = []
     masks = model.masks(dict(zip(model.apertures, model_spectra)), **parameters)
+    for (aperture, modelled_spectrum, observed_spectrum) in zip(model.apertures, model_spectra, observations):
 
-    for i, (aperture, modelled_spectrum, observed_spectrum) in enumerate(zip(model.apertures, model_spectra, observations)):
-
-        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + modelled_spectrum.flux**2 * np.exp(2. * parameters["jitter.{0}".format(aperture)]))
+        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + \
+            modelled_spectrum.flux**2 * np.exp(2. * parameters["jitter.{0}".format(aperture)]))
         chi_sq = (observed_spectrum.flux - modelled_spectrum.flux)**2 * inverse_variance
 
         # Any (rest-frame) masks to apply?
-        logger.debug("{0} pixels masked out from {1} aperture".format(sum(masks[aperture] == 0), aperture))
         chi_sq *= masks[aperture]
         
         useful_pixels = np.isfinite(chi_sq) 
@@ -95,7 +94,7 @@ def log_likelihood(theta, model, observations):
     logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
    
-    return  likelihood
+    return likelihood
 
 
 def log_probability(theta, model, observations):
@@ -205,8 +204,6 @@ def sample_ball(point, observed_spectra, model):
                 for j, coefficient in enumerate(coefficients):
                     index = model.dimensions.index("normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=j))
                     p0[i, index] = coefficient
-
-
     return p0
 
 
@@ -218,7 +215,6 @@ def __log_prob_of_implicit_theta(model, observed_spectra):
 def __log_prob_of_explicit_theta(theta, model, observed_spectra):
     ln_prob = log_probability(theta, model, observed_spectra)
     return (theta, ln_prob)
-
 
 def random_scattering(observed_spectra, model, initial_thetas=None):
 
@@ -270,9 +266,6 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
 
     index = np.argmax([result[1] for result in results])
     p0 = results[index][0]
-
-    
-
     return p0
 
 
@@ -350,8 +343,9 @@ def solve(observed_spectra, model, initial_thetas=None):
         mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
         
         # Announce progress
-        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log likelihood in last step was {2:.3e}".format(
-            i + 1, mean_acceptance_fractions[i], np.max(sampler.lnprobability[:, i])))
+        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log likelihood"
+            " in last step was {2:.3e}".format(i + 1, mean_acceptance_fractions[i],
+                np.max(sampler.lnprobability[:, i])))
 
         if mean_acceptance_fractions[i] in (0, 1):
             raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
@@ -372,7 +366,7 @@ def solve(observed_spectra, model, initial_thetas=None):
         posteriors[parameter_name] = (median, quantile_16, quantile_84)
 
     if mean_acceptance_fractions[-1] < 0.25:
-        warnflag += 3
+        warnflag += 4
 
     # Send back additional information
     additional_info = {
