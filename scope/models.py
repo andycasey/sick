@@ -90,14 +90,11 @@ def cache_model_point(filename, sigma=None, indices=None):
     return new_filename
 
 
-def mapper(*x):
-    return apply(x[0], x[1:])
-
-
 class Model(object):
-    """ Model class for SCOPE """
+    """ A class to represent the data-generating model for spectra """
 
     def __init__(self, filename):
+        """ Initialises a model class from a specified YAML or JSON-style filename """
 
         if not os.path.exists(filename):
             raise IOError("no model filename '{0}' exists".format(filename))
@@ -168,13 +165,6 @@ class Model(object):
 
             del fluxes
 
-            #for aperture in self.apertures:
-            #    flux_filename = self.configuration["model"][aperture]["flux_filename"]
-            #    aperture_flux = np.memmap(flux_filename, mode="r", dtype=np.float32).reshape((num_points, -1))
-            #    _scope_interpolator_[aperture] = interpolate.LinearNDInterpolator(
-            #        self.grid_points.view(float).reshape((num_points, -1)),
-            #        aperture_flux)
-
         elif "flux_folder" in self.configuration["model"][self.apertures[0]] \
         and  "flux_filename_match" in self.configuration["model"][self.apertures[0]]:
 
@@ -237,7 +227,6 @@ class Model(object):
 
         # Perform validation checks to ensure there are no forseeable problems
         self.validate()
-
         return None
 
     def __repr__(self):
@@ -258,6 +247,8 @@ class Model(object):
 
     @property
     def apertures(self):
+        if hasattr(self, "_mapped_apertures"):
+            return self._mapped_apertures
         return self.configuration["model"].keys()
 
     def validate(self):
@@ -266,14 +257,11 @@ class Model(object):
         self._validate_models()
         self._validate_solver()
         self._validate_normalisation()
-        self._validate_solver()
         self._validate_doppler()
         self._validate_masks()
-    
         return True
 
     def _check_apertures(self, key):
-
         for aperture in self.apertures:
             if aperture not in self.configuration[key]:
                 raise KeyError("no aperture '{aperture}' listed in {key}, but"
@@ -291,12 +279,15 @@ class Model(object):
 
             # Check that settings exist
             if "perform" not in settings:
-                raise KeyError("configuration setting 'normalise_observed.{aperture}.perform' not found".format(aperture=aperture))
+                raise KeyError("configuration setting 'normalise_observed.{}.perform' not found".format(aperture))
 
-            # If perform is false then we don't need order
+            # If perform is false then we don't need any more details
             if settings["perform"]:
 
-                method = settings.get("method", "polynomial")
+                if "method" not in settings:
+                    raise KeyError("configuration setting 'normalise_observed.{}.method' not found".format(aperture))
+
+                method = settings["method"]
                 if method == "spline":
 
                     if "knots" not in settings:
@@ -328,37 +319,35 @@ class Model(object):
                 else:
                     raise ValueError("configuration setting 'normalise_observed.{aperture}.method' not recognised"
                         " -- must be spline or polynomial".format(aperture=aperture))
-
         return True
 
 
     def _validate_solver(self):
+        """ Validates the configuration settings for the solver """
 
-        if "solver" not in self.configuration.keys():
-            raise KeyError("no solver information provided in configuration")
+        solver = self.configuration.get("solver", {})
+        integers_required = ("sample", "walkers", "burn")
+        for key in integers_required:
+            if key not in solver:
+                raise KeyError("configuration setting 'solver.{}' not found".format(key))
 
-        solver = self.configuration["solver"]
-        available_methods = ("powell", "bfgs", "emcee")
-
-        if solver.get("method", "powell") not in available_methods:
-            raise ValueError("solver method '{0}' is unsupported. Available methods are: {1}".format(
-                solver["method"], ", ".join(available_methods)))
+            try:
+                int(solver[key])
+            except (ValueError, TypeError):
+                raise TypeError("configuration setting 'solver.{}' must be an integer-like type".format(key))
 
         if "threads" in solver and not isinstance(solver["threads"], (float, int)):
-            raise TypeError("solver.threads must be an integer-like type")
-
+            raise TypeError("configuration setting 'solver.threads' must be an integer-like type")
         return True
 
 
     def _validate_doppler(self):
+        """ Validates the configuration settings for doppler shifts """
 
         self._check_apertures("doppler_shift")
-
-        priors_to_expect = []
         for aperture in self.apertures:
             if 'perform' not in self.configuration['doppler_shift'][aperture]:
-                raise KeyError("configuration setting 'doppler_shift.{aperture}.perform' not found".format(aperture=aperture))
-
+                raise KeyError("configuration setting 'doppler_shift.{}.perform' not found".format(aperture))
         return True
 
 
@@ -367,7 +356,6 @@ class Model(object):
         self._check_apertures("smooth_model_flux")
 
         for aperture in self.apertures:
-
             settings = self.configuration["smooth_model_flux"][aperture]
             if "perform" not in settings:
                 raise KeyError("configuration setting 'smooth_model_flux.{0}.perform' not found".format(
@@ -383,6 +371,7 @@ class Model(object):
 
 
     def _validate_models(self):
+        """ Validates the configuration settings for the model """
 
         if "model" not in self.configuration.keys():
             raise KeyError("no 'model' attribute found in model file")
@@ -391,14 +380,11 @@ class Model(object):
             if "." in aperture:
                 raise ValueError("aperture name '{0}' cannot contain a full-stop character".format(aperture))
 
-        # Check dispersion maps of standards don't overlap
-        #overlap_wavelength = find_spectral_overlap(self.dispersion.values())
-        #if overlap_wavelength is not None:
-        #    raise ValueError("dispersion maps overlap near {0:.0f}".format(overlap_wavelength))
-
 
     def _validate_masks(self):
+        """ Validate the provided mask settings """
 
+        # Masks are optional
         if "masks" not in self.configuration.keys():
             return True
 
@@ -422,8 +408,7 @@ class Model(object):
 
     @property
     def dimensions(self):
-        """Returns all dimension names for a given configuration, which can
-        include both implicit and explicit priors."""
+        """ Returns the dimension names for a given model """
 
         if hasattr(self, "_dimensions"):
             return self._dimensions
@@ -456,8 +441,8 @@ class Model(object):
                                 ["normalise_observed.{0}.a{1}".format(aperture, i) \
                                     for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
 
-                        else: #spline
-                            dimensions.append("normalise_observed.{0}.s".format(aperture))
+                        #else: #spline
+                        #    dimensions.append("normalise_observed.{0}.s".format(aperture))
 
         # Append jitter dimensions
         for aperture in self.apertures:
@@ -536,7 +521,8 @@ class Model(object):
         for aperture, dispersion_filename in dispersion_filenames.iteritems():
             si, ei = wavelength_indices[aperture]
 
-            disp = np.memmap(dispersion_filename, dtype=np.float32, mode="w+", shape=self.dispersion[aperture][si:ei:sampling[aperture]].shape)
+            disp = np.memmap(dispersion_filename, dtype=np.float32, mode="w+",
+                shape=self.dispersion[aperture][si:ei:sampling[aperture]].shape)
             disp[:] = self.dispersion[aperture][si:ei:sampling[aperture]]
             del disp
 
@@ -590,8 +576,9 @@ class Model(object):
         """
 
         num_dimensions = len(self.grid_points.dtype.names)
-        index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == np.array([point]).view(np.float), axis=-1)
-        #index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == point, axis=-1)
+        index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == np.array([point]).view(np.float),
+            axis=-1)
+        
         if not any(index):
             return False
         return np.where(index)[0][0]
@@ -619,14 +606,8 @@ class Model(object):
                 interpolated_fluxes[aperture] = interpolated_flux[si:ei]
             return interpolated_fluxes
 
-            #interpolated_fluxes = {}
-            #for i, aperture in enumerate(self.apertures):
-            #    interpolated_fluxes[aperture] = _scope_interpolator_(point)
-            #return interpolated_fluxes
-
-        indices = self.get_nearest_neighbours(point)
-
         interpolated_fluxes = {}
+        indices = self.get_nearest_neighbours(point)
         for aperture in self.apertures:
             
             flux = np.zeros((len(indices), len(self.dispersion[aperture])))
@@ -704,38 +685,18 @@ class Model(object):
         return mapped_apertures
 
 
+    def __call__(self, observations=None, **kwargs):
+        """ Generates model fluxes for a provided set of parameters """
 
-    def model_spectra(self, observations=None, **kwargs):
-        """ Interpolates flux values for a set of stellar parameters and
-        applies any relevant smoothing or normalisation of the data. 
+        # Get the grid point and interpolate
+        point = [kwargs[parameter] for parameter in self.grid_points.dtype.names]
+        interpolated_flux = self.interpolate_flux(grid_point)
 
-        Inputs
-        ------
-        parameters : list of floats
-            The input parameters that were provdided to the `chi_squared_fn` function.
+        all_non_finite = lambda fluxes: np.all(~np.isfinite(fluxes))
+        if any(map(all_non_finite, interpolated_flux.values())):
+            raise ValueError("interpolated aperture contained all non-finite flux vlues")
 
-        parameter_names : list of str, should be same length as `parameters`.
-            The names for the input parameters.
-        """
-
-        # Build the grid point
-        grid_point = [kwargs[stellar_parameter] for stellar_parameter in self.grid_points.dtype.names]
-
-        # Interpolate the flux
-        try:
-            interpolated_flux = self.interpolate_flux(grid_point)
-
-        except:
-            logger.debug("No model flux could be determined for {0}".format(
-                ", ".join(["{0} = {1:.2f}".format(parameter, value) \
-                    for parameter, value in zip(self.grid_points.dtype.names, grid_point)])))
-            return None
-
-        if any([np.all(~np.isfinite(flux)) for flux in interpolated_flux.values()]):
-            logger.debug("an aperture returned all non-finite values for interpolated flux")
-            return None
-
-        # Create spectra
+        # Transform the spectra
         model_spectra = {}
         for aperture, interpolated_flux in interpolated_flux.iteritems():
                 
@@ -748,12 +709,10 @@ class Model(object):
             fwhm = 0
             if smoothing_kwarg in kwargs:
                 fwhm = kwargs[smoothing_kwarg]
-                #model_spectra[aperture] = model_spectra[aperture].gaussian_smooth()
 
             elif self.configuration["smooth_model_flux"][aperture]["perform"]:
                 # Apply a single smoothing value
                 fwhm = self.configuration["smooth_model_flux"][aperture]["kernel"]
-                #model_spectra[aperture] = model_spectra[aperture].gaussian_smooth(kernel)
             
             if fwhm > 0:
                 profile_sigma = fwhm / (2.*(2*np.log(2))**0.5)
@@ -769,7 +728,7 @@ class Model(object):
             # Interpolate synthetic to observed dispersion map
             if observations is not None:
                 model_spectra[aperture] = model_spectra[aperture].interpolate(
-                    observations[self._mapped_apertures.index(aperture)].disp)
+                    observations[self.apertures.index(aperture)].disp)
 
             # Scale to the data
             if self.configuration["normalise_observed"][aperture]["perform"]:
@@ -785,10 +744,14 @@ class Model(object):
                 else: #spline
                     if observations is not None:
                         num_knots = self.configuration["normalise_observed"][aperture]["knots"]
-                        observed_aperture = observations[self._mapped_apertures.index(aperture)]
+                        observed_aperture = observations[self.apertures.index(aperture)]
                         
                         # Divide the observed spectrum by the model aperture spectrum
                         continuum = observed_aperture.flux/model_spectra[aperture].flux
+
+                        # Apply a mask
+                        mask = np.where(self.masks({aperture: model_spectra[aperture]}, **kwargs)[aperture] == 0)[0]
+                        continuum[mask] = np.nan
 
                         # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
                         # to all observed pixels (regardless of how much overlap there is)
@@ -798,7 +761,6 @@ class Model(object):
                             # Produce equi-spaced internal knot points
                             # Divide the spectral range by <N> + 1
                             spacing = np.ptp(observed_aperture.disp[finite])/(num_knots + 1.)
-
                             knots = np.arange(observed_aperture.disp[finite][0] + spacing,
                                 observed_aperture.disp[finite][-1], spacing)[:num_knots]
 
@@ -808,18 +770,17 @@ class Model(object):
                             knots = num_knots
 
                         # TODO: Should S be free?
-                        # TODO: Should we be using the uncertainty to weight things
                         tck = interpolate.splrep(observed_aperture.disp[finite], continuum[finite],
-                            w=observed_aperture.uncertainty[finite], t=knots,
-                            s=kwargs["normalise_observed.{0}.s".format(aperture)])
+                            w=1./observed_aperture.uncertainty[finite], t=knots)
+                        #s=kwargs["normalise_observed.{0}.s".format(aperture)])
 
                         # Scale the model by the continuum function
                         model_spectra[aperture].flux[finite] *= interpolate.splev(observed_aperture.disp[finite], tck)
 
-        return [model_spectra[aperture] for aperture in self._mapped_apertures]
+        return [model_spectra[aperture] for aperture in self.apertures]
 
 
-    def masks(self, theta, model_spectra):
+    def masks(self, model_spectra, **kwargs):
         """Returns pixel masks to apply to the model spectra
         based on the configuration provided.
 
@@ -832,12 +793,12 @@ class Model(object):
 
         if "masks" not in self.configuration:
             masks = {}
-            for aperture, spectrum in zip(self.apertures, model_spectra):
+            for aperture, spectrum in model_spectra.iteritems():
                 masks[aperture] = np.ones(len(spectrum.disp))
 
         else:
             masks = {}
-            for aperture, spectrum in zip(self.apertures, model_spectra):
+            for aperture, spectrum in model_spectra.iteritems():
                 if aperture not in self.configuration["masks"]:
                     masks[aperture] = np.ones(len(spectrum.disp))
                 
@@ -849,8 +810,8 @@ class Model(object):
 
                             region = np.array(region)
 
-                            if "doppler_shift.{0}".format(aperture) in theta.keys():
-                                c, v = 299792458e-3, theta["doppler_shift.{0}".format(aperture)]
+                            if "doppler_shift.{0}".format(aperture) in kwargs:
+                                c, v = 299792458e-3, kwargs["doppler_shift.{0}".format(aperture)]
                                 region *= np.sqrt((1 + v/c)/(1 - v/c))
                                 
                             index_start, index_end = np.searchsorted(spectrum.disp, region)

@@ -44,7 +44,10 @@ def latexify(labels, overwrite_common_labels=None):
 
         elif label.startswith("normalise_observed."):
             aperture, coefficient = label.split(".")[1:]
-            latex_labels.append("${0}_{1}$".format(aperture[0], coefficient[1:]))
+            if coefficient == "s":
+                latex_labels.append("$s_{{{0}}}$".format(aperture))
+            else:
+                latex_labels.append("${0}_{1}$".format(aperture[0], coefficient[1:]))
 
         else:
             latex_labels.append(label)
