@@ -96,9 +96,9 @@ def main():
 	combined_results_filename = os.path.join(args.output_dir, "{0}-results.fits".format(args.filename_prefix))
 	
 	# If we are running optimise, generate some initial thetas
-	if model["configuration"]["solver"].get("optimise", True):
-		initial_thetas = scope.priors.implicit(model, observed_spectra,
-			size=model["configuration"]["solver"].get("initial_samples", 1000))
+	if model.configuration["solver"].get("optimise", True):
+		initial_thetas = scope.priors.implicit(model, all_spectra[0],
+			size=model.configuration["solver"].get("initial_samples", 1000))
 	else:
 		initial_thetas = None
 
