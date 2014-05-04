@@ -232,7 +232,7 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
 
     if initial_thetas is None:
 
-        initial_samples = model.configuration["solver"].get("initial_samples", 1000)
+        initial_samples = model.configuration["solver"]["initial_samples"]
 
         if threads > 1:
             pool = multiprocessing.Pool(threads)

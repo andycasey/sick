@@ -336,6 +336,15 @@ class Model(object):
             except (ValueError, TypeError):
                 raise TypeError("configuration setting 'solver.{}' must be an integer-like type".format(key))
 
+        if solver.get("optimise", True):
+            # Check for initial_samples
+            if "initial_samples" not in solver:
+                raise KeyError("configuration setting 'solver.initial_samples' not found")
+            try:
+                int(solver["initial_samples"])
+            except (ValueError, TypeError):
+                raise TypeError("configuration setting 'solver.initial_samples' must be an integer-like type")
+
         if "threads" in solver and not isinstance(solver["threads"], (float, int)):
             raise TypeError("configuration setting 'solver.threads' must be an integer-like type")
         return True
