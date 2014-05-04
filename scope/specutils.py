@@ -180,7 +180,11 @@ class Spectrum1D(object):
 
         else:
             headers = {}
-            disp, flux = np.loadtxt(filename, unpack=True, **kwargs)
+            # Try for uncertainty too first
+            try:
+                disp, flux, uncertainty = np.loadtxt(filename, unpack=True, **kwargs)
+            except:
+                disp, flux = np.loadtxt(filename, unpack=True, **kwargs)
             
         return cls(disp, flux, uncertainty=uncertainty, headers=headers)
 
@@ -211,10 +215,14 @@ class Spectrum1D(object):
         if not filename.endswith('fits'):
             # ASCII
             
-            data = np.hstack([self.disp.reshape(len(self.disp), 1), self.flux.reshape(len(self.disp), 1)])
-            
-            assert len(data.shape) == 2
-            assert data.shape[1] == 2
+            if self.uncertainty is not None:
+                data = np.hstack([
+                    self.disp.reshape(-1, 1),
+                    self.flux.reshape(-1, 1),
+                    self.uncertainty.reshape(-1, 1)
+                    ])
+            else:
+                data = np.hstack([self.disp.reshape(len(self.disp), 1), self.flux.reshape(len(self.disp), 1)])
             
             np.savetxt(filename, data)
             
