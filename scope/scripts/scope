@@ -333,8 +333,8 @@ def main():
 					ax = fig.add_subplot(len(spectra), 1, i+1)
 
 					# Get the full boundaries
-					fmd = np.isfinite(modelled_aperture.disp)
-					fod = np.isfinite(observed_aperture.disp)
+					fmd = np.isfinite(modelled_aperture.flux)
+					fod = np.isfinite(observed_aperture.flux)
 					full_extent = [
 						np.max([modelled_aperture.disp[fmd][0], observed_aperture.disp[fod][0]]),
 						np.min([modelled_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
@@ -344,7 +344,7 @@ def main():
 						left=np.nan, right=np.nan)
 
 					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
-					ax.plot(observed_aperture.disp, observed_aperture.flux/continuum, 'k', zorder=100)
+					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
 					
 					ax.yaxis.set_major_locator(MaxNLocator(4))
 					ax.set_ylabel("Flux, $F_\lambda$")
