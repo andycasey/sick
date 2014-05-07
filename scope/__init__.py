@@ -3,7 +3,7 @@
 """ Spectroscopic inference of astrophysical quantities """
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
-__version__ = "0.0851dev"
+__version__ = "0.0854dev"
 
 __all__ = ["config", "Model", "specutils", "Spectrum", "utils"]
 

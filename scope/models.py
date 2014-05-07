@@ -82,7 +82,7 @@ def cache_model_point(filename, sigma=None, indices=None):
         data = data[indices[0]:indices[1]]
 
     # Save it to disk
-    fp = np.memmap(new_filename, dtype=np.float32, mode="w+",
+    fp = np.memmap(new_filename, dtype=np.double, mode="w+",
         shape=data.shape)
     fp[:] = data[:]
     del fp
@@ -107,8 +107,10 @@ class Model(object):
 
         # Load the dispersions
         self.dispersion = {}
+        dtype = np.double if self.configuration["model"].get("use_double", False) else np.float32
         for aperture in self.apertures:
-            self.dispersion[aperture] = load_model_data(self.configuration["model"][aperture]["dispersion_filename"])
+            self.dispersion[aperture] = load_model_data(self.configuration["model"][aperture]["dispersion_filename"],
+                dtype=dtype)
 
         # Model apertures can either have:
         # flux_folder, flux_filename_match
@@ -144,11 +146,12 @@ class Model(object):
             num_points = len(self.grid_points)
             fluxes = [] 
             maybe_warn = []
+            dtype = np.double if self.configuration["model"].get("use_double", False) else np.float32
             for i, aperture in enumerate(self.apertures):
                 if not "flux_filename" in self.configuration["model"][aperture]:
                     maybe_warn.append(aperture)
                     continue
-                fluxes.append(np.memmap(self.configuration["model"][aperture]["flux_filename"], mode="r", dtype=np.float32).reshape((num_points, -1)))
+                fluxes.append(np.memmap(self.configuration["model"][aperture]["flux_filename"], mode="r+", dtype=dtype).reshape((num_points, -1)))
 
             total_pixels = sum([each.shape[1] for each in fluxes])
             total_expected_pixels = sum(map(len, [self.dispersion[aperture] for aperture in self.apertures]))
@@ -161,7 +164,8 @@ class Model(object):
 
             _scope_interpolator_ = interpolate.LinearNDInterpolator(
                 self.grid_points.view(float).reshape((num_points, -1)),
-                fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes))
+                fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes),
+                )
 
             del fluxes
 
@@ -470,11 +474,11 @@ class Model(object):
 
         """
 
-        if not isinstance(smoothing_kernels, dict):
+        if not isinstance(smoothing_kernels, dict) and smoothing_kernels is not None:
             raise TypeError("smoothing kernels must be a dictionary-type with apertures as keys"\
                 " and kernels as values")
 
-        if not isinstance(wavelengths, dict):
+        if not isinstance(wavelengths, dict) and wavelengths is not None:
             raise TypeError("wavelengths must be a dictionary-type with apertures as keys")
 
         if sampling is None:
@@ -506,7 +510,8 @@ class Model(object):
             pickle.dump(self.grid_points, fp)
 
         # Create empty memmap
-        flux = np.memmap(flux_filename, dtype=np.float32, mode="w+", shape=(n_points, sum(n_pixels)))
+        dtype = np.double if self.configuration["model"].get("use_double", False) else np.float32
+        flux = np.memmap(flux_filename, dtype=np.float32, mode="w+", shape=(n_points, np.sum(n_pixels)))
         for i in xrange(n_points):
 
             logger.info("Caching point {0} of {1} ({2:.1f}%)".format(i+1, n_points, 100*(i+1.)/n_points))
@@ -530,10 +535,13 @@ class Model(object):
         for aperture, dispersion_filename in dispersion_filenames.iteritems():
             si, ei = wavelength_indices[aperture]
 
-            disp = np.memmap(dispersion_filename, dtype=np.float32, mode="w+",
+            disp = np.memmap(dispersion_filename, dtype=dtype, mode="w+",
                 shape=self.dispersion[aperture][si:ei:sampling[aperture]].shape)
-            disp[:] = self.dispersion[aperture][si:ei:sampling[aperture]]
+            disp[:] = np.ascontiguousarray(self.dispersion[aperture][si:ei:sampling[aperture]], dtype=dtype)
             del disp
+
+        # Arrays must be contiguous
+        flux[:] = np.ascontiguousarray(flux, dtype=dtype)
 
         # Now we need to save the flux to disk
         del flux
