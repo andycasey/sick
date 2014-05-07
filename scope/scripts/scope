@@ -10,6 +10,7 @@ import acor
 import argparse
 import json
 import logging
+import multiprocessing
 import os
 import cPickle as pickle
 
@@ -98,7 +99,7 @@ def main():
     # If we are running optimise, generate some initial thetas
     if model.configuration["solver"].get("optimise", True):
         
-        threads = model.configuration["solver"].get("threads")
+        threads = model.configuration["solver"].get("threads", 1)
         initial_samples = model.configuration["solver"]["initial_samples"]
 
         if threads > 1:
@@ -106,7 +107,7 @@ def main():
             initial_thetas = []
             def callback(result):
                 initial_thetas.append(result)
-
+            
             pool = multiprocessing.Pool(threads)
             for _ in xrange(initial_samples):
                 pool.apply_async(scope.priors.implicit, args=(model, all_spectra[0]), callback=callback)
@@ -115,8 +116,7 @@ def main():
             pool.join()
 
         else:
-            initial_thetas = scope.priors.implicit(model, all_spectra[0],
-                size=initial_samples)
+            initial_thetas = scope.priors.implicit(model, all_spectra[0], size=initial_samples)
     else:
         initial_thetas = None
 
@@ -135,8 +135,7 @@ def main():
             logger.info("Skipping object #{0}".format(i))
             continue
 
-        if isinstance(args.number_to_solve, (int, float)) and \
-        args.number_to_solve == (i - args.skip):
+        if args.number_to_solve != "all" and i > (int(args.number_to_solve) + args.skip):
             logger.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
             break
 
