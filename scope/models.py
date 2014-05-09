@@ -107,7 +107,7 @@ class Model(object):
 
         # Load the dispersions
         self.dispersion = {}
-        dtype = np.double if self.configuration["model"].get("use_double", False) else np.float32
+        dtype = np.double if self.configuration["solver"].get("use_double", False) else np.float32
         for aperture in self.apertures:
             self.dispersion[aperture] = load_model_data(self.configuration["model"][aperture]["dispersion_filename"],
                 dtype=dtype)
@@ -146,7 +146,7 @@ class Model(object):
             num_points = len(self.grid_points)
             fluxes = [] 
             maybe_warn = []
-            dtype = np.double if self.configuration["model"].get("use_double", False) else np.float32
+            dtype = np.double if self.configuration["solver"].get("use_double", False) else np.float32
             for i, aperture in enumerate(self.apertures):
                 if not "flux_filename" in self.configuration["model"][aperture]:
                     maybe_warn.append(aperture)
@@ -510,7 +510,7 @@ class Model(object):
             pickle.dump(self.grid_points, fp)
 
         # Create empty memmap
-        dtype = np.double if self.configuration["model"].get("use_double", False) else np.float32
+        dtype = np.double if self.configuration["solver"].get("use_double", False) else np.float32
         flux = np.memmap(flux_filename, dtype=np.float32, mode="w+", shape=(n_points, np.sum(n_pixels)))
         for i in xrange(n_points):
 
