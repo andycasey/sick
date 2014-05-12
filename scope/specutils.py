@@ -40,8 +40,8 @@ class Spectrum(object):
                 continue
 
             else:
-                if isinstance(spectra, Spectrum1D) and spectra.uncertainty is None:
-                    spectra.uncertainty = np.array([0.002] * len(spectra.disp))
+                if isinstance(spectra, Spectrum1D) and spectra.variance is None:
+                    spectra.variance = np.array([1e-10] * len(spectra.disp))
 
                 return spectra
 
@@ -53,9 +53,9 @@ class Spectrum1D(object):
     astropy.specutils.Spectrum1D module has advanced sufficiently to replace it."""
     
     headers = {}
-    uncertainty = None
+    variance = None
 
-    def __init__(self, disp, flux, uncertainty=None, headers=None):
+    def __init__(self, disp, flux, variance=None, headers=None):
         """Initializes a `Spectrum1D` object with the given dispersion and flux
         arrays.
         
@@ -67,8 +67,8 @@ class Spectrum1D(object):
         flux : `np.array`
             Flux points for each `disp` point.
 
-        uncertainty : `np.array`
-            Uncertainty in flux points for each dispersion point.
+        variance : `np.array`
+            variance in flux points for each dispersion point.
         """
 
         if len(disp) != len(flux):
@@ -79,7 +79,7 @@ class Spectrum1D(object):
         
         self.disp = disp
         self.flux = flux
-        self.uncertainty = uncertainty
+        self.variance = variance
         if headers is not None:
             self.headers = headers
 
@@ -89,7 +89,7 @@ class Spectrum1D(object):
         """ Creates a copy of the object """
 
         return self.__class__(self.disp.copy(), self.flux.copy(),
-            uncertainty=self.uncertainty, headers=self.headers)
+            variance=self.variance, headers=self.headers)
     
     @classmethod
     def load(cls, filename, **kwargs):
@@ -110,7 +110,7 @@ class Spectrum1D(object):
         if not os.path.exists(filename):
             raise IOError("Filename '%s' does not exist." % (filename, ))
         
-        uncertainty = None
+        variance = None
 
         if filename.endswith('.fits'):
             image = pyfits.open(filename, **kwargs)
@@ -125,10 +125,10 @@ class Spectrum1D(object):
                 
                 disp, flux = image[1].data[dispersion_key], image[1].data['flux']
 
-                if 'error' in names or 'uncertainty' in names:
-                    uncertainty_key = 'error' if 'error' in names else 'uncertainty'
+                if 'error' in names or 'variance' in names:
+                    variance_key = 'error' if 'error' in names else 'variance'
 
-                    uncertainty = image[1].data[uncertainty_key]
+                    variance = image[1].data[variance_key]
 
             else:
 
@@ -180,13 +180,13 @@ class Spectrum1D(object):
 
         else:
             headers = {}
-            # Try for uncertainty too first
+            # Try for variance too first
             try:
-                disp, flux, uncertainty = np.loadtxt(filename, unpack=True, **kwargs)
+                disp, flux, variance = np.loadtxt(filename, unpack=True, **kwargs)
             except:
                 disp, flux = np.loadtxt(filename, unpack=True, **kwargs)
             
-        return cls(disp, flux, uncertainty=uncertainty, headers=headers)
+        return cls(disp, flux, variance=variance, headers=headers)
 
 
     def save(self, filename, clobber=True):
@@ -215,11 +215,11 @@ class Spectrum1D(object):
         if not filename.endswith('fits'):
             # ASCII
             
-            if self.uncertainty is not None:
+            if self.variance is not None:
                 data = np.hstack([
                     self.disp.reshape(-1, 1),
                     self.flux.reshape(-1, 1),
-                    self.uncertainty.reshape(-1, 1)
+                    self.variance.reshape(-1, 1)
                     ])
             else:
                 data = np.hstack([self.disp.reshape(len(self.disp), 1), self.flux.reshape(len(self.disp), 1)])
@@ -234,18 +234,18 @@ class Spectrum1D(object):
             
             test_disp = (crval1 + np.arange(len(self.disp), dtype=self.disp.dtype) * cdelt1).astype(self.disp.dtype)
             
-            if np.max(self.disp - test_disp) > 10e-2 or self.uncertainty is not None:
+            if np.max(self.disp - test_disp) > 10e-2 or self.variance is not None:
 
-                # Non-linear dispersion map, or we have uncertainty information too
+                # Non-linear dispersion map, or we have variance information too
                 # Create a tabular FITS format.
 
                 col_disp = pyfits.Column(name='disp', format='1D', array=self.disp)
                 col_flux = pyfits.Column(name='flux', format='1D', array=self.flux)
 
-                if self.uncertainty is not None:
-                    col_uncertainty = pyfits.Column(name='uncertainty', format='1D', array=self.uncertainty)
+                if self.variance is not None:
+                    col_variance = pyfits.Column(name='variance', format='1D', array=self.variance)
 
-                    table_hdu = pyfits.new_table([col_disp, col_flux, col_uncertainty])
+                    table_hdu = pyfits.new_table([col_disp, col_flux, col_variance])
 
                 else:
                     table_hdu = pyfits.new_table([col_disp, col_flux])
@@ -316,7 +316,7 @@ class Spectrum1D(object):
         true_profile_sigma = profile_sigma / np.mean(np.diff(self.disp))
         smoothed_flux = ndimage.gaussian_filter1d(self.flux, true_profile_sigma, **kwargs)
         
-        return self.__class__(self.disp, smoothed_flux, uncertainty=self.uncertainty,
+        return self.__class__(self.disp, smoothed_flux, variance=self.variance,
             headers=self.headers)
         
 
@@ -333,7 +333,7 @@ class Spectrum1D(object):
         # Relatavistic:
         c = speed_of_light
         new_disp = self.disp * np.sqrt((1 + v/c)/(1 - v/c))
-        return self.__class__(new_disp, self.flux, uncertainty=self.uncertainty, headers=self.headers)
+        return self.__class__(new_disp, self.flux, variance=self.variance, headers=self.headers)
 
     
     def interpolate(self, new_disp, mode='linear', bounds_error=False,
@@ -359,13 +359,13 @@ class Spectrum1D(object):
         f = interpolate.interp1d(self.disp, self.flux, kind=mode, copy=False,
                 bounds_error=bounds_error, fill_value=fill_value)
 
-        return self.__class__(new_disp, f(new_disp), uncertainty=self.uncertainty,
+        return self.__class__(new_disp, f(new_disp), variance=self.variance,
             headers=self.headers)
 
 
     def cross_correlate(self, template, wl_region=None, full_output=False):
         """Performs a cross-correlation between the observed and template spectrum and
-        provides a radial velocity and associated uncertainty.
+        provides a radial velocity and associated variance.
 
         Inputs
         ------
@@ -451,7 +451,7 @@ class Spectrum1D(object):
         except:
             raise
 
-        # Uncertainty
+        # variance
         sigma = np.mean(2.0*(fft_y.real)**2)**0.5
 
         # Create functions for interpolating back onto the dispersion map
@@ -469,19 +469,19 @@ class Spectrum1D(object):
         f, g, h = [func(point) for func, point in zip(functions, points)]
 
         # Calculate velocity 
-        measured_vrad = speed_of_light * (1 - g/f)
+        z = (1. - g/f)
 
-        # Uncertainty
-        measured_verr = np.abs(speed_of_light * (1 - h/f))
+        # variance
+        z_err = np.abs(1 - h/f)
         R = np.max(fft_y)
 
         if full_output:
-            results = [measured_vrad, measured_verr, R, np.vstack([fft_x, fft_y])]
+            results = [z, z_err, R, np.vstack([fft_x, fft_y])]
             results.extend(p1)
 
             return results
 
-        return [measured_vrad, measured_verr, R]
+        return [z, z_err, R]
 
 
 def load_aaomega_multispec(filename, fill_value=-1, clean=True):
@@ -530,9 +530,8 @@ def load_aaomega_multispec(filename, fill_value=-1, clean=True):
             headers[header] = image[2].data[index][header]
         
         flux = np.array(image[0].data[index], dtype=np.float)
-        uncertainty = np.sqrt(abs(flux))
-        #uncertainty = np.abs(np.random.normal(0, np.sqrt(np.median(np.abs(flux))), size=len(flux)))
-
+        variance = abs(flux) # Assume Poisson distribution
+        
         # Remove 1 pixel from each where there is a nan
         if clean:
             non_finite_diffs = np.where(np.diff(np.array(np.isfinite(flux), dtype=int)) > 0)[0]
@@ -546,7 +545,7 @@ def load_aaomega_multispec(filename, fill_value=-1, clean=True):
 
         flux[0 >= flux] = np.nan
 
-        spectrum = Spectrum1D(dispersion, flux, uncertainty=uncertainty, headers=headers)
+        spectrum = Spectrum1D(dispersion, flux, variance=variance, headers=headers)
         spectra.append(spectrum)
     
     return spectra
