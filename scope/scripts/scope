@@ -95,7 +95,7 @@ def main():
     }
 
     # If we are running optimise, generate some initial thetas
-    if model.configuration["solver"].get("optimise", True):
+    if model.configuration["solver"].get("optimise", True) and False:
         
         initial_thetas = []
         def callback(result):

@@ -784,7 +784,6 @@ class Model(object):
 
         pixel_masks = {}
         for channel, dispersion_map in zip(self.channels, dispersion_maps):
-
             if channel not in self.configuration["masks"]:
                 masks[channel] = None
             
@@ -828,6 +827,14 @@ class Model(object):
             model_dispersion = self.dispersion[channel].copy()
             model_flux = interpolated_flux[channel].copy()
 
+            # Any smoothing to apply?
+            key = "convolve.{}".format(channel)
+            if key in theta:
+                # TODO
+                profile_sigma = theta[key] / (2.*(2*np.log(2))**0.5)
+                true_profile_sigma = profile_sigma / np.mean(np.diff(model_dispersion))
+                model_flux = ndimage.gaussian_filter1d(model_flux, true_profile_sigma)
+
             # Doppler shift the spectra
             key = "doppler_shift.{0}".format(channel)
             if key in theta:
@@ -836,15 +843,6 @@ class Model(object):
                 # before the doppler shift can be applied.
                 # TODO
                 model_dispersion *= (1. + z)
-
-
-            # Any smoothing to apply?
-            key = "convolve.{}".format(channel)
-            if key in theta:
-                # Smoothing must be applied on a linear dispersion scale
-                profile_sigma = theta[key] / (2.*(2*np.log(2))**0.5)
-                true_profile_sigma = profile_sigma / np.mean(np.diff(model_dispersion))
-                model_flux = ndimage.gaussian_filter1d(model_flux, true_profile_sigma)
 
             # Interpolate model fluxes to observed dispersion map
             if observations is not None:

@@ -1,6 +1,6 @@
 # coding: utf-8
 
-""" Handles the analysis for SCOPE """
+""" Analyse spectroscopic data """
 
 from __future__ import division, print_function
 
@@ -28,24 +28,36 @@ import models, priors, utils, specutils
 logger = logging.getLogger(__name__.split(".")[0])
 
 def log_prior(theta, model):
-    """ Return the prior for a set of theta given the model """
+    """
+    Return the prior for a set of theta given the model.
 
-    for parameter, value in zip(model.dimensions, theta):
+    Args:
+        theta (list): The theta parameters that correspond with model.dimensions
+        model (sick.models.Model object): The model class.
+    
+    Returns:
+        The logarithmic prior for the parameters theta.
+    """
+
+    priors = model.configuration.get("priors", {})
+    for dimension, value in zip(model.dimensions, theta):
+
         # Check smoothing values
-        if parameter.startswith("smooth_model_flux.") and not 10 > value >= 0:
-            return -np.inf
-
-        if re.match("normalise_observed\.(.+)\.s", parameter) is not None and value < 0:
+        if dimension.startswith("convolve.") and 0 > value:
             return -np.inf
 
         # Check for jitter
-        if (parameter == "jitter" or parameter.startswith("jitter.")) \
-        and not -10. < value < 1.:
+        if dimension.startswith("jitter.") and not -10. < value < 1.:
             return -np.inf
 
         # Check if point is within the grid boundaries
-        if parameter in model.grid_boundaries:
-            min_value, max_value = model.grid_boundaries[parameter]
+        if dimension in model.grid_boundaries:
+            if dimension not in priors:
+                min_value, max_value = model.grid_boundaries[dimension]
+                
+            elif priors[dimension].startswith("uniform("):
+                min_value, max_value = map(float, priors[dimension].split("(")[1].rstrip(")").split(","))
+
             if value > max_value or min_value > value:
                 return -np.inf
 
@@ -53,51 +65,48 @@ def log_prior(theta, model):
 
 
 def log_likelihood(theta, model, observations):
-    """Calculates the likelihood that a given set of observations
-    and parameters match the input models.
+    """
+    Return the logarithmic likelihood for a set of theta given the model.
 
-    parameters : list of `float`s
-        The free parameters to solve for. These are referenced in 
-        `parameter_names`.
-
-    observations : list of `Spectrum1D` objects
-        The observed spectra.
-
-    callback : function
-        A callback to apply after completing the comparison.
+    Args:
+        theta (list): The theta parameters that correspond with model.dimensions
+        model (sick.models.Model object): The model class.
+        observations (list of specutils.Spectrum1D objects): The data.
     """
 
-    parameters = dict(zip(model.dimensions, theta))
+    theta_dict = dict(zip(model.dimensions, theta))
 
-    # Prepare the model spectra
     try:
-        model_spectra = model(observations=observations, **parameters)
+        model_fluxes = model(observations=observations, **theta_dict)
     except:
         return -np.inf
 
-    chi_sqs = []
-    masks = model.masks(dict(zip(model.apertures, model_spectra)), **parameters)
-    for (aperture, modelled_spectrum, observed_spectrum) in zip(model.apertures, model_spectra, observations):
+    differences = []
+    for (channel, model_flux, observed_spectrum) in zip(model.channels, model_fluxes, observations):
 
-        inverse_variance = 1.0/(observed_spectrum.uncertainty**2 + \
-            modelled_spectrum.flux**2 * np.exp(2. * parameters["jitter.{0}".format(aperture)]))
-        chi_sq = (observed_spectrum.flux - modelled_spectrum.flux)**2 * inverse_variance
-
-        # Any (rest-frame) masks to apply?
-        chi_sq *= masks[aperture]
+        inverse_variance = 1.0/(observed_spectrum.variance \
+            + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
+        difference = (observed_spectrum.flux - model_flux)**2 * inverse_variance
         
-        useful_pixels = np.isfinite(chi_sq) 
-        chi_sqs.append(np.sum(chi_sq[useful_pixels] - np.log(inverse_variance[useful_pixels])))
+        finite = np.isfinite(difference)
+        differences.append(np.sum(difference[finite] - np.log(inverse_variance[finite])))
 
-    likelihood = -0.5 * np.sum(chi_sqs)
-
+    likelihood = -0.5 * np.sum(differences)
     logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
-        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in parameters.iteritems()])))  
+        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in theta_dict.iteritems()])))  
    
     return likelihood
 
 
 def log_probability(theta, model, observations):
+    """
+    Return the logarithmic probability (prior + likelihood) for theta given the data.
+
+    Args:
+        theta (list): The theta parameters that correspond with model.dimensions
+        model (sick.models.Model object): The model class.
+        observations (list of specutils.Spectrum1D objects): The data.
+    """
 
     prior = log_prior(theta, model)
     if not np.isfinite(prior):
@@ -137,7 +146,7 @@ def sample_ball(point, observed_spectra, model):
                 aperture = dimension.split(".")[1]
                 coefficient = int(dimension.split(".")[2].lstrip("a"))
                 order = model.configuration["normalise_observed"][aperture]["order"]
-                observed_aperture = observed_spectra[model.apertures.index(aperture)]
+                observed_aperture = observed_spectra[model.channels.index(aperture)]
                 
                 # This depends on the value of the polynomial coefficient, the dispersion, as well
                 # as the order of the polynomial to fit the flux.
@@ -177,7 +186,7 @@ def sample_ball(point, observed_spectra, model):
 
         # Model the flux, but don't normalise it.
         pi_parameters = dict(zip(model.dimensions, pi))
-        for aperture in model.apertures:
+        for aperture in model.channels:
             n = 0
             while "normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n) in pi_parameters.keys():
                 pi_parameters["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] = 0
@@ -189,10 +198,10 @@ def sample_ball(point, observed_spectra, model):
 
         if n > 0:
             try:
-                model_apertures = model(observations=observed_spectra, **pi_parameters)
+                model_channels = model(observations=observed_spectra, **pi_parameters)
             except ValueError: continue
             
-            for aperture, observed_aperture, model_aperture in zip(model.apertures, observed_spectra, model_apertures):
+            for aperture, observed_aperture, model_aperture in zip(model.channels, observed_spectra, model_channels):
 
                 continuum = (observed_aperture.flux + np.random.normal(0, observed_aperture.uncertainty))/model_aperture.flux
                 finite = np.isfinite(continuum)
@@ -208,13 +217,11 @@ def sample_ball(point, observed_spectra, model):
 
 
 def __log_prob_of_implicit_theta(model, observed_spectra):
-    theta = priors.implicit(model, observed_spectra)
-    ln_prob = log_probability(theta, model, observed_spectra)
-    return (theta, ln_prob)
+    theta = priors.prior(model, observed_spectra)
+    return (theta, log_probability(theta, model, observed_spectra))
 
 def __log_prob_of_explicit_theta(theta, model, observed_spectra):
-    ln_prob = log_probability(theta, model, observed_spectra)
-    return (theta, ln_prob)
+    return (theta, log_probability(theta, model, observed_spectra))
 
 def random_scattering(observed_spectra, model, initial_thetas=None):
 
@@ -239,7 +246,7 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
             pool.join()
         
         else:
-            results = [__log_prob_of_initial_theta(model, observed_spectra) for _ in xrange(initial_samples)]
+            results = [__log_prob_of_implicit_theta(model, observed_spectra) for _ in xrange(initial_samples)]
 
         logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
             initial_samples, time() - ta))
@@ -270,14 +277,12 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
 
 
 def solve(observed_spectra, model, initial_thetas=None):
-    """Analyse some spectra of a given star according to the configuration
-    provided.
+    """
+    Solve for the model parameters theta given the observed spectra.
 
-    Inputs
-    ------
-    observed_spectra : list of `Spectrum1D` objects
-        Non-overlapping spectral beams of a single star.
-
+    Args:
+        observed_spectra (list of specutils.Spectrum1D objects): The observed spectra.
+        model (sick.models.Model object): The model class.
     """
 
     t_init = time()
@@ -289,7 +294,7 @@ def solve(observed_spectra, model, initial_thetas=None):
     # Set the aperture mapping from observed spectra to model spectra
     # For example, which index in our list of spectra corresponds to
     # 'blue', or 'red' in our model
-    model.map_apertures(observed_spectra)
+    model.map_channels(observed_spectra)
     
     # Perform any optimisation and initialise priors
     if model.configuration["solver"].get("optimise", True):
@@ -329,12 +334,11 @@ def solve(observed_spectra, model, initial_thetas=None):
         else:
             logger.info("\tParameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
 
-    # Get the number of walkers, etc
+    # Initialise the sampler
     walkers, burn, sample = [model.configuration["solver"][k] for k in ("walkers", "burn", "sample")]
     mean_acceptance_fractions = np.zeros(burn)
     autocorrelation_time = np.zeros((burn, len(model.dimensions)))
 
-    # Initialise the sampler
     sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_probability,
         args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
@@ -365,7 +369,10 @@ def solve(observed_spectra, model, initial_thetas=None):
             zip(*np.percentile(sampler.chain.reshape(-1, len(model.dimensions)), [16, 50, 84], axis=0)))):
         posteriors[parameter_name] = (median, quantile_16, quantile_84)
 
-    if mean_acceptance_fractions[-1] < 0.25:
+    # Convert posteriors and chains to appropriate units
+    # TODO
+
+    if not (0.5 > mean_acceptance_fractions[-1] > 0.2):
         warnflag += 4
 
     # Send back additional information
@@ -374,10 +381,11 @@ def solve(observed_spectra, model, initial_thetas=None):
         "chain": chain,
         "ln_probability": ln_probability,
         "mean_acceptance_fractions": mean_acceptance_fractions,
-        "warnflag": warnflag
+        "warnflag": warnflag,
+        "time_elapsed": time() - t_init
     }
 
-    logger.info("Completed in {0:.2f} seconds".format(time() - t_init))
+    logger.info("Completed in {0:.2f} seconds".format(additional_info["time_elapsed"]))
 
     return (posteriors, sampler, additional_info)
 

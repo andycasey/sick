@@ -16,7 +16,11 @@ from time import time
 # Third-party
 import numpy as np
 import numpy.random as random
+<<<<<<< HEAD
 from scipy import ndimage, optimize, interpolate
+=======
+from scipy import ndimage, optimize, interpolate, stats
+>>>>>>> 9c89b5a3373b0ccf030722c2fdece2a59476289c
 
 # Module
 import specutils
@@ -27,78 +31,61 @@ logger = logging.getLogger(__name__.split(".")[0])
 def __cross_correlate__(args):
     """
     Return a redshift by cross correlation of a model spectra and observed spectra.
-
-    Args:
-        channel (str): The channel to cross correlate on.
-        model (sick.models.Model): The model class.
-        observations (list of specutils.Spectrum1D objects): The observed data.
     """
 
-    dispersion, observed_flux, model_flux, model = args
+    dispersion, observed_flux, model_flux = args
+
+    # Be forgiving, although we shouldn't have to be.
+    N = np.min(map(len, [dispersion, observed_flux, model_flux]))
+
+    if N % 2 > 0:
+        N -= 1
+
+    dispersion = dispersion[:N]
+    observed_flux = observed_flux[:N]
+    model_flux = model_flux[:N]
 
     assert len(dispersion) == len(observed_flux)
     assert len(observed_flux) == len(model_flux)
-
-  
-    padding = 2 * len(dispersion)
-
-    # Perform the cross-correlation
-    Fx = np.fft.fft(observed_flux, padding, )
-    Fy = np.fft.fft(model_flux, padding, )
-    varxy = np.sqrt(np.inner(observed_flux, observed_flux) * np.inner(model_flux, model_flux))
-
-    varxy = np.mean(observed_flux**2)**0.5 * np.mean(model_flux**2)**0.5 * len(dispersion)
-    fft_result = np.fft.ifft((Fx * Fy.conjugate())/varxy).real
     
-    #fft_result = iFxy/varxy
+    # Set up z array
+    m = len(dispersion) / 2
+    z_array = dispersion/dispersion[N/2] - 1.0
+    
+    # Apodize edges
+    edge_buffer = 0.1 * (dispersion[-1] - dispersion[0])
+    low_w_indices = np.nonzero(dispersion < dispersion[0] + edge_buffer)[0]
+    high_w_indices = np.nonzero(dispersion > dispersion[-1] - edge_buffer)[0]
 
-    # Put around symmetry
-    num = len(fft_result) - 1 if len(fft_result) % 2 else len(fft_result)
+    apod_curve = np.ones(N, dtype='d')
+    apod_curve[low_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (dispersion[low_w_indices] - dispersion[0])/edge_buffer)))/2.
+    apod_curve[high_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (dispersion[-1] - dispersion[high_w_indices])/edge_buffer)))/2.
 
-    fft_y = np.zeros(num)
+    apod_observed_flux = observed_flux * apod_curve
+    apod_model_flux = model_flux * apod_curve
 
-    fft_y[:num/2] = fft_result[num/2:num]
-    fft_y[num/2:] = fft_result[:num/2]
+    fft_observed_flux = np.fft.fft(apod_observed_flux)
+    fft_model_flux = np.fft.fft(apod_model_flux)
+    model_flux_corr = (fft_observed_flux * fft_model_flux.conjugate())/np.sqrt(np.inner(apod_observed_flux, apod_observed_flux) * np.inner(apod_model_flux, apod_model_flux))
 
-    fft_x = np.arange(num) - num/2
+    correlation = np.fft.ifft(model_flux_corr).real
 
-    # Get initial guess of peak
-    p0 = np.array([fft_x[np.argmax(fft_y)], np.max(fft_y), 10])
+    # Reflect about zero
+    ccf = np.zeros(N)
+    ccf[:N/2] = correlation[N/2:]
+    ccf[N/2:] = correlation[:N/2]
+    
+    # Get height and redshift of best peak
+    h = ccf.max()
+    
+    # Scale the CCF
+    ccf -= ccf.min()
+    ccf *= (h/ccf.max())
 
-    gaussian_profile = lambda p, x: p[1] * np.exp(-(x - p[0])**2 / (2.0 * p[2]**2))
-    errfunc = lambda p, x, y: y - gaussian_profile(p, x)
+    z_best = z_array[ccf.argmax()]    
+    z_err = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.355)**2
 
-    result = optimize.leastsq(errfunc, p0.copy(), args=(fft_x, fft_y))
-
-    # variance
-    sigma = np.mean(2.0*(fft_y.real)**2)**0.5
-
-    # Create functions for interpolating back onto the dispersion map
-    points = (0, result[0][0], sigma)
-    interp_x = np.arange(num) - num/2
-
-    functions = []
-    for point in points:
-        idx = np.searchsorted(interp_x, point)
-        f = interpolate.interp1d(fft_x[idx-3:idx+3], dispersion[idx-3:idx+3], bounds_error=False, kind='cubic')
-        
-        functions.append(f)
-
-    # 0, p1, sigma
-    f, g, h = [func(point) for func, point in zip(functions, points)]
-
-    # Calculate velocity 
-    z = (1. - g/f)
-
-    # variance
-    z_err = np.abs(1 - h/f)
-    R = np.max(fft_y)
-
-    if dispersion[0] > 7000:
-        raise a
-
-    return z
-
+    return np.random.normal(z_best, z_err)
 
 
 def prior(model, observations, size=1):
@@ -184,17 +171,26 @@ def prior(model, observations, size=1):
                         order = model.configuration["normalise"][channel]["order"]
                         continuum_coefficients[channel] = np.polyfit(observed_channel.disp[finite], continuum[finite], order)
 
+                        # Re-bin onto log-lambda scale
+                        log_delta = np.diff(observed_channel.disp).min()
+                        wl_min, wl_max = observed_channel.disp.min(), observed_channel.disp.max()
+                        log_observed_dispersion = np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
+
                         # Scale the intensities to the data
-                        interpolated_intensities = np.interp(observed_channel.disp, model.dispersion[channel],
+                        interpolated_model_intensities = np.interp(log_observed_dispersion, model.dispersion[channel],
                             model_intensities[channel], left=np.nan, right=np.nan)
 
                         observed_scaled_intensities = cleaned_observed_flux \
                             / np.polyval(continuum_coefficients[channel], observed_channel.disp)
 
+                        interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                            observed_scaled_intensities, left=1, right=1)
+
                         # Get only finite overlap
-                        finite = np.isfinite(interpolated_intensities) * np.isfinite(observed_scaled_intensities)
+                        finite = np.isfinite(interpolated_model_intensities)
+
                         env.update({channel:
-                            (observed_channel.disp[finite], observed_scaled_intensities[finite], interpolated_intensities[finite], model)
+                            (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
                         })
 
                     elif method == "spline":
@@ -218,14 +214,6 @@ def prior(model, observations, size=1):
 
             # Do we have an explicit prior?
             if len(specified_prior) > 0:
-
-                # Update the channels in env to contain the information necessary for cross-
-                # correlation
-
-                # Observed spectra pseduo-normalised with NANs re-interpolated
-                # Need: intensities re-mapped onto observed spectra
-                # Pass model information as well
-
 
                 # Evaluate the prior given the environment information
                 current_prior.append(eval(specified_prior, env))
