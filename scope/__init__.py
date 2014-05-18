@@ -7,6 +7,12 @@ __version__ = "0.09dev"
 
 __all__ = ["config", "Model", "specutils", "Spectrum", "utils"]
 
+import logging
+
+import specutils
 from analysis import solve
 from models import Model
 from specutils import Spectrum
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("scope")

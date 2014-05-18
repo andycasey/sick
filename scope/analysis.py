@@ -82,10 +82,10 @@ def log_likelihood(theta, model, observations):
         return -np.inf
 
     differences = []
-    for (aperture, model_flux, observed_spectrum) in zip(model.apertures, model_fluxes, observations):
+    for (channel, model_flux, observed_spectrum) in zip(model.channels, model_fluxes, observations):
 
         inverse_variance = 1.0/(observed_spectrum.variance \
-            + modelled_spectrum.flux**2 * np.exp(2. * theta_dict["jitter.{}".format(aperture)]))
+            + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
         difference = (observed_spectrum.flux - model_flux)**2 * inverse_variance
         
         finite = np.isfinite(difference)
@@ -146,7 +146,7 @@ def sample_ball(point, observed_spectra, model):
                 aperture = dimension.split(".")[1]
                 coefficient = int(dimension.split(".")[2].lstrip("a"))
                 order = model.configuration["normalise_observed"][aperture]["order"]
-                observed_aperture = observed_spectra[model.apertures.index(aperture)]
+                observed_aperture = observed_spectra[model.channels.index(aperture)]
                 
                 # This depends on the value of the polynomial coefficient, the dispersion, as well
                 # as the order of the polynomial to fit the flux.
@@ -186,7 +186,7 @@ def sample_ball(point, observed_spectra, model):
 
         # Model the flux, but don't normalise it.
         pi_parameters = dict(zip(model.dimensions, pi))
-        for aperture in model.apertures:
+        for aperture in model.channels:
             n = 0
             while "normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n) in pi_parameters.keys():
                 pi_parameters["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] = 0
@@ -198,10 +198,10 @@ def sample_ball(point, observed_spectra, model):
 
         if n > 0:
             try:
-                model_apertures = model(observations=observed_spectra, **pi_parameters)
+                model_channels = model(observations=observed_spectra, **pi_parameters)
             except ValueError: continue
             
-            for aperture, observed_aperture, model_aperture in zip(model.apertures, observed_spectra, model_apertures):
+            for aperture, observed_aperture, model_aperture in zip(model.channels, observed_spectra, model_channels):
 
                 continuum = (observed_aperture.flux + np.random.normal(0, observed_aperture.uncertainty))/model_aperture.flux
                 finite = np.isfinite(continuum)
@@ -246,7 +246,7 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
             pool.join()
         
         else:
-            results = [__log_prob_of_initial_theta(model, observed_spectra) for _ in xrange(initial_samples)]
+            results = [__log_prob_of_implicit_theta(model, observed_spectra) for _ in xrange(initial_samples)]
 
         logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
             initial_samples, time() - ta))
