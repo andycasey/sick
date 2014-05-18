@@ -10,6 +10,7 @@ import acor
 import argparse
 import json
 import logging
+import multiprocessing
 import os
 import cPickle as pickle
 
@@ -23,348 +24,376 @@ import scope
 
 def main():
 
-	parser = argparse.ArgumentParser(description="infer stellar parameters from spectra")
-	parser.add_argument("model", type=str, help="YAML- or JSON-style model filename")
-	parser.add_argument("spectra", nargs="+", help="filenames of spectra to analyse")
-	parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
-		type=str, default=os.getcwd())
-	parser.add_argument("-p", "--filename-prefix", dest="filename_prefix", default="scope")
-	parser.add_argument("-mb", "--multi-beam", action="store_true", default=False)
-	parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all")
-	parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0)
-	parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
-	parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
-	parser.add_argument("--debug", dest="debug", action="store_true", default=False)
-	parser.add_argument("-pf", "--plot-format", dest="plot_format", action="store", type=str, default="jpg")
-	args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="infer stellar parameters from spectra")
+    parser.add_argument("model", type=str, help="YAML- or JSON-style model filename")
+    parser.add_argument("spectra", nargs="+", help="filenames of spectra to analyse")
+    parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
+        type=str, default=os.getcwd())
+    parser.add_argument("-p", "--filename-prefix", dest="filename_prefix", default="scope")
+    parser.add_argument("-mb", "--multi-beam", action="store_true", default=False)
+    parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all")
+    parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0)
+    parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
+    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
+    parser.add_argument("--debug", dest="debug", action="store_true", default=False)
+    parser.add_argument("-pf", "--plot-format", dest="plot_format", action="store", type=str, default="jpg")
+    args = parser.parse_args()
 
-	if not os.path.exists(args.model):
-		raise IOError("model filename {0} does not exist".format(args.model))
+    if not os.path.exists(args.model):
+        raise IOError("model filename {0} does not exist".format(args.model))
 
-	available = ("pdf", "jpg", "png", "eps")
-	if args.plotting and args.plot_format.lower() not in available:
-		raise ValueError("plotting format '{0}' not available. Options: {1}".format(args.plot_format.lower(),
-			", ".join(available)))
+    available = ("pdf", "jpg", "png", "eps")
+    if args.plotting and args.plot_format.lower() not in available:
+        raise ValueError("plotting format '{0}' not available. Options: {1}".format(args.plot_format.lower(),
+            ", ".join(available)))
 
-	# Initialise logging
-	logger = logging.getLogger("scope")
-	logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+    # Initialise logging
+    logger = logging.getLogger("scope")
+    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
-	all_spectra = [scope.Spectrum.load(filename) for filename in args.spectra]
+    all_spectra = [scope.Spectrum.load(filename) for filename in args.spectra]
 
-	if args.plotting:
-		# Import plotting dependencies 
-		import matplotlib as mpl
-		mpl.use("Agg")
+    if args.plotting:
+        # Import plotting dependencies 
+        import matplotlib as mpl
+        mpl.use("Agg")
 
-		import matplotlib.pyplot as plt
-		from matplotlib.ticker import MaxNLocator
-		import triangle
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator
+        import triangle
 
 
-	# Are there multiple spectra in each aperture?
-	if args.multi_beam:
-		# If so, they should all have the same length (e.g. same number of objects)
-		if len(set(map(len, all_spectra))) > 1:
-			raise IOError("filenames contain different number of spectra")
+    # Are there multiple spectra in each aperture?
+    if args.multi_beam:
+        # If so, they should all have the same length (e.g. same number of objects)
+        if len(set(map(len, all_spectra))) > 1:
+            raise IOError("filenames contain different number of spectra")
 
-		# OK, they have the same length. They are probably apertures of the same
-		# stars. Let's join them properly
-		sorted_spectra = []
-		num_stars, num_apertures = len(all_spectra[0]), len(all_spectra)
-		for i in xrange(num_stars):
-			sorted_spectra.append([all_spectra[j][i] for j in xrange(num_apertures)])
+        # OK, they have the same length. They are probably apertures of the same
+        # stars. Let's join them properly
+        sorted_spectra = []
+        num_stars, num_apertures = len(all_spectra[0]), len(all_spectra)
+        for i in xrange(num_stars):
+            sorted_spectra.append([all_spectra[j][i] for j in xrange(num_apertures)])
 
-		all_spectra = sorted_spectra
-	else:
-		all_spectra = [all_spectra]
+        all_spectra = sorted_spectra
+    else:
+        all_spectra = [all_spectra]
 
-	# Load the model
-	model = scope.Model(args.model)
-	logger.info("Model information: {0}".format(model))
+    # Load the model
+    model = scope.Model(args.model)
+    logger.info("Model information: {0}".format(model))
 
-	# Define headers that we want in the results filename 
-	default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
-		"MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE", "UTEND", "UTSTART", )
-	default_metadata = {
-		"model": model.hash, 
-		"input_filenames": ", ".join(args.spectra),
-		"scope_version": scope.__version__,
-		"walkers": model.configuration["solver"]["walkers"],
-	}
+    # Define headers that we want in the results filename 
+    default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
+        "MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE", "UTEND", "UTSTART", )
+    default_metadata = {
+        "model": model.hash, 
+        "input_filenames": ", ".join(args.spectra),
+        "scope_version": scope.__version__,
+        "walkers": model.configuration["solver"]["walkers"],
+    }
 
-	combined_results_filename = os.path.join(args.output_dir, "{0}-results.fits".format(args.filename_prefix))
-	
-	# For each spectra, analyse
-	for i, spectra in enumerate(all_spectra, start=1):
+    combined_results_filename = os.path.join(args.output_dir, "{0}-results.fits".format(args.filename_prefix))
+    
+    # If we are running optimise, generate some initial thetas
+    if model.configuration["solver"].get("optimise", True) and False:
+        
+        threads = model.configuration["solver"].get("threads", 1)
+        initial_samples = model.configuration["solver"]["initial_samples"]
 
-		# Force spectra as a list
-		if not isinstance(spectra, (list, tuple)):
-			spectra = [spectra]
+        if threads > 1:
 
-		logger.info("Starting on object #{0} (RA {1}, DEC {2} -- {3})".format(i, spectra[0].headers.get("RA", "None"),
-			spectra[0].headers.get("DEC", "None"), spectra[0].headers.get("OBJECT", "Unknown")))
+            initial_thetas = []
+            def callback(result):
+                initial_thetas.append(result)
+            
+            pool = multiprocessing.Pool(threads)
+            for _ in xrange(initial_samples):
+                pool.apply_async(scope.priors.implicit, args=(model, all_spectra[0]), callback=callback)
 
-		# Create metadata and put header information in
-		if args.skip > i - 1:
-			logger.info("Skipping object #{0}".format(i))
-			continue
+            pool.close()
+            pool.join()
 
-		if isinstance(args.number_to_solve, (int, float)) and \
-		args.number_to_solve == (i + args.skip):
-			logger.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
-			break
+        else:
+            initial_thetas = scope.priors.implicit(model, all_spectra[0], size=initial_samples)
+    else:
+        initial_thetas = None
 
-		metadata = {}
-		header_columns = []
-		for header in default_headers:
-			if header not in spectra[0].headers: continue
-			header_columns.append(header)
-			metadata[header] = spectra[0].headers[header]
+    # For each spectra, analyse
+    for i, spectra in enumerate(all_spectra, start=1):
 
-		# Set defaults for metadata
-		metadata.update({"run_id": i})
-		metadata.update(default_metadata)
-		
-		t_init = time()
-		try:
-			posteriors, sampler, info = scope.solve(spectra, model)
+        # Force spectra as a list
+        if not isinstance(spectra, (list, tuple)):
+            spectra = [spectra]
 
-		except:
-			logger.exception("Failed to analyse #{0}:".format(i))
-			if args.debug: raise
+        logger.info("Starting on object #{0} (RA {1}, DEC {2} -- {3})".format(i, spectra[0].headers.get("RA", "None"),
+            spectra[0].headers.get("DEC", "None"), spectra[0].headers.get("OBJECT", "Unknown")))
 
-			try: all_results
-			except NameError:
-				# Cannot add to results because we don't know all the model dimensions. We must continue
-				# until we find one result that works
-				continue
-			else:
-				row = np.core.records.fromrecords([[metadata.get(key, np.nan) for key in metadata_columns]],
-					dtype=all_results.dtype)
-				all_results = np.append(all_results, row)
+        # Create metadata and put header information in
+        if args.skip > i - 1:
+            logger.info("Skipping object #{0}".format(i))
+            continue
 
-		else:
-			t_elapsed = int(time() - t_init)
-			
-			# Update results with the posteriors
-			logger.info("Posteriors:")
-			for dimension, (posterior_value, pos_uncertainty, neg_uncertainty) in posteriors.iteritems():
-				logger.info("\t{0:15s}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension, posterior_value,
-					pos_uncertainty, neg_uncertainty))
+        if args.number_to_solve != "all" and i > (int(args.number_to_solve) + args.skip):
+            logger.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
+            break
 
-				metadata.update({
-					dimension: posterior_value,
-					"u_maxabs_{0}".format(dimension): np.abs([neg_uncertainty, pos_uncertainty]).max(),
-					"u_pos_{0}".format(dimension): pos_uncertainty,
-					"u_neg_{0}".format(dimension): neg_uncertainty,
-				})
+        metadata = {}
+        header_columns = []
+        for header in default_headers:
+            if header not in spectra[0].headers: continue
+            header_columns.append(header)
+            metadata[header] = spectra[0].headers[header]
 
-			# Set some filename variables
-			output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
+        # Set defaults for metadata
+        metadata.update({"run_id": i})
+        metadata.update(default_metadata)
+        
+        t_init = time()
+        try:
+            posteriors, sampler, info = scope.solve(spectra, model, initial_thetas=initial_thetas)
 
-			chain_filename = output("chain.fits")
-			pp_observed_spectra_filenames = [output("pp-obs-{}.fits".format(aperture)) \
-				for aperture in model._mapped_apertures]
-			pp_modelled_spectra_filenames = [output("pp-mod-{}.fits".format(aperture)) \
-				for aperture in model._mapped_apertures]
-			
-			# Save information related to the analysis
-			metadata.update({
-				"chain_filename": chain_filename,
-				"pp_observed_spectra_filenames": ",".join(pp_observed_spectra_filenames),
-				"pp_modelled_spectra_filenames": ",".join(pp_modelled_spectra_filenames),
-				"time_elapsed": t_elapsed,
-				"final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
-			})
-			
-			# Append an sample and step number
-			walkers = model.configuration["solver"]["walkers"]
-			chain_length = info["chain"].shape[0] * info["chain"].shape[1]
-			chain = np.core.records.fromarrays(
-				np.vstack([
-					np.arange(1, 1 + chain_length),
-					np.arange(1, 1 + chain_length) % walkers,
-					info["chain"].reshape(-1, len(model.dimensions)).T,
-					info["ln_probability"].reshape(-1, 1).T
-				]),
-				names=["Iteration", "Sample"] + model.dimensions + ["ln_likelihood"],
-				formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
+        except:
+            logger.exception("Failed to analyse #{0}:".format(i))
+            if args.debug: raise
 
-			# Save the chain
-			primary_hdu = pyfits.PrimaryHDU()
-			table_hdu = pyfits.BinTableHDU(chain)
-			hdulist = pyfits.HDUList([primary_hdu, table_hdu])
-			hdulist.writeto(chain_filename, clobber=True)
+            try: all_results
+            except NameError:
+                # Cannot add to results because we don't know all the model dimensions. We must continue
+                # until we find one result that works
+                continue
+            else:
+                row = np.core.records.fromrecords([[metadata.get(key, np.nan) for key in metadata_columns]],
+                    dtype=all_results.dtype)
+                all_results = np.append(all_results, row)
 
-			"""
-			try: metadata_columns
-			except NameError:
-				# Headers first
-				metadata_columns = [] + header_columns
+        else:
+            t_elapsed = int(time() - t_init)
+            
+            # Update results with the posteriors
+            logger.info("Posteriors:")
+            for dimension, (posterior_value, pos_uncertainty, neg_uncertainty) in posteriors.iteritems():
+                logger.info("\t{0:15s}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension, posterior_value,
+                    pos_uncertainty, neg_uncertainty))
 
-				# Dimensions (w/ uncertainties)
-				for column in model.grid_points.dtype.names:
-					metadata_columns.append(column)
-					for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
-						metadata_columns.append(prefix + column)
+                metadata.update({
+                    dimension: posterior_value,
+                    "u_maxabs_{0}".format(dimension): np.abs([neg_uncertainty, pos_uncertainty]).max(),
+                    "u_pos_{0}".format(dimension): pos_uncertainty,
+                    "u_neg_{0}".format(dimension): neg_uncertainty,
+                })
 
-				# Nusiance parameters (w/ uncertainties)
-				nusiance_columns = scope.utils.unique_preserved_list(list(model.grid_points.dtype.names) \
-					+ model.dimensions)[len(model.grid_points.dtype.names):]
-				for column in nusiance_columns:
-					metadata_columns.append(column)
-					for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
-						metadata_columns.append(prefix + column)
+            # Set some filename variables
+            output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
 
-				# Time elapsed, model
-				metadata_columns.extend(["time_elapsed", "final_mean_acceptance_fraction", "sample_sigma_mean_acceptance_fraction", 
-					"model", "run_id", "walkers", "burn", "sample", "input_filenames", "chain_filename", "state_filename", 
-					"acceptance_plot_filename", "corner_plot_filename", "pp_spectra_plot_filename", "pp_observed_spectra_filenames",
-					"pp_modelled_spectra_filenames"])
-				metadata_formats = [("f8", "|S256")[isinstance(metadata[key], str)] for key in metadata_columns]
+            chain_filename = output("chain.fits")
+            pp_observed_spectra_filenames = [output("pp-obs-{}.fits".format(aperture)) \
+                for aperture in model._mapped_apertures]
+            pp_modelled_spectra_filenames = [output("pp-mod-{}.fits".format(aperture)) \
+                for aperture in model._mapped_apertures]
+            
+            # Save information related to the analysis
+            metadata.update({
+                "warnflag": info["warnflag"],
+                "chain_filename": chain_filename,
+                "pp_observed_spectra_filenames": ",".join(pp_observed_spectra_filenames),
+                "pp_modelled_spectra_filenames": ",".join(pp_modelled_spectra_filenames),
+                "time_elapsed": t_elapsed,
+                "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
+            })
+            
+            # Append an sample and step number
+            walkers = model.configuration["solver"]["walkers"]
+            chain_length = info["chain"].shape[0] * info["chain"].shape[1]
+            chain = np.core.records.fromarrays(
+                np.vstack([
+                    np.arange(1, 1 + chain_length),
+                    np.arange(1, 1 + chain_length) % walkers,
+                    info["chain"].reshape(-1, len(model.dimensions)).T,
+                    info["ln_probability"].reshape(-1, 1).T
+                ]),
+                names=["Iteration", "Sample"] + model.dimensions + ["ln_likelihood"],
+                formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
 
-				all_results = np.core.records.fromrecords([[metadata[key] for key in metadata_columns]],
-					names=metadata_columns, formats=metadata_formats)
+            # Save the chain
+            primary_hdu = pyfits.PrimaryHDU()
+            table_hdu = pyfits.BinTableHDU(chain)
+            hdulist = pyfits.HDUList([primary_hdu, table_hdu])
+            hdulist.writeto(chain_filename, clobber=True)
 
-			else:
-				row = np.core.records.fromrecords([[metadata.get(key, np.nan) for key in metadata_columns]],
-					dtype=all_results.dtype)
-				all_results = np.append(all_results, row)
+            """
+            try: metadata_columns
+            except NameError:
+                # Headers first
+                metadata_columns = [] + header_columns
 
-			# Write results to filename	
-			primary_hdu = pyfits.PrimaryHDU()
-			table_hdu = pyfits.BinTableHDU(all_results)
-			hdulist = pyfits.HDUList([primary_hdu, table_hdu])
-			hdulist.writeto(combined_results_filename, clobber=True)
-			"""
+                # Dimensions (w/ uncertainties)
+                for column in model.grid_points.dtype.names:
+                    metadata_columns.append(column)
+                    for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
+                        metadata_columns.append(prefix + column)
 
-			with open(output("result.json"), "wb") as fp:
-				json.dump(metadata, fp)
+                # Nusiance parameters (w/ uncertainties)
+                nusiance_columns = scope.utils.unique_preserved_list(list(model.grid_points.dtype.names) \
+                    + model.dimensions)[len(model.grid_points.dtype.names):]
+                for column in nusiance_columns:
+                    metadata_columns.append(column)
+                    for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
+                        metadata_columns.append(prefix + column)
 
-			# Close sampler pool
-			if model.configuration["solver"].get("threads", 1) > 1:
-				sampler.pool.close()
-				sampler.pool.join()
+                # Time elapsed, model
+                metadata_columns.extend(["time_elapsed", "final_mean_acceptance_fraction", "sample_sigma_mean_acceptance_fraction", 
+                    "model", "run_id", "walkers", "burn", "sample", "input_filenames", "chain_filename", "state_filename", 
+                    "acceptance_plot_filename", "corner_plot_filename", "pp_spectra_plot_filename", "pp_observed_spectra_filenames",
+                    "pp_modelled_spectra_filenames"])
+                metadata_formats = [("f8", "|S256")[isinstance(metadata[key], str)] for key in metadata_columns]
 
-			# Save sampler state
-			with open(output("model.state"), "wb") as fp:
-				pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
+                all_results = np.core.records.fromrecords([[metadata[key] for key in metadata_columns]],
+                    names=metadata_columns, formats=metadata_formats)
 
-			# Get the most likely sample
-			ml_index = np.argmax(sampler.lnprobability.reshape(-1))
-			pp_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
-			
-			pp_modelled_spectra = model.model_spectra(**pp_parameters)
-			[spectrum.save(filename) for spectrum, filename in zip(spectra, pp_observed_spectra_filenames)]
-			[spectrum.save(filename) for spectrum, filename in zip(pp_modelled_spectra, pp_modelled_spectra_filenames)]
+            else:
+                row = np.core.records.fromrecords([[metadata.get(key, np.nan) for key in metadata_columns]],
+                    dtype=all_results.dtype)
+                all_results = np.append(all_results, row)
 
-			# Plot results
-			if args.plotting:
+            # Write results to filename    
+            primary_hdu = pyfits.PrimaryHDU()
+            table_hdu = pyfits.BinTableHDU(all_results)
+            hdulist = pyfits.HDUList([primary_hdu, table_hdu])
+            hdulist.writeto(combined_results_filename, clobber=True)
+            """
 
-				colours = ("#002F2F", "#046380", "#A7A373", "#8E2800", "#B64926", '#FFB03B', '#468966',
-					"#A989CD", "#1695A3", "#EB7F00", "#2E0927", "#D90000", "#04756F", "#FF8C00", "#2185C5",
-					"#3E454C")
+            with open(output("result.json"), "wb") as fp:
+                json.dump(metadata, fp)
 
-				# Some filenames
-				autocorrelation_plot_filename = output("acor.{}".format(args.plot_format))
-				acceptance_plot_filename = output("acceptance.{}".format(args.plot_format))
-				corner_plot_filename = output("corner.{}".format(args.plot_format))
-				pp_spectra_plot_filename = output("ml-spectra.{}".format(args.plot_format))
+            # Close sampler pool
+            if model.configuration["solver"].get("threads", 1) > 1:
+                sampler.pool.close()
+                sampler.pool.join()
 
-				# Plot the chains
-				ndim = len(model.dimensions)
-				chain_to_plot = sampler.chain.reshape(-1, ndim)
-				chains_per_plot = len(model.grid_points.dtype.names)
+            # Save sampler state
+            with open(output("model.state"), "wb") as fp:
+                pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
-				n = 1
-				for j in xrange(ndim):
+            # Get the most likely sample
+            ml_index = np.argmax(sampler.lnprobability.reshape(-1))
+            pp_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
+            
+            pp_modelled_spectra = model(observations=spectra, **pp_parameters)
+            [spectrum.save(filename) for spectrum, filename in zip(spectra, pp_observed_spectra_filenames)]
+            [spectrum.save(filename) for spectrum, filename in zip(pp_modelled_spectra, pp_modelled_spectra_filenames)]
 
-					if j % chains_per_plot == 0:
-						if j > 0:
-							[axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
-							ax.set_xlabel("Iteration")
-							fig.savefig(output("chain-{0}.{1}".format(n, args.plot_format)))
-							n += 1
-						fig = plt.figure()
+            # Plot results
+            if args.plotting:
 
-					ax = fig.add_subplot(chains_per_plot, 1, (1 + j) % chains_per_plot)
-					for k in xrange(walkers):
-						ax.plot(info["chain"][k, :, j], c=colours[j % len(colours)], alpha=0.5)
-					ax.set_ylabel(scope.utils.latexify([model.dimensions[j]])[0])
-					ax.yaxis.set_major_locator(MaxNLocator(4))
-					ax.set_xlim(0, ax.get_xlim()[1])
+                colours = ("#002F2F", "#046380", "#A7A373", "#8E2800", "#B64926", '#FFB03B', '#468966',
+                    "#A989CD", "#1695A3", "#EB7F00", "#2E0927", "#D90000", "#04756F", "#FF8C00", "#2185C5",
+                    "#3E454C")
 
-				[axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
-				ax.set_xlabel("Step Number")
-				fig.savefig(output("chain-{0}.{1}".format(n, args.plot_format)))
+                # Some filenames
+                autocorrelation_plot_filename = output("acor.{}".format(args.plot_format))
+                acceptance_plot_filename = output("acceptance.{}".format(args.plot_format))
+                corner_plot_filename = output("corner.{}".format(args.plot_format))
+                pp_spectra_plot_filename = output("ml-spectra.{}".format(args.plot_format))
 
-				# Plot the mean acceptance fractions
-				fig = plt.figure()
-				ax = fig.add_subplot(111)
-				ax.plot(info["mean_acceptance_fractions"], "k", lw=2)
-				ax.set_xlabel("Iteration")
-				ax.set_ylabel("$\langle{}f_a\\rangle$")
-				fig.savefig(acceptance_plot_filename)
+                # Plot the chains
+                ndim = len(model.dimensions)
+                chain_to_plot = sampler.chain.reshape(-1, ndim)
+                chains_per_plot = len(model.grid_points.dtype.names)
 
-				# Plot the autocorrelation function
-				fig = plt.figure()
-				ax = fig.add_subplot(111)
-				rho_tau = [acor.function(np.mean(info["chain"][:, :, j], axis=0)) for j in xrange(len(model.dimensions))]
+                n = 1
+                for j in xrange(ndim):
 
-				for i, dimension in enumerate(model.dimensions):
-					ax.plot(rho_tau[i], c=colours[i % len(colours)], lw=2)
-				ax.axhline(0, c="#666666")
-				ax.set_xlabel("$\\tau$")
-				ax.set_ylabel("$\\rho(\\tau)$")
-				fig.savefig(autocorrelation_plot_filename)
+                    if j % chains_per_plot == 0:
+                        if j > 0:
+                            [axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
+                            ax.set_xlabel("Iteration")
+                            fig.savefig(output("chain-{0}.{1}".format(n, args.plot_format)))
+                            n += 1
+                        fig = plt.figure()
 
-				# Make a corner plot with just the parameters of interest
-				indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-				fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
-					labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices),
-					quantiles=[.16, .50, .84], verbose=False)
-				fig.savefig(corner_plot_filename)
+                    ax = fig.add_subplot(chains_per_plot, 1, (1 + j) % chains_per_plot)
+                    for k in xrange(walkers):
+                        ax.plot(info["chain"][k, :, j], c=colours[j % len(colours)], alpha=0.5)
+                    ax.set_ylabel(scope.utils.latexify([model.dimensions[j]])[0])
+                    ax.yaxis.set_major_locator(MaxNLocator(4))
+                    ax.set_xlim(0, ax.get_xlim()[1])
 
-				# Plot spectra
-				fig = plt.figure()
-				for i, (aperture, modelled_aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, spectra)):
+                [axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
+                ax.set_xlabel("Step Number")
+                fig.savefig(output("chain-{0}.{1}".format(n, args.plot_format)))
 
-					ax = fig.add_subplot(len(spectra), 1, i+1)
+                # Plot the mean acceptance fractions
+                fig = plt.figure()
+                ax = fig.add_subplot(111)
+                ax.plot(info["mean_acceptance_fractions"], "k", lw=2)
+                ax.set_xlabel("Iteration")
+                ax.set_ylabel("$\langle{}f_a\\rangle$")
+                fig.savefig(acceptance_plot_filename)
 
-					# Get the full boundaries
-					full_extent = [
-						np.max([modelled_aperture.disp[0], observed_aperture.disp[0]]),
-						np.min([modelled_aperture.disp[-1], observed_aperture.disp[-1]])
-					]
+                # Plot the autocorrelation function
+                fig = plt.figure()
+                ax = fig.add_subplot(111)
+                rho_tau = [acor.function(np.mean(info["chain"][:, :, j], axis=0)) for j in xrange(len(model.dimensions))]
 
-					ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
-					ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
-					
-					ax.yaxis.set_major_locator(MaxNLocator(4))
-					ax.set_ylabel("Flux, $F_\lambda$")
+                for i, dimension in enumerate(model.dimensions):
+                    ax.plot(rho_tau[i], c=colours[i % len(colours)], lw=2)
+                ax.axhline(0, c="#666666")
+                ax.set_xlabel("$\\tau$")
+                ax.set_ylabel("$\\rho(\\tau)$")
+                fig.savefig(autocorrelation_plot_filename)
 
-					ax.set_xlim(full_extent)
+                # Make a corner plot with just the parameters of interest
+                indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
+                fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
+                    labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices),
+                    quantiles=[.16, .50, .84], verbose=False)
+                fig.savefig(corner_plot_filename)
 
-					indices = observed_aperture.disp.searchsorted(full_extent)
-					relevant_fluxes = observed_aperture.flux[indices[0]:indices[1]]
+                # Plot spectra
+                fig = plt.figure()
+                for i, (aperture, modelled_aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, spectra)):
 
-					ax.set_ylim(
-						0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
-						1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
-					)
+                    ax = fig.add_subplot(len(spectra), 1, i+1)
 
-				ax.set_xlabel("Wavelength, $\lambda$")
-				fig.savefig(pp_spectra_plot_filename)
+                    # Get the full boundaries
+                    fmd = np.isfinite(modelled_aperture.flux)
+                    fod = np.isfinite(observed_aperture.flux)
+                    full_extent = [
+                        np.max([modelled_aperture.disp[fmd][0], observed_aperture.disp[fod][0]]),
+                        np.min([modelled_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
+                    ]
 
-				# Closing the figures isn't enough; matplotlib leaks memory
-				plt.close("all")
+                    interpolated_model_flux = np.interp(observed_aperture.disp, modelled_aperture.disp, modelled_aperture.flux,
+                        left=np.nan, right=np.nan)
 
-			# Delete some things
-			del sampler, chain, primary_hdu, table_hdu, hdulist
+                    ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
+                    ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
+                    
+                    ax.yaxis.set_major_locator(MaxNLocator(4))
+                    ax.set_ylabel("Flux, $F_\lambda$")
 
-			break
-	logger.info("Fin.")
+                    ax.set_xlim(full_extent)
+
+                    indices = observed_aperture.disp.searchsorted(full_extent)
+                    relevant_fluxes = observed_aperture.flux[indices[0]:indices[1]]
+
+                    ax.set_ylim(
+                        0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
+                        1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
+                    )
+
+                ax.set_xlabel("Wavelength, $\lambda$")
+                fig.savefig(pp_spectra_plot_filename)
+
+                # Closing the figures isn't enough; matplotlib leaks memory
+                plt.close("all")
+
+            # Delete some things
+            del sampler, chain, primary_hdu, table_hdu, hdulist
+
+    logger.info("Fin.")
 
 if __name__ == "__main__":
-	main()
+    main()
