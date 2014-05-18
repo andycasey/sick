@@ -38,6 +38,7 @@ def __cross_correlate__(args):
     # Be forgiving, although we shouldn't have to be.
     N = np.min(map(len, [dispersion, observed_flux, model_flux]))
 
+    # Ensure an even number of points
     if N % 2 > 0:
         N -= 1
 
@@ -83,7 +84,7 @@ def __cross_correlate__(args):
     ccf *= (h/ccf.max())
 
     z_best = z_array[ccf.argmax()]    
-    z_err = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.355)**2
+    z_err = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.35482)**2
 
     return np.random.normal(z_best, z_err)
 
@@ -98,7 +99,7 @@ def prior(model, observations, size=1):
     
     # Default doppler shift priors
     prior_distributions.update(dict(
-        [("doppler_shift.{}".format(c), "cross_correlate({})".format(c)) for c in model.channels]
+        [("z.{}".format(c), "cross_correlate({})".format(c)) for c in model.channels]
     ))
 
     # Default jitter priors
@@ -284,7 +285,7 @@ def implicit(model, observations, size=1):
                     break
 
             # Velocities
-            if dimension.startswith("doppler_shift."):
+            if dimension.startswith("z."):
                 # Assumes a velocity, not a redshift
                 #velocity = random.normal(0, 100)
                 #walker_prior.append(velocity)

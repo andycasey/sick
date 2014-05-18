@@ -117,9 +117,12 @@ def log_probability(theta, model, observations):
 
 
 def sample_ball(point, observed_spectra, model):
+    """
+    Return a multi-dimensional Gaussian around a ball point.
 
-    logger.info("Initialising priors around point {0}".format(point))
+    """ 
 
+    
     # Create a sample ball around the result point
     ball_point = [point.get(dimension, 0) for dimension in model.dimensions]
     
@@ -128,21 +131,25 @@ def sample_ball(point, observed_spectra, model):
     for di, dimension in enumerate(model.dimensions):
 
         if dimension in model.grid_points.dtype.names:
+            # Set sigma to be 5% of the dimension dynamic range
             dimensional_std.append(0.05 * np.ptp(model.grid_boundaries[dimension]))
            
-        elif dimension.startswith("doppler_shift."):
-            dimensional_std.append(5)
+        elif dimension.startswith("z."):
+            # Set the velocity sigma to be 10 km/s
+            dimensional_std.append(10./299792458e-3)
             
         elif dimension.startswith("smooth_model_flux."): 
             dimensional_std.append(0.10)
 
         elif dimension.startswith("normalise_observed."):
 
-            if dimension.endswith(".s"): # spline smoothing
+            if dimension.endswith(".s"):
+                # Spline treatment of continuum
                 s = np.random.normal(ball_point[di], np.sqrt(2*ball_point[di]))
                 dimensional_std.append(np.max([s, 0]))
 
-            else: #polynomial
+            else: 
+                # Polynomial treatment of continuum
                 aperture = dimension.split(".")[1]
                 coefficient = int(dimension.split(".")[2].lstrip("a"))
                 order = model.configuration["normalise_observed"][aperture]["order"]
@@ -220,59 +227,54 @@ def __log_prob_of_implicit_theta(model, observed_spectra):
     theta = priors.prior(model, observed_spectra)
     return (theta, log_probability(theta, model, observed_spectra))
 
+
 def __log_prob_of_explicit_theta(theta, model, observed_spectra):
     return (theta, log_probability(theta, model, observed_spectra))
 
+
 def random_scattering(observed_spectra, model, initial_thetas=None):
+    """
+    Calculate likelihoods for randomly drawn theta points across the parameter space.
+
+    Args:
+        observed_spectra (list of Spectrum1D objects): The observed data.
+        model (sick.models.Model object): The model class.
+        initial_thetas (list-type or None): The theta points to sample. If none are
+            provided then the number of randomly drawn points is determined by the
+            model configuration `model.solver.initial_samples`
+    """
 
     # Random scattering
     ta = time()
-    threads = model.configuration["solver"].get("threads", 1)
 
     results = []
     def callback(result):
         results.append(result)
 
+    pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
+            
     if initial_thetas is None:
 
-        initial_samples = model.configuration["solver"]["initial_samples"]
-
-        if threads > 1:
-            pool = multiprocessing.Pool(threads)
-            for _ in xrange(initial_samples):
-                pool.apply_async(__log_prob_of_implicit_theta, args=(model, observed_spectra), callback=callback)
-
-            pool.close()
-            pool.join()
-        
-        else:
-            results = [__log_prob_of_implicit_theta(model, observed_spectra) for _ in xrange(initial_samples)]
-
-        logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
-            initial_samples, time() - ta))
+        [pool.apply_async(__log_prob_of_implicit_theta, args=(model, observed_spectra), callback=callback) \
+            for _ in xrange(model.configuration["solver"]["initial_samples"])]
 
     else:
 
         if not isinstance(initial_thetas[0], (list, tuple, np.ndarray)):
             initial_thetas = [initial_thetas]
 
-        if threads > 1:
-            pool = multiprocessing.Pool(threads)
+        [pool.apply_async(__log_prob_of_explicit_theta, args=(initial_theta, model, observed_spectra), callback=callback) \
+            for initial_theta in initial_thetas]
 
-            for initial_theta in initial_thetas:
-                pool.apply_async(__log_prob_of_explicit_theta, args=(initial_theta, model, observed_spectra), callback=callback)
-
-            pool.close()
-            pool.join()
-
-        else:
-            results = [__log_prob_of_explicit_theta(initial_theta, model, observed_spectra) for initial_theta in initial_thetas]
-
-        logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
-            len(initial_thetas), time() - ta))
+    pool.close()
+    pool.join()
 
     index = np.argmax([result[1] for result in results])
     p0 = results[index][0]
+
+    logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
+        len(results), time() - ta))
+
     return p0
 
 
@@ -369,8 +371,8 @@ def solve(observed_spectra, model, initial_thetas=None):
             zip(*np.percentile(sampler.chain.reshape(-1, len(model.dimensions)), [16, 50, 84], axis=0)))):
         posteriors[parameter_name] = (median, quantile_16, quantile_84)
 
-    # Convert posteriors and chains to appropriate units
-    # TODO
+        if parameter_name.startswith("z."):
+            posteriors["v_rad." + parameter_name[2:]] = list(np.array(posteriors[parameter_name]) * 299792458e-3)
 
     if not (0.5 > mean_acceptance_fractions[-1] > 0.2):
         warnflag += 4

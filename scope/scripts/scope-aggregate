@@ -81,7 +81,7 @@ def main():
 
 	# Create table
 	results_table = np.core.records.fromrecords(
-		[[result.get(each, ["None", np.nan][formats[i] == "f8"]) for i, each in enumerate(sorted_columns)] for result in results],
+		[[result.get(each, ["|S256", np.nan][formats[i] == "f8"]) for i, each in enumerate(sorted_columns)] for result in results],
 		names=sorted_columns, formats=formats)
 
 	# Write results to filename	

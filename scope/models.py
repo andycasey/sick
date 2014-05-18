@@ -527,7 +527,7 @@ class Model(object):
 
             elif dimension == "doppler_shift":
                 # Check which channels have doppler shifts allowed and add them
-                dimensions.extend(["doppler_shift.{}".format(each) \
+                dimensions.extend(["z.{}".format(each) \
                     for each in self.channels if self.configuration[dimension].get(channel, False)])
 
             elif dimension == "convolve":
@@ -793,8 +793,8 @@ class Model(object):
                 if self.configuration["masks"][channel] is not None:
 
                     for region in self.configuration["masks"][channel]:
-                        if "doppler_shift.{}".format(channel) in theta:
-                            z = theta["doppler_shift.{}".format(channel)]
+                        if "z.{}".format(channel) in theta:
+                            z = theta["z.{}".format(channel)]
                             region = np.array(region) * (1. + z)
                             
                         index_start, index_end = np.searchsorted(dispersion_map, region)
@@ -830,19 +830,23 @@ class Model(object):
             # Any smoothing to apply?
             key = "convolve.{}".format(channel)
             if key in theta:
-                # TODO
                 profile_sigma = theta[key] / (2.*(2*np.log(2))**0.5)
                 true_profile_sigma = profile_sigma / np.mean(np.diff(model_dispersion))
                 model_flux = ndimage.gaussian_filter1d(model_flux, true_profile_sigma)
 
             # Doppler shift the spectra
-            key = "doppler_shift.{0}".format(channel)
+            key = "z.{0}".format(channel)
             if key in theta:
                 z = theta[key]
                 # Model dispersion needs to be uniformly sampled in log-wavelength space 
                 # before the doppler shift can be applied.
-                # TODO
-                model_dispersion *= (1. + z)
+                log_delta = np.diff(model_dispersion).min()
+                wl_min, wl_max = model_dispersion.min(), model_dispersion.max()
+                log_model_dispersion = (1. + z) * np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
+
+                # Interpolate flux to log-lambda dispersion
+                model_flux = np.interp(log_model_dispersion, model_dispersion, model_flux, left=np.nan, right=np.nan)
+                model_dispersion = log_model_dispersion
 
             # Interpolate model fluxes to observed dispersion map
             if observations is not None:
