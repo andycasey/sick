@@ -16,14 +16,256 @@ from time import time
 # Third-party
 import numpy as np
 import numpy.random as random
+from scipy import ndimage, optimize, interpolate
 
 # Module
 import specutils
 
 logger = logging.getLogger(__name__.split(".")[0])
 
+
+def __cross_correlate__(args):
+    """
+    Return a redshift by cross correlation of a model spectra and observed spectra.
+
+    Args:
+        channel (str): The channel to cross correlate on.
+        model (sick.models.Model): The model class.
+        observations (list of specutils.Spectrum1D objects): The observed data.
+    """
+
+    dispersion, observed_flux, model_flux, model = args
+
+    assert len(dispersion) == len(observed_flux)
+    assert len(observed_flux) == len(model_flux)
+
+  
+    padding = 2 * len(dispersion)
+
+    # Perform the cross-correlation
+    Fx = np.fft.fft(observed_flux, padding, )
+    Fy = np.fft.fft(model_flux, padding, )
+    varxy = np.sqrt(np.inner(observed_flux, observed_flux) * np.inner(model_flux, model_flux))
+
+    varxy = np.mean(observed_flux**2)**0.5 * np.mean(model_flux**2)**0.5 * len(dispersion)
+    fft_result = np.fft.ifft((Fx * Fy.conjugate())/varxy).real
+    
+    #fft_result = iFxy/varxy
+
+    # Put around symmetry
+    num = len(fft_result) - 1 if len(fft_result) % 2 else len(fft_result)
+
+    fft_y = np.zeros(num)
+
+    fft_y[:num/2] = fft_result[num/2:num]
+    fft_y[num/2:] = fft_result[:num/2]
+
+    fft_x = np.arange(num) - num/2
+
+    # Get initial guess of peak
+    p0 = np.array([fft_x[np.argmax(fft_y)], np.max(fft_y), 10])
+
+    gaussian_profile = lambda p, x: p[1] * np.exp(-(x - p[0])**2 / (2.0 * p[2]**2))
+    errfunc = lambda p, x, y: y - gaussian_profile(p, x)
+
+    result = optimize.leastsq(errfunc, p0.copy(), args=(fft_x, fft_y))
+
+    # variance
+    sigma = np.mean(2.0*(fft_y.real)**2)**0.5
+
+    # Create functions for interpolating back onto the dispersion map
+    points = (0, result[0][0], sigma)
+    interp_x = np.arange(num) - num/2
+
+    functions = []
+    for point in points:
+        idx = np.searchsorted(interp_x, point)
+        f = interpolate.interp1d(fft_x[idx-3:idx+3], dispersion[idx-3:idx+3], bounds_error=False, kind='cubic')
+        
+        functions.append(f)
+
+    # 0, p1, sigma
+    f, g, h = [func(point) for func, point in zip(functions, points)]
+
+    # Calculate velocity 
+    z = (1. - g/f)
+
+    # variance
+    z_err = np.abs(1 - h/f)
+    R = np.max(fft_y)
+
+    if dispersion[0] > 7000:
+        raise a
+
+    return z
+
+
+
+def prior(model, observations, size=1):
+
+    # Set the default priors:
+    prior_distributions = dict(zip(
+        model.grid_points.dtype.names,
+        ["uniform({0}, {1})".format(*model.grid_boundaries[d]) \
+            for d in model.grid_points.dtype.names]))
+    
+    # Default doppler shift priors
+    prior_distributions.update(dict(
+        [("doppler_shift.{}".format(c), "cross_correlate({})".format(c)) for c in model.channels]
+    ))
+
+    # Default jitter priors
+    prior_distributions.update(dict(
+        [("jitter.{}".format(c), "uniform(-10, 1)") for c in model.channels]
+    ))
+
+    # Get explicit priors
+    prior_distributions.update(model.configuration.get("priors", {}))
+
+    # Environment variables for explicit priors
+    # The channel names will be passed to contain all the information required
+    # for cross-correlation
+
+    env = { "locals": None, "globals": None, "__name__": None, "__file__": None,
+        "__builtins__": None, "normal": random.normal, "uniform": random.uniform,
+        "cross_correlate": __cross_correlate__ }
+
+    priors = []
+    while size > len(priors):
+
+        current_prior = []
+        model_intensities = {}
+        continuum_coefficients = {}
+
+        evaluated_priors = {}
+        scaled_observations = {}
+
+        for i, dimension in enumerate(model.dimensions):
+
+            # Have we got priors for all grid points?
+            if len(current_prior) == len(model.grid_points.dtype.names):
+
+                # Interpolate intensities at this point
+                model_intensities.update(model.interpolate_flux(current_prior))
+
+                # Check the intensities are finite, otherwise move on
+                if not np.all(map(np.all, map(np.isfinite, model_intensities.values()))):
+                    break
+
+                # Smooth the model intensities if required
+                for channel in model_intensities.keys():
+                    if "convolve.{}".format(channel) in model.dimensions:
+
+                        # We have to evaluate this prior now
+                        sigma = eval(prior_distributions["convolve.{}".format(channel)], env)
+                        kernel = (sigma/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(model.dispersion[channel]))
+                        #model_intensities[channel] = ndimage.gaussian_filter1d(model_intensities[channel], kernel)
+
+                        evaluated_priors["convolve.{}".format(channel)] = kernel
+
+                # Get continuum knots/coefficients for each aperture
+                for channel in model_intensities.keys():
+                    observed_channel = observations[model.channels.index(channel)]
+
+                    continuum = observed_channel.flux/np.interp(observed_channel.disp,
+                        model.dispersion[channel], model_intensities[channel], left=np.nan,
+                        right=np.nan)
+
+                    finite = np.isfinite(continuum)
+                    method = model.configuration["normalise"][channel]["method"]
+
+                    # Re-interpolate the observed fluxes where they are nans
+                    finite_observed_fluxes = np.isfinite(observed_channel.flux)
+                    cleaned_observed_flux = np.interp(observed_channel.disp,
+                        observed_channel.disp[finite_observed_fluxes], observed_channel.flux[finite_observed_fluxes])
+
+                    if method == "polynomial":
+                        # Fit polynomial coefficients
+                        order = model.configuration["normalise"][channel]["order"]
+                        continuum_coefficients[channel] = np.polyfit(observed_channel.disp[finite], continuum[finite], order)
+
+                        # Scale the intensities to the data
+                        interpolated_intensities = np.interp(observed_channel.disp, model.dispersion[channel],
+                            model_intensities[channel], left=np.nan, right=np.nan)
+
+                        observed_scaled_intensities = cleaned_observed_flux \
+                            / np.polyval(continuum_coefficients[channel], observed_channel.disp)
+
+                        # Get only finite overlap
+                        finite = np.isfinite(interpolated_intensities) * np.isfinite(observed_scaled_intensities)
+                        env.update({channel:
+                            (observed_channel.disp[finite], observed_scaled_intensities[finite], interpolated_intensities[finite], model)
+                        })
+
+                    elif method == "spline":
+                        num_knots = model.configuration["normalise"][channel]["knots"]
+
+                        # Determine knot spacing
+                        common_finite_dispersion = observed_channel.disp[finite]
+                        knot_spacing = np.ptp(common_finite_dispersion)/(num_knots + 1)
+
+                        # Determine the knots
+                        continuum_coefficients[channel] = np.arange(common_finite_dispersion[0],
+                            common_finite_dispersion[-1], knot_spacing)[:num_knots]
+
+            # Have we already evaluated this dimension?
+            if dimension in evaluated_priors.keys():
+                current_prior.append(evaluated_priors[dimension])
+                continue
+
+            # Is there an explicitly specified distribution for this dimension?
+            specified_prior = prior_distributions.get(dimension, "").lower()
+
+            # Do we have an explicit prior?
+            if len(specified_prior) > 0:
+
+                # Update the channels in env to contain the information necessary for cross-
+                # correlation
+
+                # Observed spectra pseduo-normalised with NANs re-interpolated
+                # Need: intensities re-mapped onto observed spectra
+                # Pass model information as well
+
+
+                # Evaluate the prior given the environment information
+                current_prior.append(eval(specified_prior, env))
+                continue
+
+            # These are all implicit priors from here onwards.
+    
+            # Smoothing
+            if dimension.startswith("convolve."):
+                raise NotImplementedError("no estimate of convolving a priori yet")
+
+            # Normalise
+            elif dimension.startswith("normalise."):
+                # Get the coefficient
+                channel = dimension.split(".")[1]
+                coefficient_index = int(dimension.split(".")[2][1:])
+                coefficient_value = continuum_coefficients[channel][coefficient_index]
+
+                # Polynomial coefficients will introduce their own scatter
+                # if the method is a spline, we should produce some scatter around the points
+                method = model.configuration["normalise"][channel]["method"]
+                if method == "polynomial":
+                    current_prior.append(coefficient_value)
+
+                elif method == "spline":
+                    # Get the difference between knot points
+                    knot_sigma = np.mean(np.diff(continuum_coefficients[channel]))/10.
+                    current_prior.append(random.normal(coefficient_value, knot_sigma))
+
+        # Check that we have the full number of walker values
+        if len(current_prior) == len(model.dimensions):
+            priors.append(current_prior)
+
+    return np.array(priors) if size > 1 else np.array(priors).flatten()
+
+
 def implicit(model, observations, size=1):
-    """ Generate implicit priors for all dimensions in the given model """
+    """
+    Generate implicit priors for all dimensions in the given model.
+    """
 
     priors = []
     while size > len(priors):

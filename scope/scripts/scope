@@ -12,31 +12,32 @@ import json
 import logging
 import multiprocessing
 import os
-import cPickle as pickle
-
-from json import dumps as json_dumps
 from time import time
 
 import numpy as np
 import pyfits
 
-import scope
+import sick
 
 def main():
+    """
+    Solve astrophysical parameters from spectral data.
+    """
 
-    parser = argparse.ArgumentParser(description="infer stellar parameters from spectra")
+    parser = argparse.ArgumentParser(description="the spectroscopic inference crank")
     parser.add_argument("model", type=str, help="YAML- or JSON-style model filename")
     parser.add_argument("spectra", nargs="+", help="filenames of spectra to analyse")
     parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
         type=str, default=os.getcwd())
-    parser.add_argument("-p", "--filename-prefix", dest="filename_prefix", default="scope")
+    parser.add_argument("-p", "--filename-prefix", dest="filename_prefix", default="sick_{ra_repr}_{dec_repr}")
     parser.add_argument("-mb", "--multi-beam", action="store_true", default=False)
     parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all")
     parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0)
     parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
     parser.add_argument("--debug", dest="debug", action="store_true", default=False)
-    parser.add_argument("-pf", "--plot-format", dest="plot_format", action="store", type=str, default="jpg")
+    parser.add_argument("-pf", "--plot-format", dest="plot_format", action="store", type=str, default="pdf")
+
     args = parser.parse_args()
 
     if not os.path.exists(args.model):
@@ -48,10 +49,10 @@ def main():
             ", ".join(available)))
 
     # Initialise logging
-    logger = logging.getLogger("scope")
+    logger = logging.getLogger("sick")
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
-    all_spectra = [scope.Spectrum.load(filename) for filename in args.spectra]
+    all_spectra = [sick.Spectrum.load(filename) for filename in args.spectra]
 
     if args.plotting:
         # Import plotting dependencies 
@@ -61,7 +62,6 @@ def main():
         import matplotlib.pyplot as plt
         from matplotlib.ticker import MaxNLocator
         import triangle
-
 
     # Are there multiple spectra in each aperture?
     if args.multi_beam:
@@ -81,7 +81,7 @@ def main():
         all_spectra = [all_spectra]
 
     # Load the model
-    model = scope.Model(args.model)
+    model = sick.Model(args.model)
     logger.info("Model information: {0}".format(model))
 
     # Define headers that we want in the results filename 
@@ -90,33 +90,24 @@ def main():
     default_metadata = {
         "model": model.hash, 
         "input_filenames": ", ".join(args.spectra),
-        "scope_version": scope.__version__,
+        "sick_version": sick.__version__,
         "walkers": model.configuration["solver"]["walkers"],
     }
 
-    combined_results_filename = os.path.join(args.output_dir, "{0}-results.fits".format(args.filename_prefix))
-    
     # If we are running optimise, generate some initial thetas
     if model.configuration["solver"].get("optimise", True):
         
-        threads = model.configuration["solver"].get("threads", 1)
-        initial_samples = model.configuration["solver"]["initial_samples"]
+        initial_thetas = []
+        def callback(result):
+            initial_thetas.append(result)
+        
+        pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
+        for _ in xrange(model.configuration["solver"]["initial_samples"]):
+            pool.apply_async(sick.priors.implicit, args=(model, all_spectra[0]), callback=callback)
 
-        if threads > 1:
+        pool.close()
+        pool.join()
 
-            initial_thetas = []
-            def callback(result):
-                initial_thetas.append(result)
-            
-            pool = multiprocessing.Pool(threads)
-            for _ in xrange(initial_samples):
-                pool.apply_async(scope.priors.implicit, args=(model, all_spectra[0]), callback=callback)
-
-            pool.close()
-            pool.join()
-
-        else:
-            initial_thetas = scope.priors.implicit(model, all_spectra[0], size=initial_samples)
     else:
         initial_thetas = None
 
@@ -152,7 +143,7 @@ def main():
         
         t_init = time()
         try:
-            posteriors, sampler, info = scope.solve(spectra, model, initial_thetas=initial_thetas)
+            posteriors, sampler, info = sick.solve(spectra, model, initial_thetas=initial_thetas)
 
         except:
             logger.exception("Failed to analyse #{0}:".format(i))
@@ -222,48 +213,6 @@ def main():
             hdulist = pyfits.HDUList([primary_hdu, table_hdu])
             hdulist.writeto(chain_filename, clobber=True)
 
-            """
-            try: metadata_columns
-            except NameError:
-                # Headers first
-                metadata_columns = [] + header_columns
-
-                # Dimensions (w/ uncertainties)
-                for column in model.grid_points.dtype.names:
-                    metadata_columns.append(column)
-                    for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
-                        metadata_columns.append(prefix + column)
-
-                # Nusiance parameters (w/ uncertainties)
-                nusiance_columns = scope.utils.unique_preserved_list(list(model.grid_points.dtype.names) \
-                    + model.dimensions)[len(model.grid_points.dtype.names):]
-                for column in nusiance_columns:
-                    metadata_columns.append(column)
-                    for prefix in ("u_maxabs_", "u_pos_", "u_neg_"):
-                        metadata_columns.append(prefix + column)
-
-                # Time elapsed, model
-                metadata_columns.extend(["time_elapsed", "final_mean_acceptance_fraction", "sample_sigma_mean_acceptance_fraction", 
-                    "model", "run_id", "walkers", "burn", "sample", "input_filenames", "chain_filename", "state_filename", 
-                    "acceptance_plot_filename", "corner_plot_filename", "pp_spectra_plot_filename", "pp_observed_spectra_filenames",
-                    "pp_modelled_spectra_filenames"])
-                metadata_formats = [("f8", "|S256")[isinstance(metadata[key], str)] for key in metadata_columns]
-
-                all_results = np.core.records.fromrecords([[metadata[key] for key in metadata_columns]],
-                    names=metadata_columns, formats=metadata_formats)
-
-            else:
-                row = np.core.records.fromrecords([[metadata.get(key, np.nan) for key in metadata_columns]],
-                    dtype=all_results.dtype)
-                all_results = np.append(all_results, row)
-
-            # Write results to filename    
-            primary_hdu = pyfits.PrimaryHDU()
-            table_hdu = pyfits.BinTableHDU(all_results)
-            hdulist = pyfits.HDUList([primary_hdu, table_hdu])
-            hdulist.writeto(combined_results_filename, clobber=True)
-            """
-
             with open(output("result.json"), "wb") as fp:
                 json.dump(metadata, fp)
 
@@ -273,8 +222,8 @@ def main():
                 sampler.pool.join()
 
             # Save sampler state
-            with open(output("model.state"), "wb") as fp:
-                pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
+            #with open(output("model.state"), "wb") as fp:
+            #    pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
             # Get the most likely sample
             ml_index = np.argmax(sampler.lnprobability.reshape(-1))
@@ -287,9 +236,8 @@ def main():
             # Plot results
             if args.plotting:
 
-                colours = ("#002F2F", "#046380", "#A7A373", "#8E2800", "#B64926", '#FFB03B', '#468966',
-                    "#A989CD", "#1695A3", "#EB7F00", "#2E0927", "#D90000", "#04756F", "#FF8C00", "#2185C5",
-                    "#3E454C")
+                colours = """#002F2F #046380 #A7A373 #8E2800 #B64926 #FFB03B #468966 #A989CD #1695A3 #EB7F00 #2E0927
+                    #D90000 #04756F #FF8C00 #2185C5 #3E454C""".split()
 
                 # Some filenames
                 autocorrelation_plot_filename = output("acor.{}".format(args.plot_format))
@@ -316,7 +264,7 @@ def main():
                     ax = fig.add_subplot(chains_per_plot, 1, (1 + j) % chains_per_plot)
                     for k in xrange(walkers):
                         ax.plot(info["chain"][k, :, j], c=colours[j % len(colours)], alpha=0.5)
-                    ax.set_ylabel(scope.utils.latexify([model.dimensions[j]])[0])
+                    ax.set_ylabel(sick.utils.latexify([model.dimensions[j]])[0])
                     ax.yaxis.set_major_locator(MaxNLocator(4))
                     ax.set_xlim(0, ax.get_xlim()[1])
 
@@ -335,7 +283,8 @@ def main():
                 # Plot the autocorrelation function
                 fig = plt.figure()
                 ax = fig.add_subplot(111)
-                rho_tau = [acor.function(np.mean(info["chain"][:, :, j], axis=0)) for j in xrange(len(model.dimensions))]
+                rho_tau = [acor.function(np.mean(info["chain"][:, :, j], axis=0)) \
+                    for j in xrange(len(model.dimensions))]
 
                 for i, dimension in enumerate(model.dimensions):
                     ax.plot(rho_tau[i], c=colours[i % len(colours)], lw=2)
@@ -347,13 +296,14 @@ def main():
                 # Make a corner plot with just the parameters of interest
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
-                    labels=scope.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices),
+                    labels=sick.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices),
                     quantiles=[.16, .50, .84], verbose=False)
                 fig.savefig(corner_plot_filename)
 
                 # Plot spectra
                 fig = plt.figure()
-                for i, (aperture, modelled_aperture, observed_aperture) in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, spectra)):
+                for i, (aperture, modelled_aperture, observed_aperture) \
+                in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, spectra)):
 
                     ax = fig.add_subplot(len(spectra), 1, i+1)
 
@@ -365,8 +315,8 @@ def main():
                         np.min([modelled_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
                     ]
 
-                    interpolated_model_flux = np.interp(observed_aperture.disp, modelled_aperture.disp, modelled_aperture.flux,
-                        left=np.nan, right=np.nan)
+                    interpolated_model_flux = np.interp(observed_aperture.disp, modelled_aperture.disp,
+                        modelled_aperture.flux, left=np.nan, right=np.nan)
 
                     ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
                     ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)

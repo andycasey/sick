@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-""" Aggregate results from SCOPE into a single file """
+""" Aggregate sick results into a single file """
 
 from __future__ import division, print_function
 
@@ -15,9 +15,9 @@ import numpy as np
 import pyfits
 
 def main():
-	""" Aggregate results from SCOPE into a single file """
+	""" Aggregate sick results into a single file """
 
-	parser = argparse.ArgumentParser(description="aggregate JSON results into tabular formats")
+	parser = argparse.ArgumentParser(description="aggregate JSON results into a tabular format")
 	parser.add_argument("output_filename", type=str, help="Output filename to aggregate results into")
 	parser.add_argument("result_filenames", nargs="+", help="JSON result filenames to combine")
 	parser.add_argument("--clobber", action="store", dest="clobber", default=False)
@@ -30,9 +30,9 @@ def main():
 		raise IOError("output filename {0} already exists and we have been asked not to clobber it".format(args.output_filename))
 
 	# Initialise logging
-	logger = logging.getLogger("scope")
-	logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
-
+	logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+	logger = logging.getLogger("sick")
+	
 	# Let's just assume it all aggregates from JSON to a FITS filename
 	results = []
 	for filename in args.result_filenames:
@@ -53,6 +53,7 @@ def main():
 	# Then all the others in alphabetical order
 	if "RA" in columns:
 		sorted_columns.append("RA")
+
 	if "DEC" in columns:
 		sorted_columns.append("DEC")
 

@@ -1,6 +1,6 @@
 # coding: utf-8
 
-""" General utilities for SCOPE """
+""" General utility functions  """
 
 from __future__ import division, print_function
 
@@ -12,6 +12,17 @@ __all__ = ["human_readable_digit", "find_spectral_overlap", "latexify",
 import numpy as np
 
 def latexify(labels, overwrite_common_labels=None):
+    """
+    Return LaTeX-ified labels.
+
+    Args:
+        labels (list of str objects): List of strings to LaTeX-ify.
+
+        overwrite_common_labels (dict): Dictionary of common labels to use.
+
+    Returns:
+        List of LaTeX labels.
+    """
 
     common_labels = {
         "teff": "$T_{\\rm eff}$ [K]",
@@ -38,16 +49,13 @@ def latexify(labels, overwrite_common_labels=None):
             aperture = label.split(".")[1]
             latex_labels.append("$V_{{los,{{{0}}}}}$ [km/s]".format(aperture))
 
-        elif label.startswith("smooth_model_flux."):
+        elif label.startswith("convolve."):
             aperture = label.split(".")[1]
             latex_labels.append("$\sigma_{{{0}}}$ [$\AA$]".format(aperture))
 
         elif label.startswith("normalise_observed."):
             aperture, coefficient = label.split(".")[1:]
-            if coefficient == "s":
-                latex_labels.append("$s_{{{0}}}$".format(aperture))
-            else:
-                latex_labels.append("${0}_{1}$".format(aperture[0], coefficient[1:]))
+            latex_labels.append("${0}_{1}$".format(aperture[0], coefficient))
 
         else:
             latex_labels.append(label)
@@ -56,35 +64,37 @@ def latexify(labels, overwrite_common_labels=None):
 
 
 def unique_preserved_list(original_list):
+    """
+    Return the unique items of a list in their original order.
+    """
+    
     seen = set()
     seen_add = seen.add
     return [x for x in original_list if x not in seen and not seen_add(x)]
 
 
 def human_readable_digit(number):
+    """
+    Return a more human-readable (English) digit.
+    """
+
     millnames = ["", "thousand", "million", "billion", "trillion"]
-    millidx = max(0, min(len(millnames)-1,
-                      int(np.floor(np.log10(abs(number))/3.0))))
-    return "{digit:.1f} {multiple}".format(
-        digit=number/10**(3*millidx),
-        multiple=millnames[millidx])
+    millidx = max(0, min(len(millnames)-1, int(np.floor(np.log10(abs(number))/3.0))))
+    return "{0:.1f} {1}".format(number/10**(3*millidx), millnames[millidx])
 
 
 def find_spectral_overlap(dispersion_maps, interval_resolution=1):
-    """ Checks whether the dispersion maps overlap or not.
+    """ 
+    Finds spectral overlap between dispersion maps.
 
-    Inputs
-    ------
-    dispersion_maps : list of list-types of length 2+
-        The dispersion maps in the format [(wl_1, wl_2, ... wl_N), ..., (wl_start, wl_end)]
+    Args:
+        dispersion_maps (list of np.arrays): Dispersion maps.
+
+        interval_resolution (float): The interval to check for overlap within.
     
-    interval_resolution : float, Angstroms
-        The resolution at which to search for overlap. Any overlap less than the
-        `interval_resolution` may not be detected.
-
-    Returns
-    -------
-    None if no overlap is found, otherwise the wavelength near the overlap is returned.
+    Returns:
+        None if no spectral overlap is found, otherwise it returns the approximate
+        wavelength where there is spectral overlap.
     """
 
     all_min = np.min(map(np.min, dispersion_maps))

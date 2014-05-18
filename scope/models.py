@@ -1,6 +1,6 @@
 # coding: utf-8
 
-""" Handles the loading and interpolation of flux models for SCOPE """
+""" Model class """
 
 from __future__ import division, print_function
 
@@ -29,158 +29,142 @@ from utils import find_spectral_overlap, human_readable_digit
 from specutils import Spectrum1D
 
 logger = logging.getLogger(__name__.split(".")[0])
-
-# This is a hacky (yet necessary) global variable that is used for when pre-loading and
-# multiprocessing are employed
 _scope_interpolator_ = None
 
 def load_model_data(filename, **kwargs):
-    """Loads dispersion/flux values from a given filename. This can be either a 1-column ASCII
-    file, or a single extension FITS file.
+    """
+    Load dispersion or flux data from a filename. 
 
-    Inputs
-    ------
-    filename : `str`
-        The filename to load the values from.
+    Args:
+        filename (str): the filename (FITS, memmap, ASCII) to load from. 
+    Returns:
+        An array of data values.
     """
 
-    # Check the open mode
-    if filename.endswith('.fits'):
+    # Load by the filename extension
+    if filename.endswith(".fits"):
         with pyfits.open(filename, **kwargs) as image:
             data = image[0].data
 
-    elif filename.endswith('.memmap') \
-    or filename.endswith(".cached"):
-
-        # Put in our preferred keyword arguments
-        kwargs.setdefault('mode', 'c')
-        kwargs.setdefault('dtype', np.float32)
+    elif filename.endswith(".memmap"):
+        # Set preferred keyword arguments
+        kwargs.setdefault("mode", "c")
+        # TODO: Do we still need copy-on-read?
+        kwargs.setdefault("dtype", np.double)
         data = np.memmap(filename, **kwargs)
 
     else:
-        # Assume it must be ASCII.
+        # Try ASCII
         data = np.loadtxt(filename, **kwargs)
-
+    
     return data
 
 
-def cache_model_point(filename, sigma=None, indices=None):
-
-    # Get the new filename
-    basename, extension = os.path.splitext(filename)
-    if extension == "cached":
-            raise ValueError("previously cached models cannot be re-convolved")
-
-    # Load and smooth the data
-    data = load_model_data(filename)
-    new_filename = basename + ".cached"
-
-    if sigma is not None:
-        data = ndimage.gaussian_filter1d(data, sigma)
-
-    if indices is not None:
-        data = data[indices[0]:indices[1]]
-
-    # Save it to disk
-    fp = np.memmap(new_filename, dtype=np.double, mode="w+",
-        shape=data.shape)
-    fp[:] = data[:]
-    del fp
-
-    return new_filename
-
-
 class Model(object):
-    """ A class to represent the data-generating model for spectra """
+    """
+    A class to represent the approximate data-generating model for spectra.
+    """
 
-    def __init__(self, filename):
-        """ Initialises a model class from a specified YAML or JSON-style filename """
+    def __init__(self, filename, validate=True):
+        """
+        Initialise a model class from a filename.
+
+        Args:
+            filename (str): a YAML or JSON-style formatted filename.
+            validate (bool): validate that the model is specified correctly.
+        Raises:
+            IOError: if `filename` does not exist.
+            ValueError: if there is a mis-match in dispersion and flux points.
+            TypeError: if the grid points do not contain column information.
+        """
 
         if not os.path.exists(filename):
-            raise IOError("no model filename '{0}' exists".format(filename))
+            raise IOError("no model filename {0} exists".format(filename))
 
-        parse = json.load if filename.endswith(".json") else yaml.load
+        parse = yaml.load if filename.endswith(".yaml") else json.load
         
         # Load the model filename
         with open(filename, "r") as fp:
             self.configuration = parse(fp)
 
-        # Load the dispersions
-        self.dispersion = {}
+        # Perform validation checks to ensure there are no forseeable problems
+        if validate:
+            self.validate()
+
+        # For legacy purposes, we need to explicitly get a data type
         dtype = np.double if self.configuration["solver"].get("use_double", False) else np.float32
-        for aperture in self.apertures:
-            self.dispersion[aperture] = load_model_data(self.configuration["model"][aperture]["dispersion_filename"],
-                dtype=dtype)
 
-        # Model apertures can either have:
-        # flux_folder, flux_filename_match
-        #   OR
-        # points_filename, flux_filename
+        # Regardless of whether the model is cached or not, the dispersion is specified in
+        # the same way: channels -> <channel_name> -> dispersion_filename
 
-        # The first is where we will need to fully load the spectra at each point
-        # the second is where we need to just load each file
-        
-        # It can only be one or the other!
+        # Load the dispersions
+        self.dispersion = dict(zip(self.channels, \
+            [load_model_data(self.configuration["channels"][channel]["dispersion_filename"], dtype=dtype) \
+            for channel in self.channels]))
 
-        if  "points_filename" in self.configuration["model"][self.apertures[0]] \
-        and "flux_filename" in self.configuration["model"][self.apertures[0]]:
-            # Check that all apertures are cached and they all refer to the same
-            # points filename (if any)
-
-            original_points_filename = self.configuration["model"][self.apertures[0]]["points_filename"]
-            for aperture in self.apertures[1:]:
-                if self.configuration["model"][aperture].get("points_filename",
-                    original_points_filename) != original_points_filename:
-                    raise ValueError("points filename must be the same for all cached apertures")
+        # Is this a cached model?
+        if "points_filename" in self.configuration["channels"]:
 
             # Grid points must be pickled data so that the dimension names are known
-            with open(original_points_filename, "rb") as fp:
+            with open(self.configuration["channels"]["points_filename"], "rb") as fp:
                 self.grid_points = pickle.load(fp)
-
+                num_points = len(self.grid_points)
+                
             if len(self.grid_points.dtype.names) == 0:
-                raise TypeError("cached grid points filename has no dimension names as columns")
+                raise TypeError("cached grid points filename has no column names")
 
-            # Load the fluxes, which must be as memmaps
             global _scope_interpolator_
 
-            num_points = len(self.grid_points)
-            fluxes = [] 
-            maybe_warn = []
-            dtype = np.double if self.configuration["solver"].get("use_double", False) else np.float32
-            for i, aperture in enumerate(self.apertures):
-                if not "flux_filename" in self.configuration["model"][aperture]:
-                    maybe_warn.append(aperture)
-                    continue
-                fluxes.append(np.memmap(self.configuration["model"][aperture]["flux_filename"], mode="r+", dtype=dtype).reshape((num_points, -1)))
+            # Do we have a single filename for all fluxes?
+            missing_flux_filenames = []
+            if "flux_filename" in self.configuration["channels"]:
+                
+                fluxes = np.memmap(self.configuration["channels"]["flux_filename"], 
+                    mode="r+", dtype=dtype).reshape((num_points, -1))
 
-            total_pixels = sum([each.shape[1] for each in fluxes])
-            total_expected_pixels = sum(map(len, [self.dispersion[aperture] for aperture in self.apertures]))
-            if total_pixels != total_expected_pixels:
-                for aperture in maybe_warn:
-                    logger.warn("No flux filename specified for {0} aperture".format(aperture))
+            else:
+                # We are expecting flux filenames in each channel (this is less efficient)
+                fluxes = []
+                for i, channel in enumerate(self.channels):
+                    if not "flux_filename" in self.configuration["channels"][channel]:
+                        missing_flux_filenames.append(channel)
+                        #raise KeyError("no flux filename specified for {} channel".format(channel))
+                        continue
 
-                raise ValueError("the total flux pixels for a spectrum ({0}) was different to "\
-                    "what was expected ({1})".format(total_pixels, total_expected_pixels))
+                    fluxes.append(np.memmap(self.configuration["channels"][channel]["flux_filename"], 
+                        mode="r+", dtype=dtype).reshape((num_points, -1)))
+
+                fluxes = fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes)
+
+            total_flux_pixels = fluxes.shape[1]
+            total_dispersion_pixels = sum(map(len, self.dispersion.values()))
+            if total_flux_pixels != total_dispersion_pixels:
+                for channel in missing_flux_filenames:
+                    logger.warn("No flux filename specified for {} channel".format(channel))
+
+                raise ValueError("the total flux pixels ({0}) was different to what was expected ({1})".format(
+                    total_flux_pixels, total_dispersion_pixels))
 
             _scope_interpolator_ = interpolate.LinearNDInterpolator(
-                self.grid_points.view(float).reshape((num_points, -1)),
-                fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes),
-                )
-
+                self.grid_points.view(float).reshape((num_points, -1)), fluxes)
             del fluxes
 
-        elif "flux_folder" in self.configuration["model"][self.apertures[0]] \
-        and  "flux_filename_match" in self.configuration["model"][self.apertures[0]]:
+        else:
+            # We are expecting dispersion_filename and flux_filenames in each channel
 
+            # Check that there aren't any additional things specified outside of the
+            # actual channel names
+            assert len(self.configuration["channels"]) == len(self.channels)
+            
             self.grid_points = None
             self.flux_filenames = {}
 
             dimensions = []
-            for i, aperture in enumerate(self.apertures):
+            for i, channel in enumerate(self.channels):
 
                 # We will store the filenames and we will load and interpolate on the fly
-                folder = self.configuration["model"][aperture]["flux_folder"]
-                re_match = self.configuration["model"][aperture]["flux_filename_match"]
+                folder = self.configuration["channels"][channel]["flux_folder"]
+                re_match = self.configuration["channels"][channel]["flux_filename_match"]
 
                 all_filenames = glob(os.path.join(folder, "*"))
 
@@ -197,292 +181,426 @@ class Model(object):
                         matched_filenames.append(filename)
 
                 if self.grid_points is not None and len(points) != len(self.grid_points):
-                    raise ValueError("number of model points found in {0} aperture ({1})"
-                        " did not match the number in {2} aperture ({3})".format(self.apertures[0],
-                        len(self.grid_points), aperture, len(points)))
+                    raise ValueError("number of model points found in {0} channel ({1})"
+                        " did not match the number in {2} channel ({3})".format(
+                        self.channels[0], len(self.grid_points), channel, len(points)))
                        
                 # Check the first model flux to ensure it's the same length as the dispersion array
                 first_point_flux = load_model_data(matched_filenames[0])
-                if len(first_point_flux) != len(self.dispersion[aperture]):
+                if len(first_point_flux) != len(self.dispersion[channel]):
                     raise ValueError("number of dispersion ({0}) and flux ({1}) points in {2} "
-                        "aperture do not match".format(len(self.dispersion[aperture]), len(first_point_flux),
-                        aperture))
+                        "channel do not match".format(len(self.dispersion[channel]), len(first_point_flux),
+                        channel))
 
                 if i == 0:
                     # Save the grid points as a record array
                     self.grid_points = np.core.records.fromrecords(points, names=dimensions,
                         formats=["f8"]*len(dimensions))
-                    self.flux_filenames[aperture] = matched_filenames
+                    self.flux_filenames[channel] = matched_filenames
 
                 else:
                     sort_indices = np.argsort(map(self.check_grid_point, points))
-                    self.flux_filenames[aperture] = [matched_filenames[index] for index in sort_indices]
-           
-        else:
-            raise ValueError("no flux information provided for {0} aperture".format(self.apertures[0]))
+                    self.flux_filenames[channel] = [matched_filenames[index] for index in sort_indices]
 
         # Pre-compute the grid boundaries
-        self.grid_boundaries = {}
-        for dimension in self.grid_points.dtype.names:
-            self.grid_boundaries[dimension] = np.array([
-                np.min(self.grid_points[dimension]),
-                np.max(self.grid_points[dimension])
-            ])
-
-        # Perform validation checks to ensure there are no forseeable problems
-        self.validate()
+        self.grid_boundaries = dict(zip(self.grid_points.dtype.names, [(np.min(self.grid_points[_]), np.max(self.grid_points[_])) \
+            for _ in self.grid_points.dtype.names]))
         return None
 
-    def __repr__(self):
-        num_apertures = len(self.apertures)
-        num_models = len(self.grid_points) * num_apertures
+
+    def __str__(self):
+        return unicode(self).encode("utf-8")
+
+
+    def __unicode__(self):
+        num_channels = len(self.channels)
+        num_models = len(self.grid_points) * num_channels
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return "{module}.Model({num_models} models; {num_total_parameters} parameters: {num_nuisance_parameters} additional parameters,"\
-            " {num_grid_parameters} grid parameters: {parameters}; {num_apertures} apertures: {apertures}; ~{num_pixels} pixels)".format(
-            module=self.__module__, num_models=num_models, num_apertures=num_apertures, apertures=', '.join(self.apertures),
+        return u"{module}.Model({num_models} models; {num_total_parameters} parameters: {num_nuisance_parameters} additional parameters,"\
+            " {num_grid_parameters} grid parameters: {parameters}; {num_channels} channels: {channels}; ~{num_pixels} pixels)".format(
+            module=self.__module__, num_models=num_models, num_channels=num_channels, channels=', '.join(self.channels),
             num_pixels=human_readable_digit(num_pixels), num_total_parameters=len(self.dimensions),
             num_nuisance_parameters=len(self.dimensions) - len(self.grid_points.dtype.names), 
             num_grid_parameters=len(self.grid_points.dtype.names), parameters=', '.join(self.grid_points.dtype.names))
+
+
+    def __repr__(self):
+        return u"<{0}.Model object with hash {1} at {2}>".format(self.__module__, self.hash[:10], hex(id(self)))
+
 
     @property
     def hash(self):
         return md5(json.dumps(self.configuration).encode("utf-8")).hexdigest()
 
+    
     @property
-    def apertures(self):
-        if hasattr(self, "_mapped_apertures"):
-            return self._mapped_apertures
-        return self.configuration["model"].keys()
+    def channels(self):
+        if hasattr(self, "_channels"):
+            return self._channels
+
+        protected_channel_names = ("points_filename", "flux_filename")
+        return list(set(self.configuration["channels"].keys()).difference(protected_channel_names))
+
+
+    def map_channels(self, observations):
+        """
+        Reference model channels to observed spectra based on their dispersions.
+
+        Args:
+            observations (list of Spectrum1D objects): The observed spectra.
+        Returns:
+            mapped_channels (list of str): A list of model channels mapped to each observed channel.
+        """
+
+        mapped_channels = []
+        for i, spectrum in enumerate(observations):
+
+            # Initialise the list
+            channels_found = []
+
+            observed_wlmin = np.min(spectrum.disp)
+            observed_wlmax = np.max(spectrum.disp)
+
+            for model_channel, model_dispersion in self.dispersion.iteritems():
+
+                model_wlmin = np.min(model_dispersion)
+                model_wlmax = np.max(model_dispersion)
+
+                # Is there overlap?
+                if (model_wlmin <= observed_wlmin and observed_wlmax <= model_wlmax) \
+                or (observed_wlmin <= model_wlmin and model_wlmax <= observed_wlmax) \
+                or (model_wlmin <= observed_wlmin and (observed_wlmin <= model_wlmax and model_wlmax <= observed_wlmax)) \
+                or ((observed_wlmin <= model_wlmin and model_wlmin <= observed_wlmax) and observed_wlmax <= model_wlmax):
+                    channels_found.append(model_channel)
+
+            if len(channels_found) == 0:
+                raise ValueError("no model channels found for observed dispersion map from {wl_start:.1f} to {wl_end:.1f}".format(
+                    wl_start=observed_wlmin, wl_end=observed_wlmax))
+
+            elif len(channels_found) > 1:
+                index = np.argmin(np.abs(np.mean(spectrum.disp) - map(np.mean, [self.dispersion[channel] for channel in channels_found])))
+                channels_found = [channels_found[index]]
+
+                logging.warn("Multiple model channels found for observed channel {0} ({1:.0f} to {2:.0f}). Using '{0}'"
+                    " because it's closest by mean dispersion.".format(i, observed_wlmin, observed_wlmax, channels_found[0]))
+
+
+            mapped_channels.append(channels_found[0])
+
+        # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
+        for channel, spectrum in zip(mapped_channels, observations):
+
+            mean_observed_pixel_size = np.mean(np.diff(spectrum.disp))
+            mean_model_pixel_size = np.mean(np.diff(self.dispersion[channel]))
+            if mean_model_pixel_size > mean_observed_pixel_size:
+                raise ValueError("the mean model pixel size in the {channel} channel is larger than the mean"
+                    " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}".format(
+                        channel=channel, wl_start=np.min(spectrum.disp), wl_end=np.max(spectrum.disp)))
+
+        # Keep an internal reference of the channel mapping
+        self._channels = mapped_channels
+        return mapped_channels
+
 
     def validate(self):
-        """ Checks aspects of the model for any forseeable errors """
+        """
+        Validate that the model has been specified properly.
+        """
 
-        self._validate_models()
+        self._validate_channels()
         self._validate_solver()
         self._validate_normalisation()
         self._validate_doppler()
+        self._validate_smoothing()
         self._validate_masks()
+
         return True
 
-    def _check_apertures(self, key):
-        for aperture in self.apertures:
-            if aperture not in self.configuration[key]:
-                raise KeyError("no aperture '{aperture}' listed in {key}, but"
-                " it's specified in the models".format(aperture=aperture, key=key))
-        return True
 
     def _validate_normalisation(self):
+        """
+        Validate that the normalisation settings in the model are specified correctly.
 
-        self._check_apertures("normalise_observed")
+        Returns:
+            True if the normalisation settings for this model are specified correctly.
+        Raises:
+            KeyError: if a model channel does not have a normalisation settings specified.
+            TypeError: if an incorrect data type is specified for a normalisation setting.
+            ValueError: if an incompatible data value is specified for a normalisation setting.
+        """
 
-        # Verify the settings for each aperture.
-        for aperture in self.apertures:
+        if "normalise" not in self.configuration.keys():
+            return True
 
-            settings = self.configuration["normalise_observed"][aperture]
+        # Verify the settings for each channel.
+        for channel in self.channels:
 
-            # Check that settings exist
-            if "perform" not in settings:
-                raise KeyError("configuration setting 'normalise_observed.{}.perform' not found".format(aperture))
+            # Are there any normalisation settings specified for this channel?
+            if not self.configuration["normalise"].get(channel, None): continue
 
-            # If perform is false then we don't need any more details
-            if settings["perform"]:
+            settings = self.configuration["normalise"][channel]
+            if "method" not in settings:
+                raise KeyError("configuration setting 'normalise.{}.method' not found".format(channel))
 
-                if "method" not in settings:
-                    raise KeyError("configuration setting 'normalise_observed.{}.method' not found".format(aperture))
+            method = settings["method"]
+            if method == "spline":
 
-                method = settings["method"]
-                if method == "spline":
+                knots = settings.get("knots", 0)
+                if not isinstance(knots, (int, )):
+                    # Could be a list-type of rest wavelength points
+                    if not isinstance(knots, (tuple, list, np.ndarray)):
+                        raise TypeError("configuration setting 'normalise.{}.knots' is expected"
+                            "to be an integer or a list-type of rest wavelength points".format(channel))
 
-                    if "knots" not in settings:
-                        raise KeyError("configuration setting 'normalise_observed.{aperture}.knots' not found".format(
-                            aperture=aperture))
+                    try: map(float, knots) 
+                    except (TypeError, ValueError) as e:
+                        raise TypeError("configuration setting 'normalise.{}.knots' is expected"
+                            "to be an integer or a list-type of rest wavelength points".format(channel))
 
-                    elif not isinstance(settings["knots"], (int, )):
-                        # Could be a list-type of rest wavelength points
-                        if not isinstance(settings["knots"], (tuple, list, np.ndarray)):
-                            raise TypeError("configuration setting 'normalise_observed.{aperture}.knots' is expected"
-                                "to be an integer or a list-type of rest wavelength points".format(aperture=aperture))
+            elif method == "polynomial":
 
-                        try:
-                            map(float, settings["knots"])
-                        except (TypeError, ValueError):
-                            raise TypeError("configuration setting 'normalise_observed.{aperture}.knots' is expected"
-                                "to be an integer or a list-type of rest wavelength points".format(aperture=aperture))
+                if "order" not in settings:
+                    raise KeyError("configuration setting 'normalise.{}.order' not found".format(channel))
 
-                elif method == "polynomial":
+                elif not isinstance(settings["order"], (float, int)):
+                    raise TypeError("configuration setting 'normalise.{}.order'"
+                        " is expected to be an integer-like object".format(channel))
 
-                    if "order" not in settings:
-                        raise KeyError("configuration setting 'normalise_observed.{aperture}.order' not found".format(
-                            aperture=aperture))
-
-                    elif not isinstance(settings["order"], (float, int)):
-                        raise TypeError("configuration setting 'normalise_observed.{aperture}.order'"
-                            " is expected to be an integer-like object".format(aperture=aperture))
-
-                else:
-                    raise ValueError("configuration setting 'normalise_observed.{aperture}.method' not recognised"
-                        " -- must be spline or polynomial".format(aperture=aperture))
+            else:
+                raise ValueError("configuration setting 'normalise.{}.method' not recognised"
+                    " -- must be spline or polynomial".format(channel))
+        
         return True
 
 
     def _validate_solver(self):
-        """ Validates the configuration settings for the solver """
+        """
+        Validate that the solver settings in the model are specified correctly.
+
+        Returns:
+            True if the solver settings for this model are specified correctly.
+        Raises:
+            KeyError: if a model channel does not have a normalisation settings specified.
+            TypeError: if an incorrect data type is specified for a normalisation setting.
+        """
 
         solver = self.configuration.get("solver", {})
-        integers_required = ("sample", "walkers", "burn")
-        for key in integers_required:
+        integer_keys_required = ("sample", "walkers", "burn")
+        for key in integer_keys_required:
             if key not in solver:
                 raise KeyError("configuration setting 'solver.{}' not found".format(key))
 
-            try:
-                int(solver[key])
-            except (ValueError, TypeError):
+            try: int(solver[key])
+            except (ValueError, TypeError) as e:
                 raise TypeError("configuration setting 'solver.{}' must be an integer-like type".format(key))
 
         if solver.get("optimise", True):
-            # Check for initial_samples
+
+            # If we are optimising, then we need initial_samples
             if "initial_samples" not in solver:
-                raise KeyError("configuration setting 'solver.initial_samples' not found")
-            try:
-                int(solver["initial_samples"])
-            except (ValueError, TypeError):
+                raise KeyError("configuration setting 'solver.initial_samples' is required for optimisation and was not found")
+
+            try: int(solver["initial_samples"])
+            except (ValueError, TypeError) as e:
                 raise TypeError("configuration setting 'solver.initial_samples' must be an integer-like type")
 
         if "threads" in solver and not isinstance(solver["threads"], (float, int)):
             raise TypeError("configuration setting 'solver.threads' must be an integer-like type")
+
         return True
 
 
     def _validate_doppler(self):
-        """ Validates the configuration settings for doppler shifts """
+        """
+        Validate that the doppler shift settings in the model are specified correctly.
 
-        self._check_apertures("doppler_shift")
-        for aperture in self.apertures:
-            if 'perform' not in self.configuration['doppler_shift'][aperture]:
-                raise KeyError("configuration setting 'doppler_shift.{}.perform' not found".format(aperture))
+        Returns:
+            True if the doppler settings for this model are specified correctly.
+        """
+
+        if "doppler_shift" not in self.configuration.keys():
+            return True 
+
+        for channel in self.channels:
+            if not self.configuration["doppler_shift"].get(channel, None): continue
+
+            # Perform any additional doppler shift checks here
         return True
 
 
     def _validate_smoothing(self):
+        """
+        Validate that the smoothing settings in the model are specified correctly.
 
-        self._check_apertures("smooth_model_flux")
+        Returns:
+            True if the smoothing settings for this model are specified correctly.
+        """ 
 
-        for aperture in self.apertures:
-            settings = self.configuration["smooth_model_flux"][aperture]
-            if "perform" not in settings:
-                raise KeyError("configuration setting 'smooth_model_flux.{0}.perform' not found".format(
-                    aperture))
+        if "convolve" not in self.configuration.keys():
+            return True 
 
-            for setting, value in settings.iteritems():
-                if setting == "perform" and not value:
-                    break
-                if setting == "kernel" and not isinstance(value, (int, float)):
-                    raise TypeError("configuration setting 'smooth_model_flux.{0}.kernel' is"
-                        " expected to be a float-type".format(aperture))
+        for channel in self.channels:
+            if not self.configuration["convolve"].get(channel, None): continue
         return True
 
 
-    def _validate_models(self):
-        """ Validates the configuration settings for the model """
+    def _validate_channels(self):
+        """
+        Validate that the channels in the model are specified correctly.
 
-        if "model" not in self.configuration.keys():
-            raise KeyError("no 'model' attribute found in model file")
+        Returns:
+            True if the channels in the model are specified correctly.
+        Raises:
+            KeyError: if no channels are specified.
+            ValueError: if an illegal character is present in any of the channel names.
+        """
 
-        for aperture in self.apertures:
-            if "." in aperture:
-                raise ValueError("aperture name '{0}' cannot contain a full-stop character".format(aperture))
+        if "channels" not in self.configuration.keys():
+            raise KeyError("no channels found in model file")
+
+        for channel in self.channels:
+            if "." in channel:
+                raise ValueError("channel name '{0}' cannot contain a full-stop character".format(channel))
+        return True
 
 
     def _validate_masks(self):
-        """ Validate the provided mask settings """
+        """
+        Validate that the masks in the model are specified correctly.
+
+        Returns:
+            True if the masks in the model are specified correctly.
+        Raises:
+            TypeError: if the masks are not specified correctly.
+        """
 
         # Masks are optional
         if "masks" not in self.configuration.keys():
             return True
 
-        for aperture in self.configuration["masks"].keys():
-            if aperture not in self.apertures: continue
+        for channel in self.channels: 
+            if not self.configuration["masks"].get(channel, None): continue
 
-            if not isinstance(self.configuration["masks"][aperture], (tuple, list)):
+            if not isinstance(self.configuration["masks"][channel], (tuple, list)):
                 raise TypeError("masks must be a list of regions (e.g., [start, stop])")
 
-            for region in self.configuration["masks"][aperture]:
+            for region in self.configuration["masks"][channel]:
                 if not isinstance(region, (list, tuple)) or len(region) != 2:
                     raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
 
-                try:
-                    map(float, region)
+                try: map(float, region)
                 except TypeError:
                     raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
-
         return True
 
 
     @property
     def dimensions(self):
-        """ Returns the dimension names for a given model """
+        """
+        Return the dimensions for the model.
+        """
 
         if hasattr(self, "_dimensions"):
             return self._dimensions
 
         dimensions = [] + list(self.grid_points.dtype.names)
         for dimension in self.configuration.keys():
-
-            # Protected keywords
-            if dimension in ("solver", "model"): continue
-
-            # Add all smoothing-related dimensions
-            elif dimension == "smooth_model_flux":
-                for aperture in self.apertures:
-                    if self.configuration[dimension][aperture]["perform"] \
-                    and self.configuration[dimension][aperture]["kernel"] == "free":
-                        dimensions.append("smooth_model_flux.{0}.kernel".format(aperture))
-
-            # Add doppler-related dimensions
-            elif dimension == "doppler_shift":
-                for aperture in self.apertures:
-                    if self.configuration[dimension][aperture]["perform"]:
-                        dimensions.append("doppler_shift.{0}".format(aperture))
-
-            # Add normalisation-related dimensions
-            elif dimension == "normalise_observed":
-                for aperture in self.apertures:
-                    if self.configuration[dimension][aperture]["perform"]:
-                        if self.configuration[dimension][aperture].get("method", "polynomial") == "polynomial":
-                            dimensions.extend(
-                                ["normalise_observed.{0}.a{1}".format(aperture, i) \
-                                    for i in xrange(self.configuration["normalise_observed"][aperture]["order"] + 1)])
-
-                        #else: #spline
-                        #    dimensions.append("normalise_observed.{0}.s".format(aperture))
-
-        # Append jitter dimensions
-        for aperture in self.apertures:
-            dimensions.append("jitter.{0}".format(aperture))
         
+            if dimension == "normalise":
+                # Append normalisation dimensions for each channel
+                for channel in self.channels:
+                    if not self.configuration[dimension].get(channel, False): continue
+
+                    method = self.configuration[dimension][channel]["method"]
+                    assert method in ("polynomial", "spline")
+
+                    if method == "polynomial":
+                        order = self.configuration[dimension][channel]["order"]
+                        dimensions.extend(["normalise.{0}.c{1}".format(channel, i) \
+                            for i in range(order + 1)])
+
+                    else: # Spline
+                        knots = self.configuration[dimension][channel].get("knots", 0)
+                        dimensions.extend(["normalise.{0}.k{1}".format(channel, i) \
+                            for i in range(knots + 1)])
+
+            elif dimension == "doppler_shift":
+                # Check which channels have doppler shifts allowed and add them
+                dimensions.extend(["doppler_shift.{}".format(each) \
+                    for each in self.channels if self.configuration[dimension].get(channel, False)])
+
+            elif dimension == "convolve":
+                # Check which channels have smoothing allowed and add them
+                dimensions.extend(["convolve.{}".format(each) \
+                    for each in self.channels if self.configuration[dimension].get(channel, False)])  
+        
+        # Append jitter
+        dimensions.extend(["jitter.{}".format(channel) for channel in self.channels])
+
         # Cache for future
         setattr(self, "_dimensions", dimensions)
         
         return dimensions
 
 
-    def cache(self, grid_points_filename, dispersion_filenames, flux_filename, wavelengths=None, smoothing_kernels=None,
-        sampling=None):
-        """ Cache the model dispersions and fluxes for faster read access at runtime.
-        Spectra can be pre-convolved
+    def cache(self, grid_points_filename, dispersion_filenames, flux_filename,
+        wavelengths=None, smoothing_kernels=None, sampling_rate=None, clobber=False):
+        """
+        Cache the model for faster read access at runtime.
 
+        Args:
+            grid_points_filename (str): filename for pickling the model grid points.
+
+            dispersion_filenames (dict): A dictionary containing channels as keys,
+                and filenames as values. The dispersion points will be memory-mapped
+                to the given filenames.
+
+            flux_filename (str): The flux points will be combined into a single array
+                and memory-mapped to the given filename.
+
+            wavelengths (dict): A dictionary containing channels as keys and wavelength
+                regions as values. The wavelength regions specify the minimal and
+                maximal regions to cache in each channel. By default, the full channel
+                will be cached.
+
+            smoothing_kernels (dict): A dictionary containing channels as keys and
+                smoothing kernels as values. By default no smoothing is performed.
+
+            sampling_rate (dict): A dictionary containing channels as keys and
+                sampling rate (integers) as values.
+
+            clobber (bool): Clobber existing grid point, dispersion and flux filenames
+                if they already exist.
+
+        Returns:
+            Dictionary containing the current model configuration with the newly
+            cached channel parameters. This dictionary can be directly written to a
+            new model filename.
+
+        Raises:
+            IOError: if clobber is set as False, and any of the grid_points, dispersion,
+                or flux filenames already exist.
+
+            TypeError: if invalid smoothing kernels or wavelengths are supplied
         """
 
+        if not clobber:
+            filenames = [grid_points_filename, flux_filename] + dispersion_filenames.values()
+            filenames_exist = map(os.path.exists, filenames)
+            if any(filenames_exist):
+                raise IOError("filename {} exists and we've been asked not to clobber it".format(
+                    filenames[filenames_exist.index(True)]))
+
         if not isinstance(smoothing_kernels, dict) and smoothing_kernels is not None:
-            raise TypeError("smoothing kernels must be a dictionary-type with apertures as keys"\
+            raise TypeError("smoothing kernels must be a dictionary-type with channels as keys"\
                 " and kernels as values")
 
         if not isinstance(wavelengths, dict) and wavelengths is not None:
-            raise TypeError("wavelengths must be a dictionary-type with apertures as keys")
+            raise TypeError("wavelengths must be a dictionary-type with channels as keys")
 
-        if sampling is None:
-            sampling = dict(zip(self.apertures, np.ones(len(self.apertures))))
+        if sampling_rate is None:
+            sampling_rate = dict(zip(self.channels, np.ones(len(self.channels))))
 
         # We need to know how big our arrays will be
         n_points = len(self.grid_points)
@@ -490,20 +608,20 @@ class Model(object):
         if wavelengths is None:
             n_pixels = []
             wavelength_indices = {}
-            for aperture in self.apertures:
-                pixels = len(self.dispersion[aperture])
-                n_pixels.append(int(np.ceil(pixels/float(sampling[aperture]))))
-                wavelength_indices[aperture] = np.array([0, pixels])
+            for channel in self.channels:
+                pixels = len(self.dispersion[channel])
+                n_pixels.append(int(np.ceil(pixels/float(sampling_rate[channel]))))
+                wavelength_indices[channel] = np.array([0, pixels])
 
         else:
             n_pixels = []
             wavelength_indices = {}
-            for aperture in self.apertures:
-                start, end = self.dispersion[aperture].searchsorted(wavelengths[aperture])
-                wavelength_indices[aperture] = np.array([start, end])
+            for channel in self.channels:
+                start, end = self.dispersion[channel].searchsorted(wavelengths[channel])
+                wavelength_indices[channel] = np.array([start, end])
 
                 pixels = end - start 
-                n_pixels.append(int(np.ceil(pixels/float(sampling[aperture]))))
+                n_pixels.append(int(np.ceil(pixels/float(sampling_rate[channel]))))
 
         # Create the grid points filename
         with open(grid_points_filename, "wb") as fp:
@@ -511,33 +629,34 @@ class Model(object):
 
         # Create empty memmap
         dtype = np.double if self.configuration["solver"].get("use_double", False) else np.float32
-        flux = np.memmap(flux_filename, dtype=np.float32, mode="w+", shape=(n_points, np.sum(n_pixels)))
+        flux = np.memmap(flux_filename, dtype=dtype, mode="w+", shape=(n_points, np.sum(n_pixels)))
         for i in xrange(n_points):
 
             logger.info("Caching point {0} of {1} ({2:.1f}%)".format(i+1, n_points, 100*(i+1.)/n_points))
-            for j, aperture in enumerate(self.apertures):
+            for j, channel in enumerate(self.channels):
 
                 sj, ej = map(int, map(sum, [n_pixels[:j], n_pixels[:j+1]]))
 
                 # Get the flux
-                si, ei = wavelength_indices[aperture]
-                aperture_flux = load_model_data(self.flux_filenames[aperture][i])
+                si, ei = wavelength_indices[channel]
+                channel_flux = load_model_data(self.flux_filenames[channel][i])
 
                 # Do we need to convolve it first?
-                if smoothing_kernels is not None and smoothing_kernels.has_key(aperture):
-                    sigma = (smoothing_kernels[aperture]/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(self.dispersion[aperture]))
-                    aperture_flux = ndimage.gaussian_filter1d(aperture_flux, sigma)
+                if smoothing_kernels is not None and smoothing_kernels.has_key(channel):
+                    sigma = (smoothing_kernels[channel]/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(self.dispersion[channel]))
+                    channel_flux = ndimage.gaussian_filter1d(channel_flux, sigma)
 
                 # Do we need to resample?
-                flux[i, sj:ej] = aperture_flux[si:ei:sampling[aperture]]
+                flux[i, sj:ej] = channel_flux[si:ei:sampling_rate[channel]]
 
         # Save the resampled dispersion arrays to disk
-        for aperture, dispersion_filename in dispersion_filenames.iteritems():
-            si, ei = wavelength_indices[aperture]
+        for channel, dispersion_filename in dispersion_filenames.iteritems():
+            si, ei = wavelength_indices[channel]
 
             disp = np.memmap(dispersion_filename, dtype=dtype, mode="w+",
-                shape=self.dispersion[aperture][si:ei:sampling[aperture]].shape)
-            disp[:] = np.ascontiguousarray(self.dispersion[aperture][si:ei:sampling[aperture]], dtype=dtype)
+                shape=self.dispersion[channel][si:ei:sampling_rate[channel]].shape)
+            disp[:] = np.ascontiguousarray(self.dispersion[channel][si:ei:sampling_rate[channel]],
+                dtype=dtype)
             del disp
 
         # Arrays must be contiguous
@@ -546,25 +665,32 @@ class Model(object):
         # Now we need to save the flux to disk
         del flux
 
-        return True
+        cached_model = self.configuration.copy()
+        cached_model["channels"] = {
+            "grid_points": grid_points_filename,
+            "flux_filename": flux_filename,
+        }
+        cached_model.update(dispersion_filenames)
+        return cached_model
 
 
     def get_nearest_neighbours(self, point, n=1):
-        """Returns the indices for the nearest `n` neighbours to the given `point` in each dimension.
+        """
+        Return the indices of the nearest `n` neighbours to `point`.
 
-        Inputs
-        ------
-        point : list of `float` values
-            The point to find neighbours for.
-
-        n : int
-            The number of neighbours to find either side of `point` in each dimension.
-            Therefore the total number of points returned will be dim(point)^n.
+        Args:
+            point (list): The point to find neighbours around.
+            n (int): The number of neighbours to find on each side, in each dimension.
+        Returns:
+            indices (np.array): The indices of the nearest neighbours.
+        Raises:
+            ValueError: if the point is incompatible with the grid shape, or if it is
+                outside of the grid boundaries.
         """
 
         if len(point) != len(self.grid_points.dtype.names):
-            raise ValueError("point length ({0}) is incompatible with grid shape ({1})"
-                .format(length=len(point), shape=len(self.grid_points.dtype.names)))
+            raise ValueError("point length ({0}) is incompatible with grid shape ({1})".format(
+                len(point), len(self.grid_points.dtype.names)))
 
         indices = set(np.arange(len(self.grid_points)))
         for i, point_value in enumerate(point):
@@ -583,32 +709,31 @@ class Model(object):
 
 
     def check_grid_point(self, point):
-        """Checks whether the point provided exists in the grid of models. If so,
-        its index is returned.
+        """
+        Return whether the provided point exists in the model grid.
 
-        Inputs
-        ------
-        point : list of float values
-            The point of interest.
+        Args:
+            point (list): The point to find in the model grid.
+        Returns:
+            index (int): The index of the point in the model grid, if it exists. Otherwise False.
         """
 
         num_dimensions = len(self.grid_points.dtype.names)
         index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == np.array([point]).view(np.float),
             axis=-1)
-        
-        if not any(index):
-            return False
-        return np.where(index)[0][0]
+        return False if not any(index) else np.where(index)[0][0]
 
 
     def interpolate_flux(self, point, **kwargs):
-        """Interpolates through the grid of models to the given `point` and returns
-        the interpolated flux.
+        """
+        Return interpolated model flux at a given point.
 
-        Inputs
-        ------
-        point : list of `float` values
-            The point to interpolate to.
+        Args:
+            point (list): The point to interpolate a model flux at.
+        Returns:
+            fluxes (dict): Dictionary of channels (keys) and arrays of interpolated fluxes (values).
+        Raises:
+            ValueError: when a flux point could not be interpolated (e.g., outside grid boundaries)
         """
 
         global _scope_interpolator_
@@ -617,224 +742,161 @@ class Model(object):
             interpolated_flux = _scope_interpolator_(*point)
             
             interpolated_fluxes = {}
-            num_pixels = map(len, [self.dispersion[aperture] for aperture in self.apertures])
-            for i, aperture in enumerate(self.apertures):
+            num_pixels = map(len, [self.dispersion[channel] for channel in self.channels])
+            for i, channel in enumerate(self.channels):
                 si, ei = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
-                interpolated_fluxes[aperture] = interpolated_flux[si:ei]
+                interpolated_fluxes[channel] = interpolated_flux[si:ei]
             return interpolated_fluxes
 
         interpolated_fluxes = {}
         indices = self.get_nearest_neighbours(point)
-        for aperture in self.apertures:
+        for channel in self.channels:
             
-            flux = np.zeros((len(indices), len(self.dispersion[aperture])))
+            flux = np.zeros((len(indices), len(self.dispersion[channel])))
             flux[:] = np.nan
 
             # Load the flux points
             for i, index in enumerate(indices):
-                aperture_flux[i, :] = load_model_data(self.flux_filenames[aperture][index])
+                channel_flux[i, :] = load_model_data(self.flux_filenames[channel][index])
             
             try:
-                interpolated_flux[aperture] = interpolate.griddata(self.grid_points[indices],
-                    aperture_flux, [point], **kwargs).flatten()
+                interpolated_flux[channel] = interpolate.griddata(self.grid_points[indices],
+                    channel_flux, [point], **kwargs).flatten()
 
             except:
                 raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
     
 
-    def map_apertures(self, observations):
-        """References model spectra to each observed spectra based on their wavelengths.
+    def masks(self, dispersion_maps, **theta):
+        """
+        Return pixel masks for the model spectra, given theta.
 
-        Inputs
-        ------
-        observations : a list of observed spectra to map
+        Args:
+            dispersion_maps (list of array objects): The dispersion maps for each channel (keys).
+        Returns:
+            None if no masks are specified by the model. If pixel masks are specified,
+            a pixel mask dictionary with channels as keys, and arrays as values is returned.
+            Zero in arrays indicates pixel was masked, one indicates it was used.
         """
 
-        mapped_apertures = []
-        for i, spectrum in enumerate(observations):
+        if not self.configuration.get("masks", False):
+            return None
 
-            # Initialise the list
-            apertures_found = []
+        pixel_masks = {}
+        for channel, dispersion_map in zip(self.channels, dispersion_maps):
 
-            observed_wlmin = np.min(spectrum.disp)
-            observed_wlmax = np.max(spectrum.disp)
+            if channel not in self.configuration["masks"]:
+                masks[channel] = None
+            
+            else:
+                # We are required to build a mask
+                mask = np.ones(len(dispersion_map))
+                if self.configuration["masks"][channel] is not None:
 
-            for model_aperture, model_dispersion in self.dispersion.iteritems():
-
-                model_wlmin = np.min(model_dispersion)
-                model_wlmax = np.max(model_dispersion)
-
-                # Is there overlap?
-                if (model_wlmin <= observed_wlmin and observed_wlmax <= model_wlmax) \
-                or (observed_wlmin <= model_wlmin and model_wlmax <= observed_wlmax) \
-                or (model_wlmin <= observed_wlmin and (observed_wlmin <= model_wlmax and model_wlmax <= observed_wlmax)) \
-                or ((observed_wlmin <= model_wlmin and model_wlmin <= observed_wlmax) and observed_wlmax <= model_wlmax):
-                    apertures_found.append(model_aperture)
-
-            if len(apertures_found) == 0:
-                raise ValueError("no model apertures found for observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
-                    .format(wl_start=observed_wlmin, wl_end=observed_wlmax))
-
-            elif len(apertures_found) > 1:
-                index = np.argmin(np.abs(np.mean(spectrum.disp) - map(np.mean, [self.dispersion[aperture] for aperture in apertures_found])))
-                apertures_found = [apertures_found[index]]
-
-                logging.warn("Multiple model apertures found for observed aperture {0} ({1:.0f} to {2:.0f}). Using '{0}'"
-                    " because it's closest by mean dispersion.".format(i, observed_wlmin, observed_wlmax, apertures_found[0]))
+                    for region in self.configuration["masks"][channel]:
+                        if "doppler_shift.{}".format(channel) in theta:
+                            z = theta["doppler_shift.{}".format(channel)]
+                            region = np.array(region) * (1. + z)
+                            
+                        index_start, index_end = np.searchsorted(dispersion_map, region)
+                        pixel_masks[index_start:index_end] = 0
+                        
+                pixel_masks[channel] = mask
+        return pixel_masks
 
 
-            mapped_apertures.append(apertures_found[0])
+    def __call__(self, observations=None, **theta):
+        """
+        Return normalised, doppler-shifted, convolved and transformed model fluxes.
 
-        # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
-        for aperture, spectrum in zip(mapped_apertures, observations):
-
-            mean_observed_pixel_size = np.mean(np.diff(spectrum.disp))
-            mean_model_pixel_size = np.mean(np.diff(self.dispersion[aperture]))
-            if mean_model_pixel_size > mean_observed_pixel_size:
-                raise ValueError("the mean model pixel size in the {aperture} aperture is larger than the mean"
-                    " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}"
-                    .format(aperture=aperture, wl_start=np.min(spectrum.disp), wl_end=np.max(spectrum.disp)))
-
-        # Keep an internal reference of the aperture mapping
-        self._mapped_apertures = mapped_apertures
-
-        # Should we update our internal .apertures and .dimensions?
-        return mapped_apertures
-
-
-    def __call__(self, observations=None, **kwargs):
-        """ Generates model fluxes for a provided set of parameters """
+        Args:
+            observations (list of Spectrum1D objects): The observed data.
+        Returns:
+            model_spectra (list of Spectrum1D objects): Model spectra for the given theta.
+        """
 
         # Get the grid point and interpolate
-        point = [kwargs[parameter] for parameter in self.grid_points.dtype.names]
+        point = [theta[parameter] for parameter in self.grid_points.dtype.names]
         interpolated_flux = self.interpolate_flux(point)
 
-        all_non_finite = lambda fluxes: np.all(~np.isfinite(fluxes))
-        if any(map(all_non_finite, interpolated_flux.values())):
-            raise ValueError("interpolated aperture contained all non-finite flux vlues")
-
-        # Transform the spectra
-        model_spectra = {}
-        for aperture, interpolated_flux in interpolated_flux.iteritems():
+        model_fluxes = []
+        check_normalisation = "normalise" in self.configuration.keys()
+        
+        for channel in self.channels:
                 
-            model_spectra[aperture] = Spectrum1D(disp=self.dispersion[aperture].copy(), flux=interpolated_flux.copy())
-
-            # Any synthetic smoothing to apply?
-            smoothing_kwarg = "smooth_model_flux.{0}.kernel".format(aperture)
-
-            # Is the smoothing a free parameter?
-            fwhm = 0
-            if smoothing_kwarg in kwargs:
-                fwhm = kwargs[smoothing_kwarg]
-
-            elif self.configuration["smooth_model_flux"][aperture]["perform"]:
-                # Apply a single smoothing value
-                fwhm = self.configuration["smooth_model_flux"][aperture]["kernel"]
-            
-            if fwhm > 0:
-                profile_sigma = fwhm / (2.*(2*np.log(2))**0.5)
-                true_profile_sigma = profile_sigma / np.mean(np.diff(model_spectra[aperture].disp))
-                model_spectra[aperture].flux = ndimage.gaussian_filter1d(model_spectra[aperture].flux, true_profile_sigma)
+            # TODO do we actualy need to do a copy?
+            model_dispersion = self.dispersion[channel].copy()
+            model_flux = interpolated_flux[channel].copy()
 
             # Doppler shift the spectra
-            doppler_shift_kwarg = "doppler_shift.{0}".format(aperture)
-            if doppler_shift_kwarg in kwargs:
-                c, v = 299792458e-3, kwargs[doppler_shift_kwarg]
-                model_spectra[aperture].disp *= np.sqrt((1 + v/c)/(1 - v/c))
+            key = "doppler_shift.{0}".format(channel)
+            if key in theta:
+                z = theta[key]
+                # Model dispersion needs to be uniformly sampled in log-wavelength space 
+                # before the doppler shift can be applied.
+                # TODO
+                model_dispersion *= (1. + z)
 
-            # Interpolate synthetic to observed dispersion map
+
+            # Any smoothing to apply?
+            key = "convolve.{}".format(channel)
+            if key in theta:
+                # Smoothing must be applied on a linear dispersion scale
+                profile_sigma = theta[key] / (2.*(2*np.log(2))**0.5)
+                true_profile_sigma = profile_sigma / np.mean(np.diff(model_dispersion))
+                model_flux = ndimage.gaussian_filter1d(model_flux, true_profile_sigma)
+
+            # Interpolate model fluxes to observed dispersion map
             if observations is not None:
-                model_spectra[aperture] = model_spectra[aperture].interpolate(
-                    observations[self.apertures.index(aperture)].disp)
+                index = self.channels.index(channel)
+                model_flux = np.interp(observations[index].disp,
+                    model_dispersion, model_flux, left=np.nan, right=np.nan)
+                model_dispersion = observations[index].disp
 
-            # Scale to the data
-            if self.configuration["normalise_observed"][aperture]["perform"]:
-            
-                if self.configuration["normalise_observed"][aperture].get("method", "polynomial") == "polynomial":
+            # Apply masks if necessary
+            if self.configuration.get("masks", None):
+                regions = self.configuration["masks"].get(channel, None)
+                if regions:
+                    for region in self.configuration["masks"][channel]:
+                        if key in theta:
+                            z = theta[key]
+                            # This is an approximation, but a sufficient one.
+                            region = np.array(region) * (1. + z)
 
-                    # Since we need to perform normalisation, the normalisation coefficients should be in the kwargs
-                    num_coefficients_expected = self.configuration["normalise_observed"][aperture]["order"] + 1
-                    coefficients = [kwargs["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] \
-                        for n in xrange(num_coefficients_expected)]
-                    model_spectra[aperture].flux *= np.polyval(coefficients, model_spectra[aperture].disp)
-    
-                else: #spline
-                    if observations is not None:
-                        num_knots = self.configuration["normalise_observed"][aperture]["knots"]
-                        observed_aperture = observations[self.apertures.index(aperture)]
-                        
-                        # Divide the observed spectrum by the model aperture spectrum
-                        continuum = observed_aperture.flux/model_spectra[aperture].flux
+                        index_start, index_end = np.searchsorted(model_dispersion, region)
+                        model_flux[index_start:index_end] = np.nan
 
-                        # Apply a mask
-                        mask = np.where(self.masks({aperture: model_spectra[aperture]}, **kwargs)[aperture] == 0)[0]
-                        continuum[mask] = np.nan
-
-                        # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
-                        # to all observed pixels (regardless of how much overlap there is)
-                        finite = np.isfinite(continuum)
-
-                        if isinstance(num_knots, (float, int)):
-                            # Produce equi-spaced internal knot points
-                            # Divide the spectral range by <N> + 1
-                            spacing = np.ptp(observed_aperture.disp[finite])/(num_knots + 1.)
-                            knots = np.arange(observed_aperture.disp[finite][0] + spacing,
-                                observed_aperture.disp[finite][-1], spacing)[:num_knots]
-
-                        else:
-                            # If num_knots is not actually a number then it is a list-type of actual knot points that
-                            # have been specified by the user
-                            knots = num_knots
-
-                        # TODO: Should S be free?
-                        tck = interpolate.splrep(observed_aperture.disp[finite], continuum[finite],
-                            w=1./observed_aperture.uncertainty[finite], t=knots)
-                        #s=kwargs["normalise_observed.{0}.s".format(aperture)])
-
-                        # Scale the model by the continuum function
-                        model_spectra[aperture].flux[finite] *= interpolate.splev(observed_aperture.disp[finite], tck)
-
-        return [model_spectra[aperture] for aperture in self.apertures]
-
-
-    def masks(self, model_spectra, **kwargs):
-        """Returns pixel masks to apply to the model spectra
-        based on the configuration provided.
-
-        Inputs
-        ------
-        model_spectra : dict
-            A dictionary containing aperture names as keys and specutils.Spectrum1D objects
-            as values.
-        """
-
-        if "masks" not in self.configuration:
-            masks = {}
-            for aperture, spectrum in model_spectra.iteritems():
-                masks[aperture] = np.ones(len(spectrum.disp))
-
-        else:
-            masks = {}
-            for aperture, spectrum in model_spectra.iteritems():
-                if aperture not in self.configuration["masks"]:
-                    masks[aperture] = np.ones(len(spectrum.disp))
+            # Normalise model fluxes to the data
+            if check_normalisation and self.configuration["normalise"].get(channel, False):
                 
-                else:
-                    # We are required to build a mask.
-                    mask = np.ones(len(spectrum.disp))
-                    if self.configuration["masks"][aperture] is not None:
-                        for region in self.configuration["masks"][aperture]:
+                method = self.configuration["normalise"][channel]["method"]
 
-                            region = np.array(region)
+                if method == "polynomial":
 
-                            if "doppler_shift.{0}".format(aperture) in kwargs:
-                                c, v = 299792458e-3, kwargs["doppler_shift.{0}".format(aperture)]
-                                region *= np.sqrt((1 + v/c)/(1 - v/c))
-                                
-                            index_start, index_end = np.searchsorted(spectrum.disp, region)
-                            mask[index_start:index_end] = 0
+                    # The normalisation coefficients should be in the theta
+                    order = self.configuration["normalise"][channel]["order"]
+                    coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
+                        for i in range(order + 1)]
+                    model_flux *= np.polyval(coefficients, model_dispersion)
+    
+                elif method == "spline" and observations is not None:
 
-                    masks[aperture] = mask
+                    num_knots = self.configuration["normalise"][channel]["knots"]
+                    observed_channel = observations[self.channels.index(channel)]
+                    
+                    # Divide the observed spectrum by the model channel spectrum
+                    continuum = observed_channel.flux/model_flux
 
-        return masks
+                    # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
+                    # to all observed pixels (regardless of how much overlap there is)
+                    finite = np.isfinite(continuum)
+                    knots = [kwarg for kwarg in theta.keys() if kwarg.startswith("normalise.{}.k".format(channel))]
+                    tck = interpolate.splrep(observed_channel.disp[finite], continuum[finite],
+                        w=1./observed_channel.uncertainty[finite], t=knots)
+
+                    # Scale the model by the continuum function
+                    model_flux *= interpolate.splev(model_dispersion, tck)
+
+            model_fluxes.append(model_flux)
+        return model_fluxes
 
