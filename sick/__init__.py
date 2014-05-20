@@ -15,5 +15,5 @@ from specutils import Spectrum
 
 import specutils
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("scope")
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger("sick")

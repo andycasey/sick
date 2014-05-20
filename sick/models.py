@@ -523,17 +523,17 @@ class Model(object):
                     else: # Spline
                         knots = self.configuration[dimension][channel].get("knots", 0)
                         dimensions.extend(["normalise.{0}.k{1}".format(channel, i) \
-                            for i in range(knots + 1)])
+                            for i in range(knots)])
 
             elif dimension == "doppler_shift":
                 # Check which channels have doppler shifts allowed and add them
                 dimensions.extend(["z.{}".format(each) \
-                    for each in self.channels if self.configuration[dimension].get(channel, False)])
+                    for each in self.channels if self.configuration[dimension].get(each, False)])
 
             elif dimension == "convolve":
                 # Check which channels have smoothing allowed and add them
                 dimensions.extend(["convolve.{}".format(each) \
-                    for each in self.channels if self.configuration[dimension].get(channel, False)])  
+                    for each in self.channels if self.configuration[dimension].get(each, False)])  
         
         # Append jitter
         dimensions.extend(["jitter.{}".format(channel) for channel in self.channels])
@@ -741,6 +741,9 @@ class Model(object):
 
             interpolated_flux = _scope_interpolator_(*point)
             
+            if np.all(~np.isfinite(interpolated_flux)):
+                raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")    
+        
             interpolated_fluxes = {}
             num_pixels = map(len, [self.dispersion[channel] for channel in self.channels])
             for i, channel in enumerate(self.channels):
@@ -839,14 +842,17 @@ class Model(object):
             if key in theta:
                 z = theta[key]
                 # Model dispersion needs to be uniformly sampled in log-wavelength space 
-                # before the doppler shift can be applied.
+                # before the doppler shift can be applied
                 log_delta = np.diff(model_dispersion).min()
                 wl_min, wl_max = model_dispersion.min(), model_dispersion.max()
-                log_model_dispersion = (1. + z) * np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
+                log_model_dispersion = np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
 
                 # Interpolate flux to log-lambda dispersion
-                model_flux = np.interp(log_model_dispersion, model_dispersion, model_flux, left=np.nan, right=np.nan)
-                model_dispersion = log_model_dispersion
+                log_model_flux = np.interp(log_model_dispersion, model_dispersion, model_flux, left=np.nan, right=np.nan)
+                
+                model_dispersion = log_model_dispersion * (1. + z)
+                model_flux = log_model_flux
+
 
             # Interpolate model fluxes to observed dispersion map
             if observations is not None:
@@ -892,13 +898,14 @@ class Model(object):
                     # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
                     # to all observed pixels (regardless of how much overlap there is)
                     finite = np.isfinite(continuum)
-                    knots = [kwarg for kwarg in theta.keys() if kwarg.startswith("normalise.{}.k".format(channel))]
+                    knots = [theta["normalise.{channel}.k{n}".format(channel=channel, n=n)] for n in xrange(num_knots)]
                     tck = interpolate.splrep(observed_channel.disp[finite], continuum[finite],
-                        w=1./observed_channel.uncertainty[finite], t=knots)
+                        w=1./np.sqrt(observed_channel.variance[finite]), t=knots)
 
                     # Scale the model by the continuum function
                     model_flux *= interpolate.splev(model_dispersion, tck)
 
             model_fluxes.append(model_flux)
+
         return model_fluxes
 

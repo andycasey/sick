@@ -16,11 +16,7 @@ from time import time
 # Third-party
 import numpy as np
 import numpy.random as random
-<<<<<<< HEAD
 from scipy import ndimage, optimize, interpolate
-=======
-from scipy import ndimage, optimize, interpolate, stats
->>>>>>> 9c89b5a3373b0ccf030722c2fdece2a59476289c
 
 # Module
 import specutils
@@ -89,6 +85,7 @@ def __cross_correlate__(args):
     return np.random.normal(z_best, z_err)
 
 
+
 def prior(model, observations, size=1):
 
     # Set the default priors:
@@ -123,7 +120,7 @@ def prior(model, observations, size=1):
 
         current_prior = []
         model_intensities = {}
-        continuum_coefficients = {}
+        continuum_parameters = {}
 
         evaluated_priors = {}
         scaled_observations = {}
@@ -134,7 +131,10 @@ def prior(model, observations, size=1):
             if len(current_prior) == len(model.grid_points.dtype.names):
 
                 # Interpolate intensities at this point
-                model_intensities.update(model.interpolate_flux(current_prior))
+                try:
+                    model_intensities.update(model.interpolate_flux(current_prior))
+                except ValueError:
+                    break
 
                 # Check the intensities are finite, otherwise move on
                 if not np.all(map(np.all, map(np.isfinite, model_intensities.values()))):
@@ -149,7 +149,7 @@ def prior(model, observations, size=1):
                         kernel = (sigma/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(model.dispersion[channel]))
                         #model_intensities[channel] = ndimage.gaussian_filter1d(model_intensities[channel], kernel)
 
-                        evaluated_priors["convolve.{}".format(channel)] = kernel
+                        evaluated_priors["convolve.{}".format(channel)] = sigma
 
                 # Get continuum knots/coefficients for each aperture
                 for channel in model_intensities.keys():
@@ -159,7 +159,7 @@ def prior(model, observations, size=1):
                         model.dispersion[channel], model_intensities[channel], left=np.nan,
                         right=np.nan)
 
-                    finite = np.isfinite(continuum)
+                    finite_continuum = np.isfinite(continuum)
                     method = model.configuration["normalise"][channel]["method"]
 
                     # Re-interpolate the observed fluxes where they are nans
@@ -167,28 +167,28 @@ def prior(model, observations, size=1):
                     cleaned_observed_flux = np.interp(observed_channel.disp,
                         observed_channel.disp[finite_observed_fluxes], observed_channel.flux[finite_observed_fluxes])
 
+                    # Re-bin onto log-lambda scale
+                    log_delta = np.diff(observed_channel.disp).min()
+                    wl_min, wl_max = observed_channel.disp.min(), observed_channel.disp.max()
+                    log_observed_dispersion = np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
+
+                    # Scale the intensities to the data
+                    interpolated_model_intensities = np.interp(log_observed_dispersion, model.dispersion[channel],
+                        model_intensities[channel], left=np.nan, right=np.nan)
+
+                    # Get only finite overlap
+                    finite = np.isfinite(interpolated_model_intensities)
+
                     if method == "polynomial":
                         # Fit polynomial coefficients
                         order = model.configuration["normalise"][channel]["order"]
-                        continuum_coefficients[channel] = np.polyfit(observed_channel.disp[finite], continuum[finite], order)
+                        continuum_parameters[channel] = np.polyfit(observed_channel.disp[finite_continuum], continuum[finite_continuum], order)
 
-                        # Re-bin onto log-lambda scale
-                        log_delta = np.diff(observed_channel.disp).min()
-                        wl_min, wl_max = observed_channel.disp.min(), observed_channel.disp.max()
-                        log_observed_dispersion = np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
-
-                        # Scale the intensities to the data
-                        interpolated_model_intensities = np.interp(log_observed_dispersion, model.dispersion[channel],
-                            model_intensities[channel], left=np.nan, right=np.nan)
-
+                        # Transform the observed data
                         observed_scaled_intensities = cleaned_observed_flux \
-                            / np.polyval(continuum_coefficients[channel], observed_channel.disp)
-
+                            / np.polyval(continuum_parameters[channel], observed_channel.disp)
                         interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
                             observed_scaled_intensities, left=1, right=1)
-
-                        # Get only finite overlap
-                        finite = np.isfinite(interpolated_model_intensities)
 
                         env.update({channel:
                             (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
@@ -198,12 +198,24 @@ def prior(model, observations, size=1):
                         num_knots = model.configuration["normalise"][channel]["knots"]
 
                         # Determine knot spacing
-                        common_finite_dispersion = observed_channel.disp[finite]
-                        knot_spacing = np.ptp(common_finite_dispersion)/(num_knots + 1)
 
-                        # Determine the knots
-                        continuum_coefficients[channel] = np.arange(common_finite_dispersion[0],
-                            common_finite_dispersion[-1], knot_spacing)[:num_knots]
+                        finite_continuum = np.isfinite(continuum)
+                        knot_spacing = np.ptp(observed_channel.disp[finite_continuum])/(num_knots + 1)
+                        continuum_parameters[channel] = np.arange(observed_channel.disp[finite_continuum][0] + knot_spacing,
+                            observed_channel.disp[finite_continuum][-1] + knot_spacing, knot_spacing)[:num_knots]
+
+                        tck = interpolate.splrep(observed_channel.disp[finite_continuum], continuum[finite_continuum],
+                            w=1./np.sqrt(observed_channel.variance[finite_continuum]), t=continuum_parameters[channel])
+
+                        # Transform the observed data
+                        observed_scaled_intensities = cleaned_observed_flux \
+                            / interpolate.splev(observed_channel.disp, tck)
+                        interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                            observed_scaled_intensities, left=1, right=1)
+
+                        env.update({channel:
+                            (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
+                        })
 
             # Have we already evaluated this dimension?
             if dimension in evaluated_priors.keys():
@@ -231,7 +243,7 @@ def prior(model, observations, size=1):
                 # Get the coefficient
                 channel = dimension.split(".")[1]
                 coefficient_index = int(dimension.split(".")[2][1:])
-                coefficient_value = continuum_coefficients[channel][coefficient_index]
+                coefficient_value = continuum_parameters[channel][coefficient_index]
 
                 # Polynomial coefficients will introduce their own scatter
                 # if the method is a spline, we should produce some scatter around the points
@@ -241,14 +253,18 @@ def prior(model, observations, size=1):
 
                 elif method == "spline":
                     # Get the difference between knot points
-                    knot_sigma = np.mean(np.diff(continuum_coefficients[channel]))/10.
+                    knot_sigma = np.mean(np.diff(continuum_parameters[channel]))/10.
                     current_prior.append(random.normal(coefficient_value, knot_sigma))
 
         # Check that we have the full number of walker values
         if len(current_prior) == len(model.dimensions):
-            priors.append(current_prior)
+            yield current_prior
+            #priors.append(current_prior)
 
-    return np.array(priors) if size > 1 else np.array(priors).flatten()
+    #return np.array(priors) if size > 1 else np.array(priors).flatten()
+
+
+
 
 
 def implicit(model, observations, size=1):

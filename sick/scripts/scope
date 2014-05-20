@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
     parser.add_argument("--debug", dest="debug", action="store_true", default=False)
+    parser.add_argument("--clobber", dest="clobber", action="store_true", default=False)
     parser.add_argument("-pf", "--plot-format", dest="plot_format", action="store", type=str, default="pdf")
 
     args = parser.parse_args()
@@ -130,6 +131,13 @@ def main():
             logger.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
             break
 
+        # Does a solution already exist for this star? If so are we authorised to clobber it?
+        output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
+        if os.path.exists(output("result.json")) and not args.clobber:
+            logger.info("Skipping object #{0} as a results file already exists ({1}) and we have been asked not to "
+                "clobber it".format(i, output("result.json")))
+            continue
+
         metadata = {}
         header_columns = []
         for header in default_headers:
@@ -176,13 +184,11 @@ def main():
                 })
 
             # Set some filename variables
-            output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
-
             chain_filename = output("chain.fits")
-            pp_observed_spectra_filenames = [output("pp-obs-{}.fits".format(aperture)) \
-                for aperture in model._mapped_apertures]
-            pp_modelled_spectra_filenames = [output("pp-mod-{}.fits".format(aperture)) \
-                for aperture in model._mapped_apertures]
+            pp_observed_spectra_filenames = [output("pp-obs-{}.fits".format(channel)) \
+                for channel in model.channels]
+            pp_modelled_spectra_filenames = [output("pp-mod-{}.fits".format(channel)) \
+                for channel in model.channels]
             
             # Save information related to the analysis
             metadata.update({
@@ -226,12 +232,12 @@ def main():
             #    pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
             # Get the most likely sample
-            ml_index = np.argmax(sampler.lnprobability.reshape(-1))
-            pp_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
+            #ml_index = np.argmax(sampler.lnprobability.reshape(-1))
+            #pp_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
             
-            pp_modelled_spectra = model(observations=spectra, **pp_parameters)
-            [spectrum.save(filename) for spectrum, filename in zip(spectra, pp_observed_spectra_filenames)]
-            [spectrum.save(filename) for spectrum, filename in zip(pp_modelled_spectra, pp_modelled_spectra_filenames)]
+            pp_model_fluxes = model(observations=spectra, **dict(zip(model.dimensions, [posteriors[each][0] for each in model.dimensions])))
+            #[spectrum.save(filename) for spectrum, filename in zip(spectra, pp_observed_spectra_filenames)]
+            #[spectrum.save(filename) for spectrum, filename in zip(pp_modelled_spectra, pp_modelled_spectra_filenames)]
 
             # Plot results
             if args.plotting:
@@ -300,25 +306,23 @@ def main():
                     quantiles=[.16, .50, .84], verbose=False)
                 fig.savefig(corner_plot_filename)
 
+
                 # Plot spectra
                 fig = plt.figure()
-                for i, (aperture, modelled_aperture, observed_aperture) \
-                in enumerate(zip(model._mapped_apertures, pp_modelled_spectra, spectra)):
+                for i, (channel, model_flux, observed_aperture) \
+                in enumerate(zip(model.channels, pp_model_fluxes, spectra)):
 
-                    ax = fig.add_subplot(len(spectra), 1, i+1)
+                    ax = fig.add_subplot(len(spectra), i+1, 1)
 
                     # Get the full boundaries
-                    fmd = np.isfinite(modelled_aperture.flux)
+                    fmd = np.isfinite(model_flux)
                     fod = np.isfinite(observed_aperture.flux)
                     full_extent = [
-                        np.max([modelled_aperture.disp[fmd][0], observed_aperture.disp[fod][0]]),
-                        np.min([modelled_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
+                        np.max([observed_aperture.disp[fmd][0], observed_aperture.disp[fod][0]]),
+                        np.min([observed_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
                     ]
 
-                    interpolated_model_flux = np.interp(observed_aperture.disp, modelled_aperture.disp,
-                        modelled_aperture.flux, left=np.nan, right=np.nan)
-
-                    ax.plot(modelled_aperture.disp, modelled_aperture.flux, 'b', zorder=1)
+                    ax.plot(observed_aperture.disp, model_flux, 'b', zorder=1)
                     ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
                     
                     ax.yaxis.set_major_locator(MaxNLocator(4))

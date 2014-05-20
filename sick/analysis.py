@@ -10,8 +10,9 @@ __all__ = ["log_prior", "log_likelihood", "log_probability", "solve"]
 
 # Standard library
 import logging
+import multiprocessing.pool
 import os
-import multiprocessing
+import threading
 import re
 from time import time
 
@@ -81,7 +82,7 @@ def log_likelihood(theta, model, observations):
     except:
         return -np.inf
 
-    differences = []
+    differences = 0
     for (channel, model_flux, observed_spectrum) in zip(model.channels, model_fluxes, observations):
 
         inverse_variance = 1.0/(observed_spectrum.variance \
@@ -89,12 +90,12 @@ def log_likelihood(theta, model, observations):
         difference = (observed_spectrum.flux - model_flux)**2 * inverse_variance
         
         finite = np.isfinite(difference)
-        differences.append(np.sum(difference[finite] - np.log(inverse_variance[finite])))
+        differences += np.sum(difference[finite] - np.log(inverse_variance[finite]))
 
-    likelihood = -0.5 * np.sum(differences)
+    likelihood = -0.5 * differences
     logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in theta_dict.iteritems()])))  
-   
+
     return likelihood
 
 
@@ -109,7 +110,7 @@ def log_probability(theta, model, observations):
     """
 
     prior = log_prior(theta, model)
-    if not np.isfinite(prior):
+    if np.isinf(prior):
         logger.debug("Returning -inf log-likelihood because log-prior was -inf")
         return prior
 
@@ -121,7 +122,6 @@ def sample_ball(point, observed_spectra, model):
     Return a multi-dimensional Gaussian around a ball point.
 
     """ 
-
     
     # Create a sample ball around the result point
     ball_point = [point.get(dimension, 0) for dimension in model.dimensions]
@@ -131,29 +131,40 @@ def sample_ball(point, observed_spectra, model):
     for di, dimension in enumerate(model.dimensions):
 
         if dimension in model.grid_points.dtype.names:
-            # Set sigma to be 5% of the dimension dynamic range
-            dimensional_std.append(0.05 * np.ptp(model.grid_boundaries[dimension]))
+            # Set sigma to be 25% of the dimension dynamic range
+            dimensional_std.append(0.10 * np.ptp(model.grid_boundaries[dimension]))
            
         elif dimension.startswith("z."):
             # Set the velocity sigma to be 10 km/s
             dimensional_std.append(10./299792458e-3)
             
-        elif dimension.startswith("smooth_model_flux."): 
+        elif dimension.startswith("convolve."): 
             dimensional_std.append(0.10)
 
-        elif dimension.startswith("normalise_observed."):
+        elif dimension.startswith("normalise."):
 
+            channel = dimension.split(".")[1]
+
+            """
             if dimension.endswith(".s"):
                 # Spline treatment of continuum
                 s = np.random.normal(ball_point[di], np.sqrt(2*ball_point[di]))
                 dimensional_std.append(np.max([s, 0]))
+            """
+            coefficient = dimension.split(".")[2]
+
+            if coefficient.startswith("k"): # Spline knots
+                coefficient = int(coefficient[1:])
+
+                # There are better ways to do this
+                dimensional_std.append(1)
 
             else: 
                 # Polynomial treatment of continuum
-                aperture = dimension.split(".")[1]
-                coefficient = int(dimension.split(".")[2].lstrip("a"))
-                order = model.configuration["normalise_observed"][aperture]["order"]
-                observed_aperture = observed_spectra[model.channels.index(aperture)]
+                
+                coefficient = int(coefficient[1:])
+                order = model.configuration["normalise"][channel]["order"]
+                observed_channel = observed_spectra[model.channels.index(channel)]
                 
                 # This depends on the value of the polynomial coefficient, the dispersion, as well
                 # as the order of the polynomial to fit the flux.
@@ -172,8 +183,8 @@ def sample_ball(point, observed_spectra, model):
                 # delta_c = <delta_y>/(num_coefficients * x^0)
 
                 # And we arbitrarily specify <delta_y> to be ~3x the mean uncertainty in flux.
-                dispersion = observed_aperture.disp.mean()
-                flux_scale = 3. * observed_aperture.uncertainty[np.isfinite(observed_aperture.uncertainty)].mean()
+                dispersion = observed_channel.disp.mean()
+                flux_scale = 3. * np.sqrt(observed_channel.variance[np.isfinite(observed_channel.variance)].mean())
                 dimensional_std.append(flux_scale/(dispersion**(order - coefficient)))
                    
         else:
@@ -189,47 +200,50 @@ def sample_ball(point, observed_spectra, model):
         p0[:, ji] = np.random.uniform(-10, 1, size=walkers)
 
     # Write over normalisation priors if necessary
+
     for i, pi in enumerate(p0):
 
         # Model the flux, but don't normalise it.
         pi_parameters = dict(zip(model.dimensions, pi))
-        for aperture in model.channels:
+        for channel in model.channels:
             n = 0
-            while "normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n) in pi_parameters.keys():
-                pi_parameters["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n)] = 0
+            while "normalise.{channel}.c{n}".format(channel=channel, n=n) in pi_parameters.keys():
+                pi_parameters["normalise.{channel}.c{n}".format(channel=channel, n=n)] = 0
                 n += 1
 
             if n > 0:
                 # Set the final coefficient as 1, so we end up having no normalisation
-                pi_parameters["normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=n-1)] = 1.
+                pi_parameters["normalise.{channel}.c{n}".format(channel=channel, n=n-1)] = 1.
 
         if n > 0:
             try:
                 model_channels = model(observations=observed_spectra, **pi_parameters)
             except ValueError: continue
             
-            for aperture, observed_aperture, model_aperture in zip(model.channels, observed_spectra, model_channels):
+            for channel, observed_channel, model_channel_flux in zip(model.channels, observed_spectra, model_channels):
 
-                continuum = (observed_aperture.flux + np.random.normal(0, observed_aperture.uncertainty))/model_aperture.flux
+                continuum = (observed_channel.flux + 3. * np.random.normal(0, np.sqrt(observed_channel.variance)))/model_channel_flux
                 finite = np.isfinite(continuum)
+                if np.sum(finite) == 0: break
 
                 # Get some normalisation coefficients
-                coefficients = np.polyfit(model_aperture.disp[finite], continuum[finite], n-1)
+                coefficients = np.polyfit(observed_channel.disp[finite], continuum[finite], n-1)
                 
                 # Write over the prior values
                 for j, coefficient in enumerate(coefficients):
-                    index = model.dimensions.index("normalise_observed.{aperture}.a{n}".format(aperture=aperture, n=j))
+                    index = model.dimensions.index("normalise.{channel}.c{n}".format(channel=channel, n=j))
                     p0[i, index] = coefficient
+
     return p0
 
 
-def __log_prob_of_implicit_theta(model, observed_spectra):
-    theta = priors.prior(model, observed_spectra)
-    return (theta, log_probability(theta, model, observed_spectra))
-
-
-def __log_prob_of_explicit_theta(theta, model, observed_spectra):
-    return (theta, log_probability(theta, model, observed_spectra))
+def __safe_log_probability(theta, model, observed_spectra):
+    try:
+        probability = log_probability(theta, model, observed_spectra)
+    except:
+        return (theta, -np.inf)
+    else:
+        return (theta, probability)
 
 
 def random_scattering(observed_spectra, model, initial_thetas=None):
@@ -251,30 +265,28 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
     def callback(result):
         results.append(result)
 
-    pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
-            
     if initial_thetas is None:
-
-        [pool.apply_async(__log_prob_of_implicit_theta, args=(model, observed_spectra), callback=callback) \
-            for _ in xrange(model.configuration["solver"]["initial_samples"])]
+   
+        pool = multiprocessing.pool.ThreadPool(processes=model.configuration["solver"].get("threads", 1))
+        for i, theta in zip(xrange(model.configuration["solver"]["initial_samples"]), priors.prior(model, observed_spectra)):
+            pool.apply_async(__safe_log_probability, args=(theta, model, observed_spectra), callback=callback)
 
     else:
 
         if not isinstance(initial_thetas[0], (list, tuple, np.ndarray)):
             initial_thetas = [initial_thetas]
 
-        [pool.apply_async(__log_prob_of_explicit_theta, args=(initial_theta, model, observed_spectra), callback=callback) \
-            for initial_theta in initial_thetas]
+        [pool.apply_async(__safe_log_probability, args=(theta, model, observed_spectra), callback=callback) \
+            for theta in initial_thetas]
 
     pool.close()
     pool.join()
 
     index = np.argmax([result[1] for result in results])
     p0 = results[index][0]
-
-    logger.info("Calculating log probabilities of {0:.0f} implicit prior points took {1:.2f} seconds".format(
+    logger.info("Calculating log probabilities of {0:.0f} prior points took {1:.2f} seconds".format(
         len(results), time() - ta))
-
+    
     return p0
 
 
@@ -312,7 +324,7 @@ def solve(observed_spectra, model, initial_thetas=None):
         # Optimisation
         opt_theta, fopt, niter, funcalls, warnflag = scipy.optimize.fmin(
             lambda theta, model, obs: -log_probability(theta, model, obs), p0,
-            args=(model, observed_spectra), xtol=0.001, ftol=0.001, full_output=True, disp=False)
+            args=(model, observed_spectra), xtol=100., ftol=0.1, full_output=True, disp=False)
 
         if warnflag > 0:
             messages = [
@@ -338,7 +350,7 @@ def solve(observed_spectra, model, initial_thetas=None):
 
     # Initialise the sampler
     walkers, burn, sample = [model.configuration["solver"][k] for k in ("walkers", "burn", "sample")]
-    mean_acceptance_fractions = np.zeros(burn)
+    mean_acceptance_fractions = np.zeros(burn + sample)
     autocorrelation_time = np.zeros((burn, len(model.dimensions)))
 
     sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_probability,
@@ -356,13 +368,14 @@ def solve(observed_spectra, model, initial_thetas=None):
         if mean_acceptance_fractions[i] in (0, 1):
             raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
 
-    chain, ln_probability = sampler.chain, sampler.lnprobability
+    chain, lnprobability = sampler.chain, sampler.lnprobability
 
     logger.info("Resetting chain...")
     sampler.reset()
 
-    logger.info("Sampling 'posterior'?")
-    sampler.run_mcmc(pos, model.configuration["solver"]["sample"], rstate0=rstate)
+    logger.info("Sampling posterior...")
+    for j, state in enumerate(sampler.sample(pos, iterations=sample, rstate0=rstate)):
+        mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
 
     # Get the quantiles
     posteriors = {}
@@ -371,17 +384,19 @@ def solve(observed_spectra, model, initial_thetas=None):
             zip(*np.percentile(sampler.chain.reshape(-1, len(model.dimensions)), [16, 50, 84], axis=0)))):
         posteriors[parameter_name] = (median, quantile_16, quantile_84)
 
+        # Transform redshift posteriors to velocity posteriors
         if parameter_name.startswith("z."):
             posteriors["v_rad." + parameter_name[2:]] = list(np.array(posteriors[parameter_name]) * 299792458e-3)
 
-    if not (0.5 > mean_acceptance_fractions[-1] > 0.2):
-        warnflag += 4
+    # Concatenate the existing chain and lnprobability with the posterior samples
+    chain = np.concatenate([chain, sampler.chain], axis=1)
+    lnprobability = np.concatenate([lnprobability, sampler.lnprobability], axis=1)
 
     # Send back additional information
     additional_info = {
         "priors": p0,
         "chain": chain,
-        "ln_probability": ln_probability,
+        "lnprobability": lnprobability,
         "mean_acceptance_fractions": mean_acceptance_fractions,
         "warnflag": warnflag,
         "time_elapsed": time() - t_init
