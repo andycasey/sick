@@ -1,25 +1,24 @@
-SICK
-----
+*sick*, the spectroscopic inference crank
+------
 
 [![Build Status](https://travis-ci.org/andycasey/sick.png?branch=master)](https://travis-ci.org/andycasey/sick) [![PyPi download count image](https://pypip.in/d/sick/badge.png)](https://pypi.python.org/pypi/sick/) [![Coverage Status](https://img.shields.io/coveralls/andycasey/sick.svg)](https://coveralls.io/r/andycasey/sick)
 
-Written by Andy Casey ([arc@ast.cam.ac.uk](mailto:arc@ast.cam.ac.uk))
 
-Principle
----------
+**Idea**
+
 All other attempts to determine stellar parameters from a grid of
 pre-computed spectra separate out the normalisation, radial velocity, and synthetic
 smoothing components. In reality these phenomena are all linked, and the reliability
 of stellar parameter inference will be affected by any uncertainty in these components.
 You should have a single mathematical model that can incorporate all of these convolutions, as well as anything else that can affect the spectra. That's what this code does. It's flexible enough for use on any type of spectra.
 
-Installation
-------------
+**Installation**
 
 ``pip install sick`` (or [if you must](https://stackoverflow.com/questions/3220404/why-use-pip-over-easy-install), use ``easy_install sick``)
 
-Usage
------
+
+**Usage**
+
 Running *sick* is as easy as:
 
 ``sick model.yaml my_spectrum.fits``
@@ -47,8 +46,9 @@ sun_posteriors, sun_sampler, sun_info = sick.solve("sun.ms.fits", model)
 arcturus_posteriors, arcturus_sampler, arcturus_info = sick.solve("arcturus.fits", model)
 ````
 
-Model Example
--------------
+
+**Model Example**
+
 In the usage example above, the ``model.yaml`` file contains all the model information required. This file can be a YAML or JSON-style format. Below is an example of what ``model.yaml`` might look like, with comments:
 
 ````
@@ -77,35 +77,28 @@ models:
       folder: "/media/wd/ges/synthetic-spectra/GES_HR21/GES_HR21_deltaAlphaFe+0.0.fits/"
       re_match: '[s|p](?P<teff>[0-9]+):g\+(?P<logg>[0-9.]+).+z(?P<feh>[0-9.+-]+).+fits'
 
-# Allow for normalisation in the observed spectra. This will add (order + 1) free parameters
-# to our model for each aperture
-normalise_observed:
+# Allow for normalisation in the observed spectra
+normalise:
   blue:
-    perform: true
+    method: polynomial
     order: 2
   red:
-    perform: true
+    method: polynomial
     order: 3
 
 # Allow for individual doppler shifts in each aperture
 doppler_shift:
-  blue:
-    perform: true
-  red:
-    perform: true
+  blue: yes
+  red: yes
 
 # Allow for each aperture to have different resolutions
-smooth_model_flux:
-  blue:
-    perform: true
-    kernel: free
-  red:
-    perform: true 
-    kernel: free
+convolve:
+  blue: yes
+  red: yes
 ````
 
 **License**
 
-Copyright 2014 Andy Casey
+Copyright 2014 Andy Casey 
 
-This is open source software available under the MIT License. For details see the LICENSE file.
+This is open source software available under the MIT License. For details see the ``LICENSE`` file.
