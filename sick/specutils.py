@@ -16,13 +16,9 @@ import os
 import numpy as np
 import pyfits
 
-from scipy import interpolate, ndimage
-from scipy.optimize import leastsq
+from scipy import ndimage, stats
 
 logger = logging.getLogger(__name__.split(".")[0])
-
-# The following line of code will be supported until the end of the universe.
-speed_of_light = 299792458e-3 # km/s
 
 class Spectrum(object):
     """A class to deal with loading lots of different types of spectra"""
@@ -41,7 +37,9 @@ class Spectrum(object):
 
             else:
                 if isinstance(spectra, Spectrum1D) and spectra.variance is None:
-                    spectra.variance = np.array([1e-10] * len(spectra.disp))
+                    # Assume some S/N of ~250
+                    assumed_snr = 250
+                    spectra.variance = (stats.poisson.rvs([assumed_snr**2], size=len(spectra.disp))/float(assumed_snr**2) - 1.)**2
 
                 return spectra
 
@@ -297,7 +295,7 @@ class Spectrum1D(object):
                             logger.warn("Could not save header key/value combination: %s = %s" % (key, value, ))
                 
                 hdu.writeto(filename, clobber=clobber)
-    
+
 
     def gaussian_smooth(self, fwhm, **kwargs):
         """ Convolves the spectrum flux with a Gaussian kernel.
@@ -319,170 +317,6 @@ class Spectrum1D(object):
         return self.__class__(self.disp, smoothed_flux, variance=self.variance,
             headers=self.headers)
         
-
-    def doppler_shift(self, v):
-        """Performs a Doppler correction on the given `Spectrum1D` object by the
-        amount required.
-        
-        Inputs
-        ------
-        v : float
-            The velocity (in km/s) to correct the `Spectrum1D` object by.
-        """
-        
-        # Relatavistic:
-        c = speed_of_light
-        new_disp = self.disp * np.sqrt((1 + v/c)/(1 - v/c))
-        return self.__class__(new_disp, self.flux, variance=self.variance, headers=self.headers)
-
-    
-    def interpolate(self, new_disp, mode='linear', bounds_error=False,
-        fill_value=np.nan):
-        """Interpolate the `Spectrum1D` onto a new dispersion map.
-        
-        Inputs
-        ------
-        new_disp : np.array
-            An array of floating-point types containing the new dispersion points.
-            
-        mode : str
-            Interpolation mode. See `scipy.interpolate.interp1d` for available
-            options.
-        
-        bounds_error : bool
-            See `scipy.interpolate.interp1d` for details.
-        
-        fill_value : float-type
-            See `scipy.interpolate.interp1d`
-        """
-        
-        f = interpolate.interp1d(self.disp, self.flux, kind=mode, copy=False,
-                bounds_error=bounds_error, fill_value=fill_value)
-
-        return self.__class__(new_disp, f(new_disp), variance=self.variance,
-            headers=self.headers)
-
-
-    def cross_correlate(self, template, wl_region=None, full_output=False):
-        """Performs a cross-correlation between the observed and template spectrum and
-        provides a radial velocity and associated variance.
-
-        Inputs
-        ------
-        template : `Spectrum1D`
-            The normalised template spectrum.
-
-        wl_region : optional, two length list containing floats [start, end]
-            The starting and end wavelength to perform the cross-correlation on.
-
-        full_output : `bool`, default False
-            Whether or not to return the full output of the cross-correlation. If set to True
-            then the output is as follows:
-
-            v_rad, v_err, fft, profile
-
-            where fft is a `np.ndarray` of shape (2, *) containing the Fourier transform
-            and profile is a length 3 list containing the central peak point, peak height, and
-            standard deviation.
-        """
-
-        if not isinstance(template, Spectrum1D):
-            raise TypeError("template spectrum must be a `specutils.Spectrum1D` object")
-
-        if wl_region is not None:
-
-            if not isinstance(wl_region, (tuple, list, np.ndarray)) or len(wl_region) != 2:
-                raise TypeError("wavelength region must be a two length list-type")
-
-            try:
-                wl_region = map(float, wl_region)
-
-            except:
-                raise TypeError("wavelength regions must be float-like")
-
-        else:
-            # Get overlapping region
-            wl_region = np.array([
-                np.max([self.disp[0], template.disp[0]]),
-                np.min([self.disp[-1], template.disp[-1]])
-                ])
-        
-        # Splice the observed spectrum
-        idx = np.searchsorted(self.disp, wl_region)
-        finite_values = np.isfinite(self.flux[idx[0]:idx[1]])
-
-        observed_slice = Spectrum1D(disp=self.disp[idx[0]:idx[1]][finite_values], flux=self.flux[idx[0]:idx[1]][finite_values])
-
-        # Ensure the template and observed spectra are on the same scale
-        template_func = interpolate.interp1d(template.disp, template.flux, bounds_error=False, fill_value=0.0)
-        template_slice = Spectrum1D(disp=observed_slice.disp, flux=template_func(observed_slice.disp))
-
-        # Perform the cross-correlation
-        padding = observed_slice.flux.size + template_slice.flux.size
-        x_norm = (observed_slice.flux - observed_slice.flux[np.isfinite(observed_slice.flux)].mean(axis=None))
-        y_norm = (template_slice.flux - template_slice.flux[np.isfinite(template_slice.flux)].mean(axis=None))
-
-        Fx = np.fft.fft(x_norm, padding, )
-        Fy = np.fft.fft(y_norm, padding, )
-        iFxy = np.fft.ifft(Fx.conj() * Fy).real
-        varxy = np.sqrt(np.inner(x_norm, x_norm) * np.inner(y_norm, y_norm))
-
-        fft_result = iFxy/varxy
-
-        # Put around symmetry
-        num = len(fft_result) - 1 if len(fft_result) % 2 else len(fft_result)
-
-        fft_y = np.zeros(num)
-
-        fft_y[:num/2] = fft_result[num/2:num]
-        fft_y[num/2:] = fft_result[:num/2]
-
-        fft_x = np.arange(num) - num/2
-
-        # Get initial guess of peak
-        p0 = np.array([fft_x[np.argmax(fft_y)], np.max(fft_y), 10])
-
-        gaussian_profile = lambda p, x: p[1] * np.exp(-(x - p[0])**2 / (2.0 * p[2]**2))
-        errfunc = lambda p, x, y: y - gaussian_profile(p, x)
-
-        try:
-            p1, ier = leastsq(errfunc, p0.copy(), args=(fft_x, fft_y))
-
-        except:
-            raise
-
-        # variance
-        sigma = np.mean(2.0*(fft_y.real)**2)**0.5
-
-        # Create functions for interpolating back onto the dispersion map
-        points = (0, p1[0], sigma)
-        interp_x = np.arange(num/2) - num/4
-
-        functions = []
-        for point in points:
-            idx = np.searchsorted(interp_x, point)
-            f = interpolate.interp1d(interp_x[idx-3:idx+3], observed_slice.disp[idx-3:idx+3], bounds_error=False, kind='cubic')
-            
-            functions.append(f)
-
-        # 0, p1, sigma
-        f, g, h = [func(point) for func, point in zip(functions, points)]
-
-        # Calculate velocity 
-        z = (1. - g/f)
-
-        # variance
-        z_err = np.abs(1 - h/f)
-        R = np.max(fft_y)
-
-        if full_output:
-            results = [z, z_err, R, np.vstack([fft_x, fft_y])]
-            results.extend(p1)
-
-            return results
-
-        return [z, z_err, R]
-
 
 def load_aaomega_multispec(filename, fill_value=-1, clean=True):
     """
@@ -549,5 +383,4 @@ def load_aaomega_multispec(filename, fill_value=-1, clean=True):
         spectra.append(spectrum)
     
     return spectra
-
 
