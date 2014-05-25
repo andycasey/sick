@@ -30,15 +30,15 @@ def main():
     parser.add_argument("spectra", nargs="+", help="filenames of spectra to analyse")
     parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
         type=str, default=os.getcwd())
-    parser.add_argument("-p", "--filename-prefix", dest="filename_prefix", default="sick")
-    parser.add_argument("-mb", "--multi-beam", action="store_true", default=False)
+    parser.add_argument("--filename-prefix", "-p", dest="filename_prefix", default="sick")
+    parser.add_argument("--multi-beam", "-mb", action="store_true", default=False)
     parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all")
     parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0)
     parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
     parser.add_argument("--debug", dest="debug", action="store_true", default=False)
     parser.add_argument("--clobber", dest="clobber", action="store_true", default=False)
-    parser.add_argument("-pf", "--plot-format", dest="plot_format", action="store", type=str, default="jpg")
+    parser.add_argument("--plot-format", "-pf", dest="plot_format", action="store", type=str, default="jpg")
 
     args = parser.parse_args()
 
@@ -83,7 +83,7 @@ def main():
         all_spectra = [all_spectra]
 
     # Load the model
-    model = sick.Model(args.model)
+    model = sick.models.Model(args.model)
     logger.info("Model information: {0}".format(model))
 
     # Define headers that we want in the results filename 
@@ -177,6 +177,7 @@ def main():
             # Save information related to the analysis
             metadata.update({
                 "warnflag": info["warnflag"],
+                "maximum_log_likelihood": np.max(info["lnprobability"][np.isfinite(info["lnprobability"])]),
                 "chain_filename": chain_filename,
                 "pp_observed_spectra_filenames": ",".join(pp_observed_spectra_filenames),
                 "pp_modelled_spectra_filenames": ",".join(pp_modelled_spectra_filenames),
@@ -222,7 +223,6 @@ def main():
             ml_metadata.update(ml_parameters)
             with open(output("pp.json"), "wb") as fp:
                 json.dump(ml_metadata, fp)
-
 
             pp_model_fluxes = model(observations=spectra, **dict(zip(model.dimensions, [posteriors[each][0] for each in model.dimensions])))
             ml_model_fluxes = model(observations=spectra, **ml_parameters)
@@ -296,12 +296,24 @@ def main():
                 # Make a corner plot with just the parameters of interest
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
-                    labels=sick.utils.latexify(model.grid_points.dtype.names), extents=[0.99]*len(indices),
+                    labels=sick.utils.latexify(model.grid_points.dtype.names),
                     quantiles=[.16, .50, .84], verbose=False)
                 fig.savefig(corner_plot_filename)
 
                 # Plot spectra
-                fig = plt.figure()
+                # Sample spectra from posterior
+                n_sample_posterior = 100
+                sample_posterior_fluxes = []
+                reshaped_chain = sampler.chain.reshape(-1, len(model.dimensions))
+                for i in xrange(n_sample_posterior):
+
+                    theta = reshaped_chain[np.random.randint(0, len(reshaped_chain))]
+                    try:
+                        sample_posterior_fluxes.append(model(observations=spectra, **dict(zip(model.dimensions, theta))))
+                    except:
+                        continue
+
+                fig = plt.figure(figsize=(10, 2))
                 for i, (channel, pp_model_flux, ml_model_flux, observed_aperture) \
                 in enumerate(zip(model.channels, pp_model_fluxes, ml_model_fluxes, spectra)):
 
@@ -316,8 +328,11 @@ def main():
                     ]
 
                     ax.plot(observed_aperture.disp, pp_model_flux, 'b', zorder=1, label="PP")
-                    ax.plot(observed_aperture.disp, ml_model_flux, 'g', zorder=1, label="ML")
+                    ax.plot(observed_aperture.disp, ml_model_flux, 'r', zorder=1, label="ML")
                     ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
+
+                    for sample in sample_posterior_fluxes:
+                        ax.plot(observed_aperture.disp, sample[i], c="#bbbbbb", zorder=-1)
                     
                     ax.yaxis.set_major_locator(MaxNLocator(4))
                     ax.set_ylabel("Flux, $F_\lambda$")
