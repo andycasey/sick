@@ -12,6 +12,8 @@ def test_latexify():
     output_labels = ['$T_{\\rm eff}$ [K]', '$ln(f_{blue})$', '$V_{rad,{blue}}$ [km/s]', '$r_a1$']
     assert utils.latexify(input_labels) == output_labels
     assert utils.latexify(input_labels[0]) == output_labels[0]
+    assert utils.latexify("convolve.green") == "$\sigma_{green}$ [$\AA$]"
+    assert utils.latexify(["this", "moo"], {"this": "$that$"}) == ["$that$", "moo"]
 
 
 def test_unique_preserved_list():
