@@ -1,7 +1,7 @@
-SPECTROSCOPE
-------------
+SICK
+----
 
-[![Build Status](https://travis-ci.org/andycasey/spectroscope.png?branch=master)](https://travis-ci.org/andycasey/spectroscope) [![PyPi download count image](https://pypip.in/d/scope/badge.png)](https://pypi.python.org/pypi/spectroscope/)
+[![Build Status](https://travis-ci.org/andycasey/sick.png?branch=master)](https://travis-ci.org/andycasey/sick) [![PyPi download count image](https://pypip.in/d/sick/badge.png)](https://pypi.python.org/pypi/sick/)
 
 Written by Andy Casey ([arc@ast.cam.ac.uk](mailto:arc@ast.cam.ac.uk))
 
@@ -11,41 +11,40 @@ All other attempts to determine stellar parameters from a grid of
 pre-computed spectra separate out the normalisation, radial velocity, and synthetic
 smoothing components. In reality these phenomena are all linked, and the reliability
 of stellar parameter inference will be affected by any uncertainty in these components.
-You should have a single mathematical model that can incorporate all of these convolutions. 
-That's what this code does. It's flexible enough for use on any type of spectra.
+You should have a single mathematical model that can incorporate all of these convolutions, as well as anything else that can affect the spectra. That's what this code does. It's flexible enough for use on any type of spectra.
 
 Installation
 ------------
 
-``pip install spectroscope`` (or [if you must](https://stackoverflow.com/questions/3220404/why-use-pip-over-easy-install), use ``easy_install spectroscope``)
+``pip install sick`` (or [if you must](https://stackoverflow.com/questions/3220404/why-use-pip-over-easy-install), use ``easy_install sick``)
 
 Usage
 -----
-Running SCOPE is as easy as:
+Running *sick* is as easy as:
 
-``scope model.yaml my_spectrum.fits``
+``sick model.yaml my_spectrum.fits``
 
 If you have multiple spectra in different channels (e.g., multiplexing) then you can analyse all spectra just as easily:
 
-``scope model.yaml --multi-beam blue_channel.fits red_channel.fits``
+``sick model.yaml --multi-beam blue_channel.fits red_channel.fits``
 
 Or you can analyse the data in a Python script:
 
 ````
-import scope
+import sick
 
 # A single spectrum:
-posteriors, sampler, info = scope.solve("sun.ms.fits", "model.yaml")
+posteriors, sampler, info = sick.solve("sun.ms.fits", "model.yaml")
 
 # Multiple spectra of the same star:
 # (As long as your model apertures are defined, the order of input spectra does not matter..)
-posteriors, sampler, info = scope.solve(["red.fits", "blue.fits"], "model.yaml")
+posteriors, sampler, info = sick.solve(["red.fits", "blue.fits"], "model.yaml")
 
 # Or you can load the model first and use it for many stars:
-model = scope.models.Model("model.yaml")
-sun_posteriors, sun_sampler, sun_info = scope.solve("sun.ms.fits", model)
+model = sick.models.Model("model.yaml")
+sun_posteriors, sun_sampler, sun_info = sick.solve("sun.ms.fits", model)
 
-arcturus_posteriors, arcturus_sampler, arcturus_info = scope.solve("arcturus.fits", model)
+arcturus_posteriors, arcturus_sampler, arcturus_info = sick.solve("arcturus.fits", model)
 ````
 
 Model Example
@@ -54,10 +53,10 @@ In the usage example above, the ``model.yaml`` file contains all the model infor
 
 ````
 solver:
-  method: emcee
   optimise: yes
   walkers: 200
-  max_sample: 200
+  burnin: 500
+  samples: 100
   threads: 8
 
 models:
