@@ -1,7 +1,7 @@
 *sick*, the spectroscopic inference crank
 ------
 
-[![Build Status](https://travis-ci.org/andycasey/sick.png?branch=master)](https://travis-ci.org/andycasey/sick) [![PyPi download count image](https://pypip.in/d/sick/badge.png)](https://pypi.python.org/pypi/sick/) [![Coverage Status](https://img.shields.io/coveralls/andycasey/sick.svg)](https://coveralls.io/r/andycasey/sick)
+[![Build Status](http://img.shields.io/travis/andycasey/sick.svg)](https://travis-ci.org/andycasey/sick) [![PyPi download count image](http://img.shields.io/pypi/dm/sick.svg)](https://pypi.python.org/pypi/sick/) [![Coverage Status](https://img.shields.io/coveralls/andycasey/sick.svg)](https://coveralls.io/r/andycasey/sick)
 
 
 **Idea**
