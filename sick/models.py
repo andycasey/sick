@@ -25,7 +25,7 @@ import yaml
 from scipy import interpolate, ndimage
 
 # Module-specific
-from utils import find_spectral_overlap, human_readable_digit 
+from utils import human_readable_digit 
 from specutils import Spectrum1D
 
 logger = logging.getLogger(__name__.split(".")[0])
@@ -64,6 +64,8 @@ class Model(object):
     """
     A class to represent the approximate data-generating model for spectra.
     """
+
+    _logarithmic_parameter_indices = []
 
     def __init__(self, filename, validate=True):
         """
@@ -145,8 +147,21 @@ class Model(object):
                 raise ValueError("the total flux pixels ({0}) was different to what was expected ({1})".format(
                     total_flux_pixels, total_dispersion_pixels))
 
-            _scope_interpolator_ = interpolate.LinearNDInterpolator(
-                self.grid_points.view(float).reshape((num_points, -1)), fluxes)
+            points = self.grid_points.view(float).reshape((num_points, -1))
+    
+            # Are any points meant to be linearly on a logarithmic scale?
+            
+            if self.configuration.get("logarithmic_parameters", False):
+                self._logarithmic_parameter_indices = [self.grid_points.dtype.names.index(each) \
+                    for each in self.configuration["logarithmic_parameters"]]
+                
+                #for index in self._logarithmic_parameter_indices:
+                #    points[:, index] = 10**points[:, index]
+
+                #points = np.ascontiguousarray(points, dtype=points.dtype)
+            
+
+            _scope_interpolator_ = interpolate.LinearNDInterpolator(points, fluxes)
             del fluxes
 
         else:
@@ -193,6 +208,9 @@ class Model(object):
                         channel))
 
                 if i == 0:
+
+                    raise NotImplementedError("cannot deal with log/linear interpolation yet")
+
                     # Save the grid points as a record array
                     self.grid_points = np.core.records.fromrecords(points, names=dimensions,
                         formats=["f8"]*len(dimensions))
@@ -205,6 +223,8 @@ class Model(object):
         # Pre-compute the grid boundaries
         self.grid_boundaries = dict(zip(self.grid_points.dtype.names, [(np.min(self.grid_points[_]), np.max(self.grid_points[_])) \
             for _ in self.grid_points.dtype.names]))
+
+
         return None
 
 
@@ -239,7 +259,7 @@ class Model(object):
         if hasattr(self, "_channels"):
             return self._channels
 
-        protected_channel_names = ("points_filename", "flux_filename")
+        protected_channel_names = ("points_filename", "flux_filename", "Pb", "Yb", "Vb")
         return list(set(self.configuration["channels"].keys()).difference(protected_channel_names))
 
 
@@ -534,6 +554,10 @@ class Model(object):
                 # Check which channels have smoothing allowed and add them
                 dimensions.extend(["convolve.{}".format(each) \
                     for each in self.channels if self.configuration[dimension].get(each, False)])  
+
+            elif dimension == "outliers" and self.configuration["outliers"]:
+                # Append outlier dimensions
+                dimensions.extend(["Pb", "Yb", "Vb"])
         
         # Append jitter
         dimensions.extend(["jitter.{}".format(channel) for channel in self.channels])
@@ -665,12 +689,14 @@ class Model(object):
         # Now we need to save the flux to disk
         del flux
 
+        # Create the cached version 
         cached_model = self.configuration.copy()
         cached_model["channels"] = {
             "grid_points": grid_points_filename,
             "flux_filename": flux_filename,
         }
-        cached_model.update(dispersion_filenames)
+        cached_model["channels"].update(dispersion_filenames)
+
         return cached_model
 
 
@@ -738,8 +764,45 @@ class Model(object):
 
         global _scope_interpolator_
         if _scope_interpolator_ is not None:
+       
+            transformed_point = np.array(point).copy() 
+            # Is there any logarithmic parameter rescaling that we should be doing?
+            if len(self._logarithmic_parameter_indices) > 0:
 
-            interpolated_flux = _scope_interpolator_(*point)
+                for index, parameter in zip(self._logarithmic_parameter_indices, self.configuration["logarithmic_parameters"]):
+                    value = transformed_point[index]
+
+                    # Get nearest neighbours from grid points
+                    point_range = np.sort(np.unique(self.grid_points[parameter]))
+                    right_neighbour = np.searchsorted(point_range, value)
+
+                    # Will fail at grid boundaries
+                    logarithmic_range = 10**point_range[right_neighbour] - 10**point_range[right_neighbour - 1]
+                    linear_range = point_range[right_neighbour] - point_range[right_neighbour - 1]
+
+                    #transformed_value = point_range[right_neighbour - 1] + (((value - point_range[right_neighbour - 1])/linear_range) * logarithmic_range)
+                    #tranformed_value = np.log10((10**value) * logarithmic_range/linear_range) + point_range[right_neighbour - 1]
+                    #transformed_value = np.log10((10**value - 10**point_range[right_neighbour-1])/logarithmic_range + 10**point_range[right_neighbour-1])
+
+                    # Range values are 4.0 to 4.5 --> 10^4 and 10^4.5
+                    # Requested value is 4.4 --> 10^4.4
+
+                    # We want 10^4.4, but it's going to give us 4.4
+                    # Scale the value
+                    #(10**4.4 - 10**4)/(10**4.5 - 10**4.0) * (4.5 - 4.0) + 4.0
+                    transformed_value = (10**value - 10**point_range[right_neighbour-1])/logarithmic_range * linear_range + point_range[right_neighbour-1]
+                    #transformed_value = (10**value - 10**point_range[0])/(10**point_range[-1] - 10**point_range[0]) * np.ptp(point_range) + point_range[0]
+
+                    if not np.isfinite(transformed_value):
+                        raise NotImplementedError
+
+                    transformed_point[index] = transformed_value
+            else:
+                transformed_point = point
+
+            logger.debug("POINT IS {0}, TRANSFORMED POINT IS {1}".format(point, transformed_point))
+
+            interpolated_flux = _scope_interpolator_(*transformed_point)
             
             if np.all(~np.isfinite(interpolated_flux)):
                 raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")    

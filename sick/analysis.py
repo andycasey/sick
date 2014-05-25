@@ -14,6 +14,7 @@ import multiprocessing.pool
 import os
 import threading
 import re
+from itertools import chain
 from time import time
 
 # Third-party
@@ -51,6 +52,11 @@ def log_prior(theta, model):
         if dimension.startswith("jitter.") and not -10. < value < 1.:
             return -np.inf
 
+        # Check for outlier parameters
+        if dimension == "Pb" and not (1. > value > 0.) \
+        or dimension == "Vb" and 0 > value:
+            return -np.inf
+
         # Check if point is within the grid boundaries
         if dimension in model.grid_boundaries:
             if dimension not in priors:
@@ -82,17 +88,31 @@ def log_likelihood(theta, model, observations):
     except:
         return -np.inf
 
-    differences = 0
+    likelihood = 0
     for (channel, model_flux, observed_spectrum) in zip(model.channels, model_fluxes, observations):
 
-        inverse_variance = 1.0/(observed_spectrum.variance \
+        signal_inverse_variance = 1.0/(observed_spectrum.variance \
             + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
-        difference = (observed_spectrum.flux - model_flux)**2 * inverse_variance
-        
-        finite = np.isfinite(difference)
-        differences += np.sum(difference[finite] - np.log(inverse_variance[finite]))
 
-    likelihood = -0.5 * differences
+        signal_likelihood = -0.5 * ((observed_spectrum.flux - model_flux)**2 * signal_inverse_variance \
+            - np.log(signal_inverse_variance))
+
+        # Are we modelling the outliers as well?
+        if "Pb" in theta_dict.keys():
+            outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_spectrum.variance \
+                + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
+
+            outlier_likelihood = -0.5 * ((observed_spectrum.flux - theta_dict["Yb"])**2 * outlier_inverse_variance \
+                - np.log(outlier_inverse_variance))
+
+            Pb = theta_dict["Pb"]
+            finite = np.isfinite(outlier_likelihood * signal_likelihood)
+            likelihood += np.sum(np.logaddexp(np.log(1. - Pb) + signal_likelihood[finite], np.log(Pb) + outlier_likelihood[finite]))
+
+        else:
+            finite = np.isfinite(signal_likelihood)
+            likelihood += np.sum(signal_likelihood[finite])
+
     logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in theta_dict.iteritems()])))  
 
@@ -131,15 +151,15 @@ def sample_ball(point, observed_spectra, model):
     for di, dimension in enumerate(model.dimensions):
 
         if dimension in model.grid_points.dtype.names:
-            # Set sigma to be 25% of the dimension dynamic range
-            dimensional_std.append(0.10 * np.ptp(model.grid_boundaries[dimension]))
+            # Set sigma to be 5% of the dimension dynamic range
+            dimensional_std.append(0.05 * np.ptp(model.grid_boundaries[dimension]))
            
         elif dimension.startswith("z."):
-            # Set the velocity sigma to be 10 km/s
-            dimensional_std.append(10./299792458e-3)
+            # Set the velocity sigma to be 1 km/s
+            dimensional_std.append(1./299792458e-3)
             
         elif dimension.startswith("convolve."): 
-            dimensional_std.append(0.10)
+            dimensional_std.append(0.05)
 
         elif dimension.startswith("normalise."):
 
@@ -186,7 +206,7 @@ def sample_ball(point, observed_spectra, model):
                 dispersion = observed_channel.disp.mean()
                 flux_scale = 3. * np.sqrt(observed_channel.variance[np.isfinite(observed_channel.variance)].mean())
                 dimensional_std.append(flux_scale/(dispersion**(order - coefficient)))
-                   
+
         else:
             # Jitter
             dimensional_std.append(0.1)
@@ -198,6 +218,20 @@ def sample_ball(point, observed_spectra, model):
     # Write over jitter priors
     for ji in jitter_indices:
         p0[:, ji] = np.random.uniform(-10, 1, size=walkers)
+
+
+    # Write over Pb priors
+    all_fluxes = np.array(list(chain(*[each.flux for each in observed_spectra])))
+    all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
+    for i, dimension in enumerate(model.dimensions):
+        if dimension == "Pb":
+            p0[:, i] = np.random.uniform(0, 1, size=walkers)
+
+        elif dimension == "Yb":
+            p0[:, i] = np.random.normal(np.median(all_fluxes), 0.1 * np.median(all_fluxes), size=walkers)
+
+        elif dimension == "Vb":
+            p0[:, i] = np.random.normal(0, np.std(all_fluxes), size=walkers)**2
 
     # Write over normalisation priors if necessary
 
@@ -218,11 +252,11 @@ def sample_ball(point, observed_spectra, model):
         if n > 0:
             try:
                 model_channels = model(observations=observed_spectra, **pi_parameters)
-            except ValueError: continue
+            except: continue
             
             for channel, observed_channel, model_channel_flux in zip(model.channels, observed_spectra, model_channels):
 
-                continuum = (observed_channel.flux + 3. * np.random.normal(0, np.sqrt(observed_channel.variance)))/model_channel_flux
+                continuum = (observed_channel.flux + 3. * np.random.normal(0, 1e-12 + np.abs(np.sqrt(observed_channel.variance))))/model_channel_flux
                 finite = np.isfinite(continuum)
                 if np.sum(finite) == 0: break
 
@@ -258,6 +292,8 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
             model configuration `model.solver.initial_samples`
     """
 
+    logger.info("Performing random scattering...")
+
     # Random scattering
     ta = time()
 
@@ -290,6 +326,45 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
     return p0
 
 
+def optimise(p0, observed_spectra, model, full_output=False):
+    """
+    Numerically optimise the likelihood from a provided point p0.
+
+    Args:
+        p0 (list-type): The theta point to optimise from.
+        observed_spectra (list of Spectrum1D objects): The observed data.
+        model (sick.models.Model object): The model class.
+        full_output (bool): Return all output parameters.
+
+    Returns:
+        opt_theta (list-type) the numerically optimised point.
+    """
+
+    logger.info("Optimising from point:")
+    for dimension, value in zip(model.dimensions, p0):
+        logger.info("\t{0}: {1:.2e}".format(dimension, value))
+
+    ta = time()
+
+    # Optimisation
+    opt_theta, fopt, niter, funcalls, warnflag = scipy.optimize.fmin(
+        lambda theta, model, obs: -log_probability(theta, model, obs), p0,
+        args=(model, observed_spectra), xtol=100., ftol=0.1, full_output=True, disp=False)
+
+    if warnflag > 0:
+        messages = [
+            "Maximum number of function evaluations made. Optimised solution may be inaccurate.",
+            "Maximum number of iterations reached. Optimised solution may be inaccurate."
+        ]
+        logger.warn(messages[warnflag - 1])
+    logger.info("Optimisation took {0:.2f} seconds".format(time() - ta))
+
+    if full_output:
+        return (opt_theta, fopt, niter, funcalls, warnflag)
+
+    return opt_theta
+
+
 def solve(observed_spectra, model, initial_thetas=None):
     """
     Solve for the model parameters theta given the observed spectra.
@@ -313,26 +388,10 @@ def solve(observed_spectra, model, initial_thetas=None):
     # Perform any optimisation and initialise priors
     if model.configuration["solver"].get("optimise", True):
         
-        p0 = random_scattering(observed_spectra, model, initial_thetas)
+        scatter_points = random_scattering(observed_spectra, model, initial_thetas)
 
-        logger.info("Optimising from point:")
-        for dimension, value in zip(model.dimensions, p0):
-            logger.info("\t{0}: {1:.2e}".format(dimension, value))
-
-        ta = time()
-
-        # Optimisation
-        opt_theta, fopt, niter, funcalls, warnflag = scipy.optimize.fmin(
-            lambda theta, model, obs: -log_probability(theta, model, obs), p0,
-            args=(model, observed_spectra), xtol=100., ftol=0.1, full_output=True, disp=False)
-
-        if warnflag > 0:
-            messages = [
-                "Maximum number of function evaluations made. Optimised solution may be inaccurate.",
-                "Maximum number of iterations reached. Optimised solution may be inaccurate."
-            ]
-            logger.warn(messages[warnflag - 1])
-        logger.info("Optimisation took {0:.2f} seconds".format(time() - ta))
+        opt_theta, fopt, niter, funcalls, warnflag = optimise(scatter_points, observed_spectra,
+            model, full_output=True)
 
         # Sample around opt_theta using some sensible things
         p0 = sample_ball(dict(zip(model.dimensions, opt_theta)), observed_spectra, model)
@@ -377,12 +436,16 @@ def solve(observed_spectra, model, initial_thetas=None):
     for j, state in enumerate(sampler.sample(pos, iterations=sample, rstate0=rstate)):
         mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
 
+    # Get the maximum likelihood theta
+    ml_index = np.argmax(sampler.lnprobability.reshape(-1))
+    ml_values = sampler.chain.reshape(-1, len(model.dimensions))[ml_index]
+
     # Get the quantiles
     posteriors = {}
-    for parameter_name, (median, quantile_16, quantile_84) in zip(model.dimensions, 
-        map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
+    for parameter_name, ml_value, (quantile_16, quantile_84) in zip(model.dimensions, ml_values, 
+        map(lambda v: (v[2]-v[1], v[1]-v[0]),
             zip(*np.percentile(sampler.chain.reshape(-1, len(model.dimensions)), [16, 50, 84], axis=0)))):
-        posteriors[parameter_name] = (median, quantile_16, quantile_84)
+        posteriors[parameter_name] = (ml_value, quantile_16, quantile_84)
 
         # Transform redshift posteriors to velocity posteriors
         if parameter_name.startswith("z."):

@@ -11,6 +11,7 @@ __all__ = ["implicit", "explicit"]
 # Standard library
 import logging
 import os
+from itertools import chain
 from time import time
 
 # Third-party
@@ -82,7 +83,7 @@ def __cross_correlate__(args):
     z_best = z_array[ccf.argmax()]    
     z_err = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.35482)**2
 
-    return np.random.normal(z_best, z_err)
+    return z_best
 
 
 
@@ -103,6 +104,16 @@ def prior(model, observations, size=1):
     prior_distributions.update(dict(
         [("jitter.{}".format(c), "uniform(-10, 1)") for c in model.channels]
     ))
+
+    # Default outlier distribution priors
+    prior_distributions.update({"Pb": "uniform(0, 1)"})
+    all_fluxes = np.array(list(chain(*[each.flux for each in observations])))
+    all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
+
+    prior_distributions.update({
+        "Yb": "normal({0}, 0.5 * {0})".format(np.median(all_fluxes)),
+        "Vb": "normal({0}, 0.5 * {0})".format(np.std(all_fluxes)**2)
+        })
 
     # Get explicit priors
     prior_distributions.update(model.configuration.get("priors", {}))
@@ -133,7 +144,7 @@ def prior(model, observations, size=1):
                 # Interpolate intensities at this point
                 try:
                     model_intensities.update(model.interpolate_flux(current_prior))
-                except ValueError:
+                except (IndexError, ValueError) as e:
                     break
 
                 # Check the intensities are finite, otherwise move on
@@ -160,7 +171,12 @@ def prior(model, observations, size=1):
                         right=np.nan)
 
                     finite_continuum = np.isfinite(continuum)
-                    method = model.configuration["normalise"][channel]["method"]
+
+                    if model.configuration.get("normalise", False) and channel in model.configuration["normalise"]:
+                        method = model.configuration["normalise"][channel]["method"]
+
+                    else:
+                        method = None
 
                     # Re-interpolate the observed fluxes where they are nans
                     finite_observed_fluxes = np.isfinite(observed_channel.flux)
@@ -198,7 +214,6 @@ def prior(model, observations, size=1):
                         num_knots = model.configuration["normalise"][channel]["knots"]
 
                         # Determine knot spacing
-
                         finite_continuum = np.isfinite(continuum)
                         knot_spacing = np.ptp(observed_channel.disp[finite_continuum])/(num_knots + 1)
                         continuum_parameters[channel] = np.arange(observed_channel.disp[finite_continuum][0] + knot_spacing,
@@ -216,6 +231,13 @@ def prior(model, observations, size=1):
                         env.update({channel:
                             (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
                         })
+
+                    else:
+                        # No normalisation specified, but we might be required to get a cross-correlation prior.
+                        interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                            cleaned_observed_flux, left=1, right=1)
+                        env.update({channel:
+                            (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])})
 
             # Have we already evaluated this dimension?
             if dimension in evaluated_priors.keys():
