@@ -205,7 +205,7 @@ def solve(args):
             hdulist = pyfits.HDUList([primary_hdu, table_hdu])
             hdulist.writeto(chain_filename, clobber=True)
 
-            with open(output("result.json"), "wb") as fp:
+            with open(output("result.json"), "wb+") as fp:
                 json.dump(metadata, fp)
 
             # Close sampler pool
@@ -214,7 +214,7 @@ def solve(args):
                 sampler.pool.join()
 
             # Save sampler state
-            with open(output("model.state"), "wb") as fp:
+            with open(output("model.state"), "wb+") as fp:
                 pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
             # Get the most likely sample
@@ -222,7 +222,7 @@ def solve(args):
             ml_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
             ml_metadata = metadata.copy()
             ml_metadata.update(ml_parameters)
-            with open(output("pp.json"), "wb") as fp:
+            with open(output("pp.json"), "wb+") as fp:
                 json.dump(ml_metadata, fp)
 
             pp_model_fluxes = model(observations=spectra, **dict(zip(model.dimensions, [posteriors[each][0] for each in model.dimensions])))
@@ -429,7 +429,7 @@ def aggregate(args):
     hdulist = pyfits.HDUList([primary_hdu, table_hdu])
     hdulist.writeto(args.output_filename, clobber=args.clobber)
 
-    logger.info("Successfully written {0} results with {1} fields to {2}".format(
+    logger.info("Successfully written results from {0} sources with {1} fields to {2}".format(
         len(results), len(results[0]), args.output_filename))
 
 
@@ -460,7 +460,7 @@ def main():
         help="Aggregate JSON results into a tabular format.")
     aggregate_parser.add_argument("output_filename", type=str,
         help="Output filename to aggregate results into.")
-    aggregate_parser.add_argument("JSON_result_filenames", nargs="+",
+    aggregate_parser.add_argument("result_filenames", nargs="+",
         help="The JSON result filenames to combine.")
     aggregate_parser.set_defaults(func=aggregate)
 
