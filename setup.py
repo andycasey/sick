@@ -38,5 +38,7 @@ setup(name="sick",
     long_description=readfile(os.path.join(os.path.dirname(__file__), "README.md")),
     install_requires=readfile(
         os.path.join(os.path.dirname(__file__), "requirements.txt")).split("\n"),
-    scripts=["sick/scripts/sick", "sick/scripts/sick-aggregate"]
+    entry_points={
+        "console_scripts": ["sick = sick.cli:main"]
+    }
 )
