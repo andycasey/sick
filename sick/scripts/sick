@@ -1,18 +1,22 @@
 #!/usr/bin/env python
 
-""" Infer stellar parameters from spectra """
+""" sick, the spectroscopic inference crank """
 
 from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
-import acor
+# Necessary for all sub-parsers
 import argparse
+import logging
+
+# Necessary for some sub-parsers
+import acor
 import cPickle as pickle
 import json
-import logging
 import multiprocessing
 import os
+import yaml
 from time import time
 
 import numpy as np
@@ -20,39 +24,29 @@ import pyfits
 
 import sick
 
-def main():
+# Initialise logging
+logger = logging.getLogger("sick")
+
+def download(args):
     """
-    Solve astrophysical parameters from spectral data.
+    Download requested files.
     """
 
-    parser = argparse.ArgumentParser(description="the spectroscopic inference crank")
-    parser.add_argument("model", type=str, help="YAML- or JSON-style model filename")
-    parser.add_argument("spectra", nargs="+", help="filenames of spectra to analyse")
-    parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", help="directory for output files",
-        type=str, default=os.getcwd())
-    parser.add_argument("--filename-prefix", "-p", dest="filename_prefix", default="sick")
-    parser.add_argument("--multi-beam", "-mb", action="store_true", default=False)
-    parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all")
-    parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0)
-    parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True)
-    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
-    parser.add_argument("--debug", dest="debug", action="store_true", default=False)
-    parser.add_argument("--clobber", dest="clobber", action="store_true", default=False)
-    parser.add_argument("--plot-format", "-pf", dest="plot_format", action="store", type=str, default="jpg")
+    raise NotImplementedError
 
-    args = parser.parse_args()
+
+def solve(args):
+    """
+    Calculate posterior probability distributions for model parameters given the data.
+    """
 
     if not os.path.exists(args.model):
         raise IOError("model filename {0} does not exist".format(args.model))
 
     available = ("pdf", "jpg", "png", "eps")
     if args.plotting and args.plot_format.lower() not in available:
-        raise ValueError("plotting format '{0}' not available. Options: {1}".format(args.plot_format.lower(),
-            ", ".join(available)))
-
-    # Initialise logging
-    logger = logging.getLogger("sick")
-    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+        raise ValueError("plotting format '{0}' not available. Options: {1}".format(
+            args.plot_format.lower(), ", ".join(available)))
 
     all_spectra = [sick.Spectrum.load(filename) for filename in args.spectra]
 
@@ -65,8 +59,8 @@ def main():
         from matplotlib.ticker import MaxNLocator
         import triangle
 
-    # Are there multiple spectra in each aperture?
-    if args.multi_beam:
+    # Are there multiple spectra for each source?
+    if args.multiple_channels:
         # If so, they should all have the same length (e.g. same number of objects)
         if len(set(map(len, all_spectra))) > 1:
             raise IOError("filenames contain different number of spectra")
@@ -84,7 +78,14 @@ def main():
 
     # Load the model
     model = sick.models.Model(args.model)
+
+    # Display some information about the model
     logger.info("Model information: {0}".format(model))
+    logger.info("Configuration:")
+
+    # Serialise as YAML for readability
+    for line in yaml.dump(model.configuration).split("\n"):
+        logger.info("\t{}".format(line))
 
     # Define headers that we want in the results filename 
     default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
@@ -96,7 +97,7 @@ def main():
         "walkers": model.configuration["solver"]["walkers"],
     }
 
-    # For each spectra, analyse
+    # For each source, solve
     for i, spectra in enumerate(all_spectra, start=1):
 
         # Force spectra as a list
@@ -259,7 +260,8 @@ def main():
 
                     ax = fig.add_subplot(chains_per_plot, 1, (1 + j) % chains_per_plot)
                     for k in xrange(walkers):
-                        ax.plot(range(1, 1 + len(info["mean_acceptance_fractions"])), info["chain"][k, :, j], c=colours[j % len(colours)], alpha=0.5)
+                        ax.plot(range(1, 1 + len(info["mean_acceptance_fractions"])), info["chain"][k, :, j],
+                            c=colours[j % len(colours)], alpha=0.5)
                     ax.axvline(model.configuration["solver"]["burn"], ymin=0, ymax=1, linestyle=":", c="k")
                     ax.set_ylabel(sick.utils.latexify([model.dimensions[j]])[0])
                     ax.yaxis.set_major_locator(MaxNLocator(4))
@@ -309,7 +311,8 @@ def main():
 
                     theta = reshaped_chain[np.random.randint(0, len(reshaped_chain))]
                     try:
-                        sample_posterior_fluxes.append(model(observations=spectra, **dict(zip(model.dimensions, theta))))
+                        sample_posterior_fluxes.append(model(observations=spectra, 
+                            **dict(zip(model.dimensions, theta))))
                     except:
                         continue
 
@@ -359,6 +362,146 @@ def main():
             del sampler, chain, primary_hdu, table_hdu, hdulist
 
     logger.info("Fin.")
+
+
+def aggregate(args):
+    """
+    Aggregate JSON-formatted results into a single tabular file.
+    """
+
+    if os.path.exists(args.output_filename) and not args.clobber:
+        raise IOError("output filename {0} already exists and we have been asked not to clobber it".format(
+            args.output_filename))
+    
+    # Let's just assume it all aggregates from JSON to a FITS filename
+    results = []
+    for filename in args.result_filenames:
+        with open(filename, "r") as fp:
+            try:
+                results.append(json.load(fp))
+            except:
+                logger.exception("Could not read results filename {0}".format(filename))
+                if args.debug: raise
+                
+    # Get header order and sort them
+    columns = results[0].keys()
+
+    sorted_columns = []
+    # Logic: RA, DEC then all other uppercase fields in alphabetical order
+    # Then any other fields that have associated u_* headers in alphabetical order, as well as their u_* columns
+    # Then all the others in alphabetical order
+    if "RA" in columns:
+        sorted_columns.append("RA")
+
+    if "DEC" in columns:
+        sorted_columns.append("DEC")
+
+    uppercase_columns = []
+    dimensional_columns = []
+    for column in columns:
+        if column.isupper() and column not in sorted_columns: uppercase_columns.append(column)
+        elif "u_pos_{0}".format(column) in columns: dimensional_columns.append(column)
+    
+    uppercase_columns, dimensional_columns = map(sorted, [uppercase_columns, dimensional_columns])
+    all_dimensional_columns = []
+    variants = ("{0}", "u_pos_{0}", "u_neg_{0}", "u_maxabs_{0}")
+    for column in dimensional_columns:
+        all_dimensional_columns.extend([variant.format(column) for variant in variants])
+
+    sorted_columns.extend(uppercase_columns)
+    sorted_columns.extend(all_dimensional_columns)
+
+    other_columns = sorted(set(columns).difference(sorted_columns))
+    sorted_columns.extend(list(other_columns))
+
+    # Create data types
+    formats = [("f8", "|S256")[isinstance(results[0][each], str)] for each in sorted_columns]
+
+    # Create table
+    results_table = np.core.records.fromrecords(
+        [[result.get(each, ["|S256", np.nan][formats[i] == "f8"]) \
+            for i, each in enumerate(sorted_columns)] for result in results],
+        names=sorted_columns, formats=formats)
+
+    # Write results to filename 
+    primary_hdu = pyfits.PrimaryHDU()
+    table_hdu = pyfits.BinTableHDU(results_table)
+    hdulist = pyfits.HDUList([primary_hdu, table_hdu])
+    hdulist.writeto(args.output_filename, clobber=args.clobber)
+
+    logger.info("Successfully written {0} results with {1} fields to {2}".format(
+        len(results), len(results[0]), args.output_filename))
+
+
+def main():
+    """ 
+    Parse arguments and execute a particular subparser.
+    """
+
+    parser = argparse.ArgumentParser(description="sick, the spectroscopic inference crank",
+        epilog="See 'sick COMMAND -h' for more information on a specific command. Documentation"
+        " and examples available online at http://astrowizici.st/sick")
+    
+    # Create subparsers
+    subparsers = parser.add_subparsers(title="command", dest="command",
+        description="Specify the action to perform.")
+
+    # Create a parent subparser
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False,
+        help="Vebose mode. Logger will print debugging messages.")
+    parent_parser.add_argument("--clobber", dest="clobber", action="store_true", default=False,
+        help="Overwrite existing files if they already exist.")
+    parent_parser.add_argument("--debug", dest="debug", action="store_true", default=False,
+        help="Debug mode. Any suppressed exception during runtime will be re-raised.")
+
+    # Create parser for the aggregate command
+    aggregate_parser = subparsers.add_parser("aggregate", parents=[parent_parser],
+        help="Aggregate JSON results into a tabular format.")
+    aggregate_parser.add_argument("output_filename", type=str,
+        help="Output filename to aggregate results into.")
+    aggregate_parser.add_argument("JSON_result_filenames", nargs="+",
+        help="The JSON result filenames to combine.")
+    aggregate_parser.set_defaults(func=aggregate)
+
+    # Create parser for the get command
+    get_parser = subparsers.add_parser("get", parents=[parent_parser],
+        help="Retrieve specific model or data files (e.g., example files) from online repository.")
+    get_parser.set_defaults(func=download)
+
+    # Create parser for the solve command
+    solve_parser = subparsers.add_parser("solve", parents=[parent_parser],
+        help="Compute posterior probability distributions for the model parameters, given the data.")
+    solve_parser.add_argument("model", type=str,
+        help="The model filename in YAML- or JSON-style formatting.")
+    solve_parser.add_argument("spectra", nargs="+",
+        help="Filenames of (observed) spectroscopic data.")
+    solve_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", type=str,
+        default=os.getcwd(),
+        help="Directory where to save output files to.")
+    solve_parser.add_argument("--filename-prefix", "-p", dest="filename_prefix", default="sick",
+        help="The filename prefix to use for all output files.")
+    solve_parser.add_argument("--multi-channel", "-mc", dest="multiple_channels",
+        action="store_true", default=False,
+        help="Use if each source has multiple spectral channels. Default is false, implying that "
+        "any additional spectra refers to a different source.")
+    solve_parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all",
+        help="Specify the number of sources to solve. Default is to solve for %(default)s sources.")
+    solve_parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0,
+        help="Number of sources to skip (default: %(default)s)")
+    solve_parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True,
+        help="Disable plotting.")
+    solve_parser.add_argument("--plot-format", "-pf", dest="plot_format", action="store", type=str,
+        default="jpg",
+        help="Format for output plots (default: %(default)s). Available formats are (case insensitive):"
+        " PDF, JPG, PNG, EPS")
+    solve_parser.set_defaults(func=solve)
+
+    # Parse arguments and specify logging level
+    args = parser.parse_args()
+    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+
+    return args.func(args)
 
 if __name__ == "__main__":
     main()
