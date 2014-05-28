@@ -133,7 +133,7 @@ def prior(model, observations, size=1):
         "__builtins__": None, "normal": random.normal, "uniform": random.uniform,
         "cross_correlate": __cross_correlate__ }
 
-    while size > len(priors):
+    for n in xrange(size):
 
         current_prior = []
         model_intensities = {}
@@ -286,3 +286,7 @@ def prior(model, observations, size=1):
         # Check that we have the full number of walker values
         if len(current_prior) == len(model.dimensions):
             yield current_prior
+
+        else:
+            # To understand recursion, first you must understand recursion.
+            yield sum(list(prior(model, observations)), [])

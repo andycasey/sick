@@ -306,7 +306,7 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
     if initial_thetas is None:
    
         pool = multiprocessing.pool.ThreadPool(processes=model.configuration["solver"].get("threads", 1))
-        for i, theta in zip(xrange(model.configuration["solver"]["initial_samples"]), priors.prior(model, observed_spectra)):
+        for i, theta in enumerate(priors.prior(model, observed_spectra, size=model.configuration["solver"]["initial_samples"])):
             pool.apply_async(__safe_log_probability, args=(theta, model, observed_spectra), callback=callback)
 
     else:
@@ -328,7 +328,7 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
     return p0
 
 
-def optimise(p0, observed_spectra, model, full_output=False):
+def optimise(p0, observed_spectra, model, **kwargs):
     """
     Numerically optimise the likelihood from a provided point p0.
 
@@ -336,7 +336,6 @@ def optimise(p0, observed_spectra, model, full_output=False):
         p0 (list-type): The theta point to optimise from.
         observed_spectra (list of Spectrum1D objects): The observed data.
         model (sick.models.Model object): The model class.
-        full_output (bool): Return all output parameters.
 
     Returns:
         opt_theta (list-type) the numerically optimised point.
@@ -348,10 +347,17 @@ def optimise(p0, observed_spectra, model, full_output=False):
 
     ta = time()
 
+    full_output = "full_output" in kwargs and kwargs["full_output"]
+
+    # Set some keyword defaults
+    kwargs.setdefault("xtol", 100)
+    kwargs.setdefault("ftol", 0.1)
+    kwargs.update("full_output", True)
+
     # Optimisation
     opt_theta, fopt, niter, funcalls, warnflag = scipy.optimize.fmin(
         lambda theta, model, obs: -log_probability(theta, model, obs), p0,
-        args=(model, observed_spectra), xtol=100., ftol=0.1, full_output=True, disp=False)
+        args=(model, observed_spectra), **kwargs)
 
     if warnflag > 0:
         messages = [
