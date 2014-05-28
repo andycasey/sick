@@ -557,7 +557,7 @@ class Model(object):
 
             elif dimension == "outliers" and self.configuration["outliers"]:
                 # Append outlier dimensions
-                dimensions.extend(["Pb", "Yb", "Vb"])
+                dimensions.extend(["Pb", "Vb"])
         
         # Append jitter
         dimensions.extend(["jitter.{}".format(channel) for channel in self.channels])
@@ -870,6 +870,41 @@ class Model(object):
         return pixel_masks
 
 
+    def _continuum(self, channel, **theta):
+    
+        method = self.configuration["normalise"][channel]["method"]
+
+        if method == "polynomial":
+
+            # The normalisation coefficients should be in the theta
+            order = self.configuration["normalise"][channel]["order"]
+            coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
+                for i in range(order + 1)]
+            return lambda dispersion: np.polyval(coefficients, dispersion)
+
+        else: raise NotImplementedError   
+
+        """ 
+        elif method == "spline" and observations is not None:
+
+            num_knots = self.configuration["normalise"][channel]["knots"]
+            observed_channel = observations[self.channels.index(channel)]
+                    
+            # Divide the observed spectrum by the model channel spectrum
+            continuum = observed_channel.flux/model_flux
+
+            # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
+            # to all observed pixels (regardless of how much overlap there is)
+            finite = np.isfinite(continuum)
+            knots = [theta["normalise.{channel}.k{n}".format(channel=channel, n=n)] for n in xrange(num_knots)]
+            tck = interpolate.splrep(observed_channel.disp[finite], continuum[finite],
+                w=1./np.sqrt(observed_channel.variance[finite]), t=knots)
+
+            # Scale the model by the continuum function
+            return lambda dispersion: interpolate.splev(dispersion, tck)
+        """
+
+
     def __call__(self, observations=None, **theta):
         """
         Return normalised, doppler-shifted, convolved and transformed model fluxes.
@@ -939,34 +974,8 @@ class Model(object):
 
             # Normalise model fluxes to the data
             if check_normalisation and self.configuration["normalise"].get(channel, False):
-                
-                method = self.configuration["normalise"][channel]["method"]
-
-                if method == "polynomial":
-
-                    # The normalisation coefficients should be in the theta
-                    order = self.configuration["normalise"][channel]["order"]
-                    coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
-                        for i in range(order + 1)]
-                    model_flux *= np.polyval(coefficients, model_dispersion)
-    
-                elif method == "spline" and observations is not None:
-
-                    num_knots = self.configuration["normalise"][channel]["knots"]
-                    observed_channel = observations[self.channels.index(channel)]
-                    
-                    # Divide the observed spectrum by the model channel spectrum
-                    continuum = observed_channel.flux/model_flux
-
-                    # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
-                    # to all observed pixels (regardless of how much overlap there is)
-                    finite = np.isfinite(continuum)
-                    knots = [theta["normalise.{channel}.k{n}".format(channel=channel, n=n)] for n in xrange(num_knots)]
-                    tck = interpolate.splrep(observed_channel.disp[finite], continuum[finite],
-                        w=1./np.sqrt(observed_channel.variance[finite]), t=knots)
-
-                    # Scale the model by the continuum function
-                    model_flux *= interpolate.splev(model_dispersion, tck)
+                continuum = self._continuum(channel, **theta)
+                model_flux *= continuum(model_dispersion)
 
             model_fluxes.append(model_flux)
 

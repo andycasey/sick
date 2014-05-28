@@ -313,7 +313,7 @@ def main():
                     except:
                         continue
 
-                fig = plt.figure(figsize=(10, 2))
+                fig = plt.figure()
                 for i, (channel, pp_model_flux, ml_model_flux, observed_aperture) \
                 in enumerate(zip(model.channels, pp_model_fluxes, ml_model_fluxes, spectra)):
 

@@ -102,7 +102,8 @@ def log_likelihood(theta, model, observations):
             outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_spectrum.variance \
                 + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
 
-            outlier_likelihood = -0.5 * ((observed_spectrum.flux - theta_dict["Yb"])**2 * outlier_inverse_variance \
+            continuum = model._continuum(channel, **theta_dict)
+            outlier_likelihood = -0.5 * ((observed_spectrum.flux - continuum(observed_spectrum.disp))**2 * outlier_inverse_variance \
                 - np.log(outlier_inverse_variance))
 
             Pb = theta_dict["Pb"]
@@ -261,7 +262,8 @@ def sample_ball(point, observed_spectra, model):
                 if np.sum(finite) == 0: break
 
                 # Get some normalisation coefficients
-                coefficients = np.polyfit(observed_channel.disp[finite], continuum[finite], n-1)
+                order = model.configuration["normalise"][channel]["order"]
+                coefficients = np.polyfit(observed_channel.disp[finite], continuum[finite], order)
                 
                 # Write over the prior values
                 for j, coefficient in enumerate(coefficients):
