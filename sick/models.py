@@ -224,7 +224,6 @@ class Model(object):
         self.grid_boundaries = dict(zip(self.grid_points.dtype.names, [(np.min(self.grid_points[_]), np.max(self.grid_points[_])) \
             for _ in self.grid_points.dtype.names]))
 
-
         return None
 
 
@@ -261,6 +260,34 @@ class Model(object):
 
         protected_channel_names = ("points_filename", "flux_filename", "Pb", "Yb", "Vb")
         return list(set(self.configuration["channels"].keys()).difference(protected_channel_names))
+
+
+    @property
+    def priors(self):
+        """
+        Return readable priors for the model parameters.
+        """
+
+        try:
+            return self._priors
+
+        except AttributeError:
+
+            # Some default priors to apply:
+            # uniform between grid boundaries
+            # uniform ln(jitter) between -10, 1
+
+            self._priors = {}
+            self._priors.update(dict(zip(
+                ["jitter.{}".format(channel) for channel in self.channels],
+                ["uniform(-10, 1)"] * len(self.channels)
+            )))
+            self._priors.update(dict(zip(self.grid_points.dtype.names,
+                ["uniform({0}, {1})".format(*self.grid_boundaries[dimension]) for dimension in self.grid_points.dtype.names]
+            )))
+
+            self._priors.update(self.configuration.get("priors", {}))
+            return self._priors
 
 
     def map_channels(self, observations):
