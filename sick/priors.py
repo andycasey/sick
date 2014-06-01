@@ -20,6 +20,7 @@ from scipy import interpolate
 
 logger = logging.getLogger(__name__.split(".")[0])
 
+
 def __cross_correlate__(args):
     """
     Return a redshift by cross correlation of a model spectra and observed spectra.
@@ -97,33 +98,27 @@ def prior(model, observations, size=1):
     """
 
     # Set the default priors:
-    prior_distributions = dict(zip(
-        model.grid_points.dtype.names,
-        ["uniform({0}, {1})".format(*model.grid_boundaries[d]) \
-            for d in model.grid_points.dtype.names]))
-    
     # Default doppler shift priors
-    prior_distributions.update(dict(
+    initial_distributions = model.priors.copy()
+    initial_distributions.update(dict(
         [("z.{}".format(c), "cross_correlate({})".format(c)) for c in model.channels]
     ))
 
-    # Default jitter priors
-    prior_distributions.update(dict(
-        [("jitter.{}".format(c), "uniform(-10, 1)") for c in model.channels]
-    ))
+    # Default smoothing priors
+    initial_distributions.update(dict(zip(
+        ["convolve.{}".format(channel) for channel in model.channels],
+        ["normal(0, 1)"] * len(model.channels)
+    )))
 
     # Default outlier distribution priors
-    prior_distributions.update({"Pb": "uniform(0, 1)"})
+    initial_distributions.update({"Pb": "uniform(0, 1)"})
     all_fluxes = np.array(list(chain(*[each.flux for each in observations])))
     all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
 
-    prior_distributions.update({
+    initial_distributions.update({
         "Yb": "normal({0}, 0.5 * {0})".format(np.median(all_fluxes)),
         "Vb": "normal({0}, 0.5 * {0})".format(np.std(all_fluxes)**2)
         })
-
-    # Get explicit priors
-    prior_distributions.update(model.configuration.get("priors", {}))
 
     # Environment variables for explicit priors
     # The channel names will be passed to contain all the information required
@@ -162,7 +157,7 @@ def prior(model, observations, size=1):
                     if "convolve.{}".format(channel) in model.dimensions:
 
                         # We have to evaluate this prior now
-                        sigma = eval(prior_distributions["convolve.{}".format(channel)], env)
+                        sigma = eval(initial_distributions["convolve.{}".format(channel)], env)
                         kernel = (sigma/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(model.dispersion[channel]))
                         
                         evaluated_priors["convolve.{}".format(channel)] = sigma
@@ -250,7 +245,7 @@ def prior(model, observations, size=1):
                 continue
 
             # Is there an explicitly specified distribution for this dimension?
-            specified_prior = prior_distributions.get(dimension, "").lower()
+            specified_prior = initial_distributions.get(dimension, "").lower()
 
             # Do we have an explicit prior?
             if len(specified_prior) > 0:
@@ -262,11 +257,9 @@ def prior(model, observations, size=1):
             # These are all implicit priors from here onwards.
     
             # Smoothing
-            if dimension.startswith("convolve."):
-                raise NotImplementedError("no estimate of convolving a priori yet")
 
             # Normalise
-            elif dimension.startswith("normalise."):
+            if dimension.startswith("normalise."):
                 # Get the coefficient
                 channel = dimension.split(".")[1]
                 coefficient_index = int(dimension.split(".")[2][1:])
@@ -282,6 +275,9 @@ def prior(model, observations, size=1):
                     # Get the difference between knot points
                     knot_sigma = np.mean(np.diff(continuum_parameters[channel]))/10.
                     current_prior.append(random.normal(coefficient_value, knot_sigma))
+
+            else:
+                raise KeyError("Cannot interpret initial scattering distribution for {0}".format(dimension))
 
         # Check that we have the full number of walker values
         if len(current_prior) == len(model.dimensions):
