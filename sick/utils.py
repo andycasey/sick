@@ -6,7 +6,7 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
-__all__ = ["human_readable_digit", "latexify", "unique_preserved_list"]
+__all__ = ["human_readable_digit", "latexify", "unique_preserved_list", "wrapper"]
 
 import numpy as np
 
