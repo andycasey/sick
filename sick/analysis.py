@@ -14,6 +14,7 @@ import multiprocessing.pool
 import os
 import threading
 import re
+from functools import partial
 from itertools import chain
 from time import time
 
@@ -22,12 +23,13 @@ import acor
 import emcee
 import numpy as np
 import numpy.random as random
-import scipy.optimize
+import scipy.optimize, scipy.stats
 
 # Module
 import models, priors, utils, specutils
 
 logger = logging.getLogger(__name__.split(".")[0])
+
 
 def log_prior(theta, model):
     """
@@ -41,15 +43,21 @@ def log_prior(theta, model):
         The logarithmic prior for the parameters theta.
     """
 
-    priors = model.configuration.get("priors", {})
+    log_prior = 0
+    env = { 
+        "locals": None, "globals": None, "__name__": None, "__file__": None, "__builtins__": None,
+        "uniform": lambda a, b: partial(scipy.stats.uniform.logpdf, **{"loc": a, "scale": a + b}),
+        "normal": lambda a, b: partial(scipy.stats.norm.logpdf, **{"loc": a, "scale": b})
+    }
+
     for dimension, value in zip(model.dimensions, theta):
+
+        if dimension in model.priors:
+            log_prior += eval(model.priors[dimension], env)
+            if not np.isfinite(log_prior): return -np.inf
 
         # Check smoothing values
         if dimension.startswith("convolve.") and 0 > value:
-            return -np.inf
-
-        # Check for jitter
-        if dimension.startswith("jitter.") and not -10. < value < 1.:
             return -np.inf
 
         # Check for outlier parameters
@@ -57,18 +65,7 @@ def log_prior(theta, model):
         or dimension == "Vb" and 0 > value:
             return -np.inf
 
-        # Check if point is within the grid boundaries
-        if dimension in model.grid_boundaries:
-            if dimension not in priors:
-                min_value, max_value = model.grid_boundaries[dimension]
-                
-            elif priors[dimension].startswith("uniform("):
-                min_value, max_value = map(float, priors[dimension].split("(")[1].rstrip(")").split(","))
-
-            if value > max_value or min_value > value:
-                return -np.inf
-
-    return 0
+    return log_prior
 
 
 def log_likelihood(theta, model, observations):
