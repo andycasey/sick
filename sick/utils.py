@@ -10,6 +10,22 @@ __all__ = ["human_readable_digit", "latexify", "unique_preserved_list"]
 
 import numpy as np
 
+class wrapper(object):
+    """
+    A general wrapper to pickle functions.
+    """
+
+    def __init__(self, func, args, ignore_x=False):
+        self.func = func
+        self.args = args
+        self.ignore_x = ignore_x
+
+    def __call__(self, x):
+        if self.ignore_x:
+            return self.func(*self.args)
+        return self.func(x, *self.args)
+
+
 def latexify(labels, default_latex_labels=None):
     """
     Return a LaTeX-ified label.
@@ -52,13 +68,17 @@ def latexify(labels, default_latex_labels=None):
             aperture = label.split(".")[1]
             latex_labels.append("$V_{{rad,{{{0}}}}}$ [km/s]".format(aperture))
 
+        elif label.startswith("z."):
+            aperture = label.split(".")[1]
+            latex_labels.append("$z_{{{0}}}$".format(aperture))
+
         elif label.startswith("convolve."):
             aperture = label.split(".")[1]
             latex_labels.append("$\sigma_{{{0}}}$ [$\AA$]".format(aperture))
 
         elif label.startswith("normalise."):
             aperture, coefficient = label.split(".")[1:]
-            latex_labels.append("${0}_{1}$".format(aperture[0], coefficient))
+            latex_labels.append("${0}_{{{1}}}$".format(aperture[0], coefficient))
 
         else:
             latex_labels.append(label)
@@ -89,3 +109,4 @@ def human_readable_digit(number):
     millnames = ["", "thousand", "million", "billion", "trillion"]
     millidx = max(0, min(len(millnames)-1, int(np.floor(np.log10(abs(number))/3.0))))
     return "{0:.1f} {1}".format(number/10**(3*millidx), millnames[millidx])
+
