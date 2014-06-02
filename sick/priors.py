@@ -86,7 +86,7 @@ def __cross_correlate__(args):
     return z_best
 
 
-def prior(model, observations, size=1):
+def prior(model, observations):
     """
     Yield a prior theta for the model and data provided.
 
@@ -133,160 +133,158 @@ def prior(model, observations, size=1):
         "__builtins__": None, "normal": random.normal, "uniform": random.uniform,
         "cross_correlate": __cross_correlate__ }
 
-    for n in xrange(size):
+    current_prior = []
+    model_intensities = {}
+    continuum_parameters = {}
 
-        current_prior = []
-        model_intensities = {}
-        continuum_parameters = {}
+    evaluated_priors = {}
+    scaled_observations = {}
 
-        evaluated_priors = {}
-        scaled_observations = {}
+    for i, dimension in enumerate(model.dimensions):
 
-        for i, dimension in enumerate(model.dimensions):
+        # Have we got priors for all grid points?
+        if len(current_prior) == len(model.grid_points.dtype.names):
 
-            # Have we got priors for all grid points?
-            if len(current_prior) == len(model.grid_points.dtype.names):
+            # Interpolate intensities at this point
+            try:
+                model_intensities.update(model.interpolate_flux(current_prior))
+            except (IndexError, ValueError) as e:
+                break
 
-                # Interpolate intensities at this point
-                try:
-                    model_intensities.update(model.interpolate_flux(current_prior))
-                except (IndexError, ValueError) as e:
-                    break
+            # Check the intensities are finite, otherwise move on
+            if not np.all(map(np.all, map(np.isfinite, model_intensities.values()))):
+                break
 
-                # Check the intensities are finite, otherwise move on
-                if not np.all(map(np.all, map(np.isfinite, model_intensities.values()))):
-                    break
+            # Smooth the model intensities if required
+            for channel in model_intensities.keys():
+                if "convolve.{}".format(channel) in model.dimensions:
 
-                # Smooth the model intensities if required
-                for channel in model_intensities.keys():
-                    if "convolve.{}".format(channel) in model.dimensions:
+                    # We have to evaluate this prior now
+                    sigma = eval(prior_distributions["convolve.{}".format(channel)], env)
+                    kernel = (sigma/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(model.dispersion[channel]))
+                    
+                    evaluated_priors["convolve.{}".format(channel)] = sigma
 
-                        # We have to evaluate this prior now
-                        sigma = eval(prior_distributions["convolve.{}".format(channel)], env)
-                        kernel = (sigma/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(model.dispersion[channel]))
-                        
-                        evaluated_priors["convolve.{}".format(channel)] = sigma
+            # Get continuum knots/coefficients for each aperture
+            for channel in model_intensities.keys():
+                observed_channel = observations[model.channels.index(channel)]
 
-                # Get continuum knots/coefficients for each aperture
-                for channel in model_intensities.keys():
-                    observed_channel = observations[model.channels.index(channel)]
+                continuum = observed_channel.flux/np.interp(observed_channel.disp,
+                    model.dispersion[channel], model_intensities[channel], left=np.nan,
+                    right=np.nan)
 
-                    continuum = observed_channel.flux/np.interp(observed_channel.disp,
-                        model.dispersion[channel], model_intensities[channel], left=np.nan,
-                        right=np.nan)
+                finite_continuum = np.isfinite(continuum)
 
-                    finite_continuum = np.isfinite(continuum)
+                if model.configuration.get("normalise", False) and channel in model.configuration["normalise"]:
+                    method = model.configuration["normalise"][channel]["method"]
 
-                    if model.configuration.get("normalise", False) and channel in model.configuration["normalise"]:
-                        method = model.configuration["normalise"][channel]["method"]
+                else:
+                    method = None
 
-                    else:
-                        method = None
+                # Re-interpolate the observed fluxes where they are nans
+                finite_observed_fluxes = np.isfinite(observed_channel.flux)
+                cleaned_observed_flux = np.interp(observed_channel.disp,
+                    observed_channel.disp[finite_observed_fluxes], observed_channel.flux[finite_observed_fluxes])
 
-                    # Re-interpolate the observed fluxes where they are nans
-                    finite_observed_fluxes = np.isfinite(observed_channel.flux)
-                    cleaned_observed_flux = np.interp(observed_channel.disp,
-                        observed_channel.disp[finite_observed_fluxes], observed_channel.flux[finite_observed_fluxes])
+                # Re-bin onto log-lambda scale
+                log_delta = np.diff(observed_channel.disp).min()
+                wl_min, wl_max = observed_channel.disp.min(), observed_channel.disp.max()
+                log_observed_dispersion = np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
 
-                    # Re-bin onto log-lambda scale
-                    log_delta = np.diff(observed_channel.disp).min()
-                    wl_min, wl_max = observed_channel.disp.min(), observed_channel.disp.max()
-                    log_observed_dispersion = np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
+                # Scale the intensities to the data
+                interpolated_model_intensities = np.interp(log_observed_dispersion, model.dispersion[channel],
+                    model_intensities[channel], left=np.nan, right=np.nan)
 
-                    # Scale the intensities to the data
-                    interpolated_model_intensities = np.interp(log_observed_dispersion, model.dispersion[channel],
-                        model_intensities[channel], left=np.nan, right=np.nan)
+                # Get only finite overlap
+                finite = np.isfinite(interpolated_model_intensities)
 
-                    # Get only finite overlap
-                    finite = np.isfinite(interpolated_model_intensities)
-
-                    if method == "polynomial":
-                        # Fit polynomial coefficients
-                        order = model.configuration["normalise"][channel]["order"]
-                        continuum_parameters[channel] = np.polyfit(observed_channel.disp[finite_continuum], continuum[finite_continuum], order)
-
-                        # Transform the observed data
-                        observed_scaled_intensities = cleaned_observed_flux \
-                            / np.polyval(continuum_parameters[channel], observed_channel.disp)
-                        interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
-                            observed_scaled_intensities, left=1, right=1)
-
-                        env.update({channel:
-                            (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
-                        })
-
-                    elif method == "spline":
-                        num_knots = model.configuration["normalise"][channel]["knots"]
-
-                        # Determine knot spacing
-                        finite_continuum = np.isfinite(continuum)
-                        knot_spacing = np.ptp(observed_channel.disp[finite_continuum])/(num_knots + 1)
-                        continuum_parameters[channel] = np.arange(observed_channel.disp[finite_continuum][0] + knot_spacing,
-                            observed_channel.disp[finite_continuum][-1] + knot_spacing, knot_spacing)[:num_knots]
-
-                        tck = interpolate.splrep(observed_channel.disp[finite_continuum], continuum[finite_continuum],
-                            w=1./np.sqrt(observed_channel.variance[finite_continuum]), t=continuum_parameters[channel])
-
-                        # Transform the observed data
-                        observed_scaled_intensities = cleaned_observed_flux \
-                            / interpolate.splev(observed_channel.disp, tck)
-                        interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
-                            observed_scaled_intensities, left=1, right=1)
-
-                        env.update({channel:
-                            (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
-                        })
-
-                    else:
-                        # No normalisation specified, but we might be required to get a cross-correlation prior.
-                        interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
-                            cleaned_observed_flux, left=1, right=1)
-                        env.update({channel:
-                            (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])})
-
-            # Have we already evaluated this dimension?
-            if dimension in evaluated_priors.keys():
-                current_prior.append(evaluated_priors[dimension])
-                continue
-
-            # Is there an explicitly specified distribution for this dimension?
-            specified_prior = prior_distributions.get(dimension, "").lower()
-
-            # Do we have an explicit prior?
-            if len(specified_prior) > 0:
-
-                # Evaluate the prior given the environment information
-                current_prior.append(eval(specified_prior, env))
-                continue
-
-            # These are all implicit priors from here onwards.
-    
-            # Smoothing
-            if dimension.startswith("convolve."):
-                raise NotImplementedError("no estimate of convolving a priori yet")
-
-            # Normalise
-            elif dimension.startswith("normalise."):
-                # Get the coefficient
-                channel = dimension.split(".")[1]
-                coefficient_index = int(dimension.split(".")[2][1:])
-                coefficient_value = continuum_parameters[channel][coefficient_index]
-
-                # Polynomial coefficients will introduce their own scatter
-                # if the method is a spline, we should produce some scatter around the points
-                method = model.configuration["normalise"][channel]["method"]
                 if method == "polynomial":
-                    current_prior.append(coefficient_value)
+                    # Fit polynomial coefficients
+                    order = model.configuration["normalise"][channel]["order"]
+                    continuum_parameters[channel] = np.polyfit(observed_channel.disp[finite_continuum], continuum[finite_continuum], order)
+
+                    # Transform the observed data
+                    observed_scaled_intensities = cleaned_observed_flux \
+                        / np.polyval(continuum_parameters[channel], observed_channel.disp)
+                    interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                        observed_scaled_intensities, left=1, right=1)
+
+                    env.update({channel:
+                        (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
+                    })
 
                 elif method == "spline":
-                    # Get the difference between knot points
-                    knot_sigma = np.mean(np.diff(continuum_parameters[channel]))/10.
-                    current_prior.append(random.normal(coefficient_value, knot_sigma))
+                    num_knots = model.configuration["normalise"][channel]["knots"]
 
-        # Check that we have the full number of walker values
-        if len(current_prior) == len(model.dimensions):
-            yield current_prior
+                    # Determine knot spacing
+                    finite_continuum = np.isfinite(continuum)
+                    knot_spacing = np.ptp(observed_channel.disp[finite_continuum])/(num_knots + 1)
+                    continuum_parameters[channel] = np.arange(observed_channel.disp[finite_continuum][0] + knot_spacing,
+                        observed_channel.disp[finite_continuum][-1] + knot_spacing, knot_spacing)[:num_knots]
 
-        else:
-            # To understand recursion, first you must understand recursion.
-            yield sum(list(prior(model, observations)), [])
+                    tck = interpolate.splrep(observed_channel.disp[finite_continuum], continuum[finite_continuum],
+                        w=1./np.sqrt(observed_channel.variance[finite_continuum]), t=continuum_parameters[channel])
+
+                    # Transform the observed data
+                    observed_scaled_intensities = cleaned_observed_flux \
+                        / interpolate.splev(observed_channel.disp, tck)
+                    interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                        observed_scaled_intensities, left=1, right=1)
+
+                    env.update({channel:
+                        (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
+                    })
+
+                else:
+                    # No normalisation specified, but we might be required to get a cross-correlation prior.
+                    interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                        cleaned_observed_flux, left=1, right=1)
+                    env.update({channel:
+                        (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])})
+
+        # Have we already evaluated this dimension?
+        if dimension in evaluated_priors.keys():
+            current_prior.append(evaluated_priors[dimension])
+            continue
+
+        # Is there an explicitly specified distribution for this dimension?
+        specified_prior = prior_distributions.get(dimension, "").lower()
+
+        # Do we have an explicit prior?
+        if len(specified_prior) > 0:
+
+            # Evaluate the prior given the environment information
+            current_prior.append(eval(specified_prior, env))
+            continue
+
+        # These are all implicit priors from here onwards.
+
+        # Smoothing
+        if dimension.startswith("convolve."):
+            raise NotImplementedError("no estimate of convolving a priori yet")
+
+        # Normalise
+        elif dimension.startswith("normalise."):
+            # Get the coefficient
+            channel = dimension.split(".")[1]
+            coefficient_index = int(dimension.split(".")[2][1:])
+            coefficient_value = continuum_parameters[channel][coefficient_index]
+
+            # Polynomial coefficients will introduce their own scatter
+            # if the method is a spline, we should produce some scatter around the points
+            method = model.configuration["normalise"][channel]["method"]
+            if method == "polynomial":
+                current_prior.append(coefficient_value)
+
+            elif method == "spline":
+                # Get the difference between knot points
+                knot_sigma = np.mean(np.diff(continuum_parameters[channel]))/10.
+                current_prior.append(random.normal(coefficient_value, knot_sigma))
+
+    # Check that we have the full number of walker values
+    if len(current_prior) == len(model.dimensions):
+        return current_prior
+
+    else:
+        # To understand recursion, first you must understand recursion.
+        return prior(model, observations)
