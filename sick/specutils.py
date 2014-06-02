@@ -38,7 +38,7 @@ class Spectrum(object):
             else:
                 if isinstance(spectra, Spectrum1D) and spectra.variance is None:
                     # Assume some S/N of ~250
-                    assumed_snr = 250
+                    assumed_snr = 50
                     spectra.variance = (stats.poisson.rvs([assumed_snr**2], size=len(spectra.disp))/float(assumed_snr**2) - 1.)**2
 
                 return spectra
@@ -384,3 +384,68 @@ def load_aaomega_multispec(filename, fill_value=-1, clean=True):
     
     return spectra
 
+
+def __cross_correlate__(args):
+    """
+    Return a redshift by cross correlation of a model spectra and observed spectra.
+
+    Args:
+        dispersion (array-like object): The dispersion points of the observed and template fluxes.
+        observed_flux (array-like object): The observed fluxes.
+        model_flux (array-like object): The template fluxes.
+    """
+
+    dispersion, observed_flux, model_flux = args
+
+    # Be forgiving, although we shouldn't have to be.
+    N = np.min(map(len, [dispersion, observed_flux, model_flux]))
+
+    # Ensure an even number of points
+    if N % 2 > 0:
+        N -= 1
+
+    dispersion = dispersion[:N]
+    observed_flux = observed_flux[:N]
+    model_flux = model_flux[:N]
+
+    assert len(dispersion) == len(observed_flux)
+    assert len(observed_flux) == len(model_flux)
+    
+    # Set up z array
+    m = len(dispersion) / 2
+    z_array = dispersion/dispersion[N/2] - 1.0
+    
+    # Apodize edges
+    edge_buffer = 0.1 * (dispersion[-1] - dispersion[0])
+    low_w_indices = np.nonzero(dispersion < dispersion[0] + edge_buffer)[0]
+    high_w_indices = np.nonzero(dispersion > dispersion[-1] - edge_buffer)[0]
+
+    apod_curve = np.ones(N, dtype='d')
+    apod_curve[low_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (dispersion[low_w_indices] - dispersion[0])/edge_buffer)))/2.
+    apod_curve[high_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (dispersion[-1] - dispersion[high_w_indices])/edge_buffer)))/2.
+
+    apod_observed_flux = observed_flux * apod_curve
+    apod_model_flux = model_flux * apod_curve
+
+    fft_observed_flux = np.fft.fft(apod_observed_flux)
+    fft_model_flux = np.fft.fft(apod_model_flux)
+    model_flux_corr = (fft_observed_flux * fft_model_flux.conjugate())/np.sqrt(np.inner(apod_observed_flux, apod_observed_flux) * np.inner(apod_model_flux, apod_model_flux))
+
+    correlation = np.fft.ifft(model_flux_corr).real
+
+    # Reflect about zero
+    ccf = np.zeros(N)
+    ccf[:N/2] = correlation[N/2:]
+    ccf[N/2:] = correlation[:N/2]
+    
+    # Get height and redshift of best peak
+    h = ccf.max()
+    
+    # Scale the CCF
+    ccf -= ccf.min()
+    ccf *= (h/ccf.max())
+
+    z_best = z_array[ccf.argmax()]    
+    z_err = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.35482)**2
+
+    return z_best
