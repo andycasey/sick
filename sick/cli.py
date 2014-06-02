@@ -85,7 +85,7 @@ def solve(args):
 
     # Serialise as YAML for readability
     for line in yaml.dump(model.configuration).split("\n"):
-        logger.info("\t{}".format(line))
+        logger.info("  {}".format(line))
 
     # Define headers that we want in the results filename 
     default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
@@ -157,8 +157,10 @@ def solve(args):
             
             # Update results with the posteriors
             logger.info("Posteriors:")
-            for dimension, (posterior_value, pos_uncertainty, neg_uncertainty) in posteriors.iteritems():
-                logger.info("\t{0:15s}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension, posterior_value,
+            max_parameter_len = max(map(len, model.dimensions))
+            for dimension in model.dimensions:
+                posterior_value, pos_uncertainty, neg_uncertainty = posteriors[dimension]
+                logger.info("    {0}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension.rjust(max_parameter_len), posterior_value,
                     pos_uncertainty, neg_uncertainty))
 
                 metadata.update({
@@ -241,6 +243,7 @@ def solve(args):
                 acceptance_plot_filename = output("acceptance.{}".format(args.plot_format))
                 corner_plot_filename = output("corner.{}".format(args.plot_format))
                 pp_spectra_plot_filename = output("ml-spectra.{}".format(args.plot_format))
+                pp_scaled_spectra_plot_filename = output("ml-scaled-spectra.{}".format(args.plot_format))
 
                 # Plot the chains
                 ndim = len(model.dimensions)
@@ -306,13 +309,22 @@ def solve(args):
                 # Sample spectra from posterior
                 n_sample_posterior = 100
                 sample_posterior_fluxes = []
+                sample_posterior_fluxes_normed = []
                 reshaped_chain = sampler.chain.reshape(-1, len(model.dimensions))
                 for i in xrange(n_sample_posterior):
 
-                    theta = reshaped_chain[np.random.randint(0, len(reshaped_chain))]
+                    theta = dict(zip(model.dimensions, reshaped_chain[np.random.randint(0, len(reshaped_chain))]))
                     try:
-                        sample_posterior_fluxes.append(model(observations=spectra, 
-                            **dict(zip(model.dimensions, theta))))
+                        sampler_flux = model(observations=spectra, **theta)
+                        sample_posterior_fluxes.append(sampler_flux)
+
+                        normed_ones = []
+                        for j, (channel, flux) in enumerate(zip(model.channels, sampler_flux)):
+                            continuum = model._continuum(channel, **theta)
+                            normed_ones.append(flux/continuum(spectra[j].disp))
+
+                        sample_posterior_fluxes_normed.append(normed_ones)
+
                     except:
                         continue
 
@@ -330,12 +342,11 @@ def solve(args):
                         np.min([observed_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
                     ]
 
-                    ax.plot(observed_aperture.disp, pp_model_flux, 'b', zorder=1, label="PP")
-                    ax.plot(observed_aperture.disp, ml_model_flux, 'r', zorder=1, label="ML")
+                    ax.plot(observed_aperture.disp, ml_model_flux, 'r', zorder=1)
                     ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
 
                     for sample in sample_posterior_fluxes:
-                        ax.plot(observed_aperture.disp, sample[i], c="#bbbbbb", zorder=-1)
+                        ax.plot(observed_aperture.disp, sample[i], c="#666666", zorder=-1)
                     
                     ax.yaxis.set_major_locator(MaxNLocator(4))
                     ax.set_ylabel("Flux, $F_\lambda$")
@@ -349,11 +360,47 @@ def solve(args):
                         0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
                         1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
                     )
-                    if i == 0:
-                        ax.legend(frameon=False)
-
+                    
                 ax.set_xlabel("Wavelength, $\lambda$")
                 fig.savefig(pp_spectra_plot_filename)
+
+                # Do the same, but scale the data this time too.
+                fig = plt.figure()
+                for i, (channel, pp_model_flux, ml_model_flux, observed_aperture) \
+                in enumerate(zip(model.channels, pp_model_fluxes, ml_model_fluxes, spectra)):
+
+                    ax = fig.add_subplot(len(spectra), 1, i+1)
+
+                    # Get the full boundaries
+                    fmd = np.isfinite(pp_model_flux)
+                    fod = np.isfinite(observed_aperture.flux)
+                    full_extent = [
+                        np.max([observed_aperture.disp[fmd][0], observed_aperture.disp[fod][0]]),
+                        np.min([observed_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
+                    ]
+
+                    continuum = model._continuum(channel, **ml_parameters)(observed_aperture.disp)
+                    ax.plot(observed_aperture.disp, ml_model_flux/continuum, 'r', zorder=1)
+                    ax.plot(observed_aperture.disp, observed_aperture.flux/continuum, 'k', zorder=100)
+
+                    for sample in sample_posterior_fluxes_normed:
+                        ax.plot(observed_aperture.disp, sample[i], c="#666666", zorder=-1)
+                    
+                    ax.yaxis.set_major_locator(MaxNLocator(4))
+                    ax.plot(full_extent, [1, 1], ':', c='k', zorder=-1)
+                    ax.set_ylabel("Scaled Flux, $F_\lambda/C_\lambda$")
+
+                    ax.set_xlim(full_extent)
+                    indices = observed_aperture.disp.searchsorted(full_extent)
+                    relevant_fluxes = (observed_aperture.flux/continuum)[indices[0]:indices[1]]
+
+                    ax.set_ylim(
+                        0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
+                        1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
+                    )
+
+                ax.set_xlabel("Wavelength, $\lambda$")
+                fig.savefig(pp_scaled_spectra_plot_filename)
 
                 # Closing the figures isn't enough; matplotlib leaks memory
                 plt.close("all")
@@ -496,6 +543,12 @@ def main():
         help="Format for output plots (default: %(default)s). Available formats are (case insensitive):"
         " PDF, JPG, PNG, EPS")
     solve_parser.set_defaults(func=solve)
+
+    # Create parser for the resume command
+    resume_parser = subparsers.add_parser("resume", parents=[parent_parser],
+        help="Resume MCMC simulation from a previously calculated state.")
+    resume_parser.add_argument("model", type=str,
+        help="The model filename in YAML- or JSON-style formatting.")
 
     # Parse arguments and specify logging level
     args = parser.parse_args()
