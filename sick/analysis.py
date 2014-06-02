@@ -152,15 +152,15 @@ def sample_ball(point, observed_spectra, model):
     for di, dimension in enumerate(model.dimensions):
 
         if dimension in model.grid_points.dtype.names:
-            # Set sigma to be 5% of the dimension dynamic range
-            dimensional_std.append(0.05 * np.ptp(model.grid_boundaries[dimension]))
+            # Set sigma to be 30% of the dimension dynamic range
+            dimensional_std.append(0.1 * np.ptp(model.grid_boundaries[dimension]))
            
         elif dimension.startswith("z."):
             # Set the velocity sigma to be 1 km/s
-            dimensional_std.append(1./299792458e-3)
+            dimensional_std.append(10./299792458e-3)
             
         elif dimension.startswith("convolve."): 
-            dimensional_std.append(0.05)
+            dimensional_std.append(0.1 * point.get(dimension))
 
         elif dimension.startswith("normalise."):
 
@@ -226,16 +226,12 @@ def sample_ball(point, observed_spectra, model):
     all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
     for i, dimension in enumerate(model.dimensions):
         if dimension == "Pb":
-            p0[:, i] = np.random.uniform(0, 1, size=walkers)
-
-        elif dimension == "Yb":
-            p0[:, i] = np.random.normal(np.median(all_fluxes), 0.1 * np.median(all_fluxes), size=walkers)
+            p0[:, i] = np.abs(np.random.normal(0, 0.3, size=walkers))
 
         elif dimension == "Vb":
             p0[:, i] = np.random.normal(0, np.std(all_fluxes), size=walkers)**2
 
     # Write over normalisation priors if necessary
-
     for i, pi in enumerate(p0):
 
         # Model the flux, but don't normalise it.
@@ -270,6 +266,7 @@ def sample_ball(point, observed_spectra, model):
                     index = model.dimensions.index("normalise.{channel}.c{n}".format(channel=channel, n=j))
                     p0[i, index] = coefficient
 
+
     return p0
 
 
@@ -298,32 +295,38 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
 
     # Random scattering
     ta = time()
-
-    results = []
-    def callback(result):
-        results.append(result)
+    samples = model.configuration["solver"]["initial_samples"]
 
     if initial_thetas is None:
    
-        pool = multiprocessing.pool.ThreadPool(processes=model.configuration["solver"].get("threads", 1))
-        for i, theta in enumerate(priors.prior(model, observed_spectra, size=model.configuration["solver"]["initial_samples"])):
-            pool.apply_async(__safe_log_probability, args=(theta, model, observed_spectra), callback=callback)
+        pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
+
+        scatter_func = utils.wrapper(priors.prior, [model, observed_spectra], ignore_x=True)
+        points = pool.map(scatter_func, xrange(samples))
+
+        lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
+        probabilities = pool.map(lnprob_func, points)
+
+        index = np.argmax(probabilities)
+        p0 = points[index]
 
     else:
 
+        raise NotImplementedError
         if not isinstance(initial_thetas[0], (list, tuple, np.ndarray)):
             initial_thetas = [initial_thetas]
 
         [pool.apply_async(__safe_log_probability, args=(theta, model, observed_spectra), callback=callback) \
             for theta in initial_thetas]
 
+        index = np.argmax([result[1] for result in results])
+        p0 = results[index][0]
+
     pool.close()
     pool.join()
 
-    index = np.argmax([result[1] for result in results])
-    p0 = results[index][0]
     logger.info("Calculating log probabilities of {0:.0f} prior points took {1:.2f} seconds".format(
-        len(results), time() - ta))
+        samples, time() - ta))
     
     return p0
 
@@ -343,7 +346,7 @@ def optimise(p0, observed_spectra, model, **kwargs):
 
     logger.info("Optimising from point:")
     for dimension, value in zip(model.dimensions, p0):
-        logger.info("\t{0}: {1:.2e}".format(dimension, value))
+        logger.info("  {0}: {1:.2e}".format(dimension, value))
 
     ta = time()
 
@@ -352,7 +355,7 @@ def optimise(p0, observed_spectra, model, **kwargs):
     # Set some keyword defaults
     kwargs.setdefault("xtol", 100)
     kwargs.setdefault("ftol", 0.1)
-    kwargs.update("full_output", True)
+    kwargs.update({"full_output": True})
 
     # Optimisation
     opt_theta, fopt, niter, funcalls, warnflag = scipy.optimize.fmin(
@@ -373,7 +376,7 @@ def optimise(p0, observed_spectra, model, **kwargs):
     return opt_theta
 
 
-def solve(observed_spectra, model, initial_thetas=None):
+def solve(observed_spectra, model, initial_thetas=None, **kwargs):
     """
     Solve for the model parameters theta given the observed spectra.
 
@@ -393,16 +396,24 @@ def solve(observed_spectra, model, initial_thetas=None):
     # 'blue', or 'red' in our model
     model.map_channels(observed_spectra)
     
+    # Set up MCMC settnigs and result arrays
+    walkers, burn, sample = [model.configuration["solver"][k] for k in ("walkers", "burn", "sample")]
+    mean_acceptance_fractions = np.zeros(burn + sample)
+    autocorrelation_time = np.zeros((burn, len(model.dimensions)))
+
     # Perform any optimisation and initialise priors
     if model.configuration["solver"].get("optimise", True):
         
-        scatter_points = random_scattering(observed_spectra, model, initial_thetas)
+        most_probable_scattered_point = random_scattering(observed_spectra, model, initial_thetas)
 
-        opt_theta, fopt, niter, funcalls, warnflag = optimise(scatter_points, observed_spectra,
-            model, full_output=True)
+        kwargs_copy = kwargs.copy()
+        kwargs_copy.update({"full_output": True})
+        opt_theta, fopt, niter, funcalls, warnflag = optimise(most_probable_scattered_point, observed_spectra,
+            model, **kwargs_copy)
 
         # Sample around opt_theta using some sensible things
         p0 = sample_ball(dict(zip(model.dimensions, opt_theta)), observed_spectra, model)
+        #p0 = np.array([opt_theta + 1e-4 * random.randn(len(model.dimensions)) for each in range(walkers)])
 
     else:
         warnflag, p0 = 0, priors.explicit(model, observed_spectra)
@@ -410,16 +421,12 @@ def solve(observed_spectra, model, initial_thetas=None):
     logger.info("Priors summary:")
     for i, dimension in enumerate(model.dimensions):
         if len(p0.shape) > 1 and p0.shape[1] > 1:
-            logger.info("\tParameter {0} - mean: {1:.4e}, std: {2:.4e}, min: {3:.4e}, max: {4:.4e}".format(
+            logger.info("  Parameter {0} - mean: {1:.4e}, std: {2:.4e}, min: {3:.4e}, max: {4:.4e}".format(
                 dimension, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
         else:
-            logger.info("\tParameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
+            logger.info(" Parameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
 
     # Initialise the sampler
-    walkers, burn, sample = [model.configuration["solver"][k] for k in ("walkers", "burn", "sample")]
-    mean_acceptance_fractions = np.zeros(burn + sample)
-    autocorrelation_time = np.zeros((burn, len(model.dimensions)))
-
     sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_probability,
         args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
@@ -428,25 +435,30 @@ def solve(observed_spectra, model, initial_thetas=None):
         mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
         
         # Announce progress
-        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log likelihood"
+        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log probability"
             " in last step was {2:.3e}".format(i + 1, mean_acceptance_fractions[i],
                 np.max(sampler.lnprobability[:, i])))
 
         if mean_acceptance_fractions[i] in (0, 1):
             raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
 
+    # Save the chain and calculated log probabilities for later
     chain, lnprobability = sampler.chain, sampler.lnprobability
 
     logger.info("Resetting chain...")
     sampler.reset()
 
     logger.info("Sampling posterior...")
-    for j, state in enumerate(sampler.sample(pos, iterations=sample, rstate0=rstate)):
+    for j, state in enumerate(sampler.sample(pos, iterations=sample)):#, rstate0=rstate)):
         mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
 
+    # Concatenate the existing chain and lnprobability with the posterior samples
+    chain = np.concatenate([chain, sampler.chain], axis=1)
+    lnprobability = np.concatenate([lnprobability, sampler.lnprobability], axis=1)
+
     # Get the maximum likelihood theta
-    ml_index = np.argmax(sampler.lnprobability.reshape(-1))
-    ml_values = sampler.chain.reshape(-1, len(model.dimensions))[ml_index]
+    ml_index = np.argmax(lnprobability.reshape(-1))
+    ml_values = chain.reshape(-1, len(model.dimensions))[ml_index]
 
     # Get the quantiles
     posteriors = {}
@@ -458,10 +470,6 @@ def solve(observed_spectra, model, initial_thetas=None):
         # Transform redshift posteriors to velocity posteriors
         if parameter_name.startswith("z."):
             posteriors["v_rad." + parameter_name[2:]] = list(np.array(posteriors[parameter_name]) * 299792458e-3)
-
-    # Concatenate the existing chain and lnprobability with the posterior samples
-    chain = np.concatenate([chain, sampler.chain], axis=1)
-    lnprobability = np.concatenate([lnprobability, sampler.lnprobability], axis=1)
 
     # Send back additional information
     additional_info = {
