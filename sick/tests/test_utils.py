@@ -35,3 +35,9 @@ def test_human_readable_digit():
     assert func(1340000) == "1.3 million"
     assert func(7.2e9) == "7.2 billion"
 
+
+def test_wrapper():
+
+    func = lambda x, y, z: x**2 + y**3 - z
+    func_wrap = utils.wrapper(func, [5, 3])
+    assert func_wrap(1.23) == 123.5129

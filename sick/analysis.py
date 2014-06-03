@@ -26,9 +26,202 @@ import numpy.random as random
 import scipy.optimize, scipy.stats
 
 # Module
-import models, priors, utils, specutils
+import models, utils, specutils
 
 logger = logging.getLogger(__name__.split(".")[0])
+
+
+def intitial_scatter_point(model, observations):
+    """
+    Return an initial scatter point theta for the model and data provided.
+
+    Args:
+        model (sick.models.Model object): The model class.
+        observations (list of specutils.Spectrum1D objects): The observed spectra.
+    """
+
+    # Set the default priors:
+    # Default doppler shift priors
+    initial_distributions = model.priors.copy()
+    initial_distributions.update(dict(
+        [("z.{}".format(c), "cross_correlate({})".format(c)) for c in model.channels]
+    ))
+
+    # Default smoothing priors should be absolute normals
+    initial_distributions.update(dict(zip(
+        ["convolve.{}".format(channel) for channel in model.channels],
+        ["abs(normal(0, 1))"] * len(model.channels)
+    )))
+
+    # Default outlier distribution priors
+    initial_distributions.update({"Pb": "uniform(0, 1)"})
+    all_fluxes = np.array(list(chain(*[each.flux for each in observations])))
+    all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
+
+    initial_distributions.update({
+        "Yb": "normal({0}, 0.5 * {0})".format(np.median(all_fluxes)),
+        "Vb": "normal({0}, 0.5 * {0})".format(np.std(all_fluxes)**2)
+        })
+
+    # Environment variables for explicit priors
+    # The channel names will be passed to contain all the information required
+    # for cross-correlation
+
+    env = { "locals": None, "globals": None, "__name__": None, "__file__": None,
+        "__builtins__": None, "normal": random.normal, "uniform": random.uniform,
+        "cross_correlate": specutils.__cross_correlate__, "abs": abs, }
+
+    current_prior = []
+    model_intensities = {}
+    continuum_parameters = {}
+
+    evaluated_priors = {}
+    scaled_observations = {}
+
+    for i, dimension in enumerate(model.dimensions):
+
+        # Have we got priors for all grid points?
+        if len(current_prior) == len(model.grid_points.dtype.names):
+
+            # Interpolate intensities at this point
+            try:
+                model_intensities.update(model.interpolate_flux(current_prior))
+            except (IndexError, ValueError) as e:
+                break
+
+            # Check the intensities are finite, otherwise move on
+            if not np.all(map(np.all, map(np.isfinite, model_intensities.values()))):
+                break
+
+            # Smooth the model intensities if required
+            for channel in model_intensities.keys():
+                if "convolve.{}".format(channel) in model.dimensions:
+
+                    # We have to evaluate this prior now
+                    sigma = eval(initial_distributions["convolve.{}".format(channel)], env)
+                    kernel = (sigma/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(model.dispersion[channel]))
+                    
+                    evaluated_priors["convolve.{}".format(channel)] = sigma
+
+                    # Smooth the model intensities
+                    model_intensities[channel] = ndimage.gaussian_filter1d(model_intensities[channel], kernel)
+
+                # Get continuum knots/coefficients for each aperture
+                observed_channel = observations[model.channels.index(channel)]
+
+                continuum = observed_channel.flux/np.interp(observed_channel.disp,
+                    model.dispersion[channel], model_intensities[channel], left=np.nan,
+                    right=np.nan)
+
+                finite_continuum = np.isfinite(continuum)
+
+                if model.configuration.get("normalise", False) and channel in model.configuration["normalise"]:
+                    method = model.configuration["normalise"][channel]["method"]
+
+                else:
+                    method = None
+
+                # Re-interpolate the observed fluxes where they are nans
+                finite_observed_fluxes = np.isfinite(observed_channel.flux)
+                cleaned_observed_flux = np.interp(observed_channel.disp,
+                    observed_channel.disp[finite_observed_fluxes], observed_channel.flux[finite_observed_fluxes])
+
+                # Re-bin onto log-lambda scale
+                log_delta = np.diff(observed_channel.disp).min()
+                wl_min, wl_max = observed_channel.disp.min(), observed_channel.disp.max()
+                log_observed_dispersion = np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
+
+                # Scale the intensities to the data
+                interpolated_model_intensities = np.interp(log_observed_dispersion, model.dispersion[channel],
+                    model_intensities[channel], left=np.nan, right=np.nan)
+
+                # Get only finite overlap
+                finite = np.isfinite(interpolated_model_intensities)
+
+                if method == "polynomial":
+                    # Fit polynomial coefficients
+                    order = model.configuration["normalise"][channel]["order"]
+                    continuum_parameters[channel] = np.polyfit(observed_channel.disp[finite_continuum], continuum[finite_continuum], order)
+
+                    # Transform the observed data
+                    observed_scaled_intensities = cleaned_observed_flux \
+                        / np.polyval(continuum_parameters[channel], observed_channel.disp)
+                    interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                        observed_scaled_intensities, left=1, right=1)
+
+                    env.update({channel:
+                        (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
+                    })
+
+                elif method == "spline":
+                    num_knots = model.configuration["normalise"][channel]["knots"]
+
+                    # Determine knot spacing
+                    finite_continuum = np.isfinite(continuum)
+                    knot_spacing = np.ptp(observed_channel.disp[finite_continuum])/(num_knots + 1)
+                    continuum_parameters[channel] = np.arange(observed_channel.disp[finite_continuum][0] + knot_spacing,
+                        observed_channel.disp[finite_continuum][-1] + knot_spacing, knot_spacing)[:num_knots]
+
+                    tck = interpolate.splrep(observed_channel.disp[finite_continuum], continuum[finite_continuum],
+                        w=1./np.sqrt(observed_channel.variance[finite_continuum]), t=continuum_parameters[channel])
+
+                    # Transform the observed data
+                    observed_scaled_intensities = cleaned_observed_flux \
+                        / interpolate.splev(observed_channel.disp, tck)
+                    interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                        observed_scaled_intensities, left=1, right=1)
+
+                    env.update({channel:
+                        (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])
+                    })
+
+                else:
+                    # No normalisation specified, but we might be required to get a cross-correlation prior.
+                    interpolated_observed_intensities = np.interp(log_observed_dispersion, observed_channel.disp,
+                        cleaned_observed_flux, left=1, right=1)
+                    env.update({channel:
+                        (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])})
+
+        # Have we already evaluated this dimension?
+        if dimension in evaluated_priors.keys():
+            current_prior.append(evaluated_priors[dimension])
+            continue
+
+        # Is there an explicitly specified distribution for this dimension?
+        specified_prior = initial_distributions.get(dimension, False)
+        if specified_prior
+            # Evaluate the prior given the environment information
+            current_prior.append(eval(specified_prior, env))
+            continue
+
+        # These are all implicit priors from here onwards.
+        if dimension.startswith("normalise."):
+            # Get the coefficient
+            channel = dimension.split(".")[1]
+            coefficient_index = int(dimension.split(".")[2][1:])
+            coefficient_value = continuum_parameters[channel][coefficient_index]
+
+            # Polynomial coefficients will introduce their own scatter
+            # if the method is a spline, we should produce some scatter around the points
+            method = model.configuration["normalise"][channel]["method"]
+            if method == "polynomial":
+                current_prior.append(coefficient_value)
+
+            elif method == "spline":
+                # Get the difference between knot points
+                knot_sigma = np.mean(np.diff(continuum_parameters[channel]))/10.
+                current_prior.append(random.normal(coefficient_value, knot_sigma))
+
+        else:
+            raise KeyError("Cannot interpret initial scattering distribution for {0}".format(dimension))
+
+    # Check that we have the full number of walker values
+    if len(current_prior) == len(model.dimensions):
+        return current_prior
+
+    else:
+        # To understand recursion, first you must understand recursion.
+        return prior(model, observations)
 
 
 def log_prior(theta, model):
@@ -43,18 +236,18 @@ def log_prior(theta, model):
         The logarithmic prior for the parameters theta.
     """
 
-    log_prior = 0
     env = { 
         "locals": None, "globals": None, "__name__": None, "__file__": None, "__builtins__": None,
         "uniform": lambda a, b: partial(scipy.stats.uniform.logpdf, **{"loc": a, "scale": a + b}),
         "normal": lambda a, b: partial(scipy.stats.norm.logpdf, **{"loc": a, "scale": b})
     }
-
+    log_prior = 0
     for dimension, value in zip(model.dimensions, theta):
 
         if dimension in model.priors:
-            log_prior += eval(model.priors[dimension], env)
-            if not np.isfinite(log_prior): return -np.inf
+            f = eval(model.priors[dimension], env)
+            log_prior += f(value)
+            if np.isinf(log_prior): return -np.inf
 
         # Check smoothing values
         if dimension.startswith("convolve.") and 0 > value:
@@ -149,15 +342,15 @@ def sample_ball(point, observed_spectra, model):
     for di, dimension in enumerate(model.dimensions):
 
         if dimension in model.grid_points.dtype.names:
-            # Set sigma to be 5% of the dimension dynamic range
-            dimensional_std.append(0.05 * np.ptp(model.grid_boundaries[dimension]))
+            # Set sigma to be 30% of the dimension dynamic range
+            dimensional_std.append(0.1 * np.ptp(model.grid_boundaries[dimension]))
            
         elif dimension.startswith("z."):
             # Set the velocity sigma to be 1 km/s
-            dimensional_std.append(1./299792458e-3)
+            dimensional_std.append(10./299792458e-3)
             
         elif dimension.startswith("convolve."): 
-            dimensional_std.append(0.05)
+            dimensional_std.append(0.1 * point.get(dimension))
 
         elif dimension.startswith("normalise."):
 
@@ -223,16 +416,12 @@ def sample_ball(point, observed_spectra, model):
     all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
     for i, dimension in enumerate(model.dimensions):
         if dimension == "Pb":
-            p0[:, i] = np.random.uniform(0, 1, size=walkers)
-
-        elif dimension == "Yb":
-            p0[:, i] = np.random.normal(np.median(all_fluxes), 0.1 * np.median(all_fluxes), size=walkers)
+            p0[:, i] = np.abs(np.random.normal(0, 0.3, size=walkers))
 
         elif dimension == "Vb":
             p0[:, i] = np.random.normal(0, np.std(all_fluxes), size=walkers)**2
 
     # Write over normalisation priors if necessary
-
     for i, pi in enumerate(p0):
 
         # Model the flux, but don't normalise it.
@@ -267,6 +456,7 @@ def sample_ball(point, observed_spectra, model):
                     index = model.dimensions.index("normalise.{channel}.c{n}".format(channel=channel, n=j))
                     p0[i, index] = coefficient
 
+
     return p0
 
 
@@ -295,32 +485,38 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
 
     # Random scattering
     ta = time()
-
-    results = []
-    def callback(result):
-        results.append(result)
+    samples = model.configuration["solver"]["initial_samples"]
 
     if initial_thetas is None:
    
-        pool = multiprocessing.pool.ThreadPool(processes=model.configuration["solver"].get("threads", 1))
-        for i, theta in enumerate(priors.prior(model, observed_spectra, size=model.configuration["solver"]["initial_samples"])):
-            pool.apply_async(__safe_log_probability, args=(theta, model, observed_spectra), callback=callback)
+        pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
+
+        scatter_func = utils.wrapper(intitial_scatter_point, [model, observed_spectra], ignore_x=True)
+        points = pool.map(scatter_func, xrange(samples))
+
+        lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
+        probabilities = pool.map(lnprob_func, points)
+
+        index = np.argmax(probabilities)
+        p0 = points[index]
 
     else:
 
+        raise NotImplementedError
         if not isinstance(initial_thetas[0], (list, tuple, np.ndarray)):
             initial_thetas = [initial_thetas]
 
         [pool.apply_async(__safe_log_probability, args=(theta, model, observed_spectra), callback=callback) \
             for theta in initial_thetas]
 
+        index = np.argmax([result[1] for result in results])
+        p0 = results[index][0]
+
     pool.close()
     pool.join()
 
-    index = np.argmax([result[1] for result in results])
-    p0 = results[index][0]
     logger.info("Calculating log probabilities of {0:.0f} prior points took {1:.2f} seconds".format(
-        len(results), time() - ta))
+        samples, time() - ta))
     
     return p0
 
@@ -340,7 +536,7 @@ def optimise(p0, observed_spectra, model, **kwargs):
 
     logger.info("Optimising from point:")
     for dimension, value in zip(model.dimensions, p0):
-        logger.info("\t{0}: {1:.2e}".format(dimension, value))
+        logger.info("  {0}: {1:.2e}".format(dimension, value))
 
     ta = time()
 
@@ -349,7 +545,7 @@ def optimise(p0, observed_spectra, model, **kwargs):
     # Set some keyword defaults
     kwargs.setdefault("xtol", 100)
     kwargs.setdefault("ftol", 0.1)
-    kwargs.update("full_output", True)
+    kwargs.update({"full_output": True})
 
     # Optimisation
     opt_theta, fopt, niter, funcalls, warnflag = scipy.optimize.fmin(
@@ -370,7 +566,7 @@ def optimise(p0, observed_spectra, model, **kwargs):
     return opt_theta
 
 
-def solve(observed_spectra, model, initial_thetas=None):
+def solve(observed_spectra, model, initial_thetas=None, **kwargs):
     """
     Solve for the model parameters theta given the observed spectra.
 
@@ -390,16 +586,24 @@ def solve(observed_spectra, model, initial_thetas=None):
     # 'blue', or 'red' in our model
     model.map_channels(observed_spectra)
     
+    # Set up MCMC settnigs and result arrays
+    walkers, burn, sample = [model.configuration["solver"][k] for k in ("walkers", "burn", "sample")]
+    mean_acceptance_fractions = np.zeros(burn + sample)
+    autocorrelation_time = np.zeros((burn, len(model.dimensions)))
+
     # Perform any optimisation and initialise priors
     if model.configuration["solver"].get("optimise", True):
         
-        scatter_points = random_scattering(observed_spectra, model, initial_thetas)
+        most_probable_scattered_point = random_scattering(observed_spectra, model, initial_thetas)
 
-        opt_theta, fopt, niter, funcalls, warnflag = optimise(scatter_points, observed_spectra,
-            model, full_output=True)
+        kwargs_copy = kwargs.copy()
+        kwargs_copy.update({"full_output": True})
+        opt_theta, fopt, niter, funcalls, warnflag = optimise(most_probable_scattered_point, observed_spectra,
+            model, **kwargs_copy)
 
         # Sample around opt_theta using some sensible things
         p0 = sample_ball(dict(zip(model.dimensions, opt_theta)), observed_spectra, model)
+        #p0 = np.array([opt_theta + 1e-4 * random.randn(len(model.dimensions)) for each in range(walkers)])
 
     else:
         warnflag, p0 = 0, priors.explicit(model, observed_spectra)
@@ -407,16 +611,12 @@ def solve(observed_spectra, model, initial_thetas=None):
     logger.info("Priors summary:")
     for i, dimension in enumerate(model.dimensions):
         if len(p0.shape) > 1 and p0.shape[1] > 1:
-            logger.info("\tParameter {0} - mean: {1:.4e}, std: {2:.4e}, min: {3:.4e}, max: {4:.4e}".format(
+            logger.info("  Parameter {0} - mean: {1:.4e}, std: {2:.4e}, min: {3:.4e}, max: {4:.4e}".format(
                 dimension, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
         else:
-            logger.info("\tParameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
+            logger.info(" Parameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
 
     # Initialise the sampler
-    walkers, burn, sample = [model.configuration["solver"][k] for k in ("walkers", "burn", "sample")]
-    mean_acceptance_fractions = np.zeros(burn + sample)
-    autocorrelation_time = np.zeros((burn, len(model.dimensions)))
-
     sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_probability,
         args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
@@ -425,25 +625,30 @@ def solve(observed_spectra, model, initial_thetas=None):
         mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
         
         # Announce progress
-        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log likelihood"
+        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log probability"
             " in last step was {2:.3e}".format(i + 1, mean_acceptance_fractions[i],
                 np.max(sampler.lnprobability[:, i])))
 
         if mean_acceptance_fractions[i] in (0, 1):
             raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
 
+    # Save the chain and calculated log probabilities for later
     chain, lnprobability = sampler.chain, sampler.lnprobability
 
     logger.info("Resetting chain...")
     sampler.reset()
 
     logger.info("Sampling posterior...")
-    for j, state in enumerate(sampler.sample(pos, iterations=sample, rstate0=rstate)):
+    for j, state in enumerate(sampler.sample(pos, iterations=sample)):#, rstate0=rstate)):
         mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
 
+    # Concatenate the existing chain and lnprobability with the posterior samples
+    chain = np.concatenate([chain, sampler.chain], axis=1)
+    lnprobability = np.concatenate([lnprobability, sampler.lnprobability], axis=1)
+
     # Get the maximum likelihood theta
-    ml_index = np.argmax(sampler.lnprobability.reshape(-1))
-    ml_values = sampler.chain.reshape(-1, len(model.dimensions))[ml_index]
+    ml_index = np.argmax(lnprobability.reshape(-1))
+    ml_values = chain.reshape(-1, len(model.dimensions))[ml_index]
 
     # Get the quantiles
     posteriors = {}
@@ -455,10 +660,6 @@ def solve(observed_spectra, model, initial_thetas=None):
         # Transform redshift posteriors to velocity posteriors
         if parameter_name.startswith("z."):
             posteriors["v_rad." + parameter_name[2:]] = list(np.array(posteriors[parameter_name]) * 299792458e-3)
-
-    # Concatenate the existing chain and lnprobability with the posterior samples
-    chain = np.concatenate([chain, sampler.chain], axis=1)
-    lnprobability = np.concatenate([lnprobability, sampler.lnprobability], axis=1)
 
     # Send back additional information
     additional_info = {

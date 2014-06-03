@@ -341,7 +341,7 @@ class Model(object):
             mean_observed_pixel_size = np.mean(np.diff(spectrum.disp))
             mean_model_pixel_size = np.mean(np.diff(self.dispersion[channel]))
             if mean_model_pixel_size > mean_observed_pixel_size:
-                raise ValueError("the mean model pixel size in the {channel} channel is larger than the mean"
+                raise ValueError("the mean model pixel size in the {channel} channel is larger than the mean" \
                     " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}".format(
                         channel=channel, wl_start=np.min(spectrum.disp), wl_end=np.max(spectrum.disp)))
 
@@ -827,8 +827,6 @@ class Model(object):
             else:
                 transformed_point = point
 
-            logger.debug("POINT IS {0}, TRANSFORMED POINT IS {1}".format(point, transformed_point))
-
             interpolated_flux = _scope_interpolator_(*transformed_point)
             
             if np.all(~np.isfinite(interpolated_flux)):
@@ -964,7 +962,7 @@ class Model(object):
 
             # Doppler shift the spectra
             key = "z.{0}".format(channel)
-            if key in theta:
+            if key in theta and theta[key] != 0:
                 z = theta[key]
                 # Model dispersion needs to be uniformly sampled in log-wavelength space 
                 # before the doppler shift can be applied
