@@ -1,19 +1,300 @@
-%!TEX TS-program = pdflatex
-\documentclass{emulateapj}
+\documentclass{aastex}
+\usepackage[utf8]{inputenc}
 
-\usepackage{amsmath,amssymb}
-\shorttitle{SCOPE}
-\shortauthors{Casey et al}
+\newcommand{\sick}{\textit{sick}}
+
+\usepackage{amsmath}
+\usepackage{bm}
+\usepackage{natbib}
+\usepackage{graphicx}
+
 
 \begin{document}
 
-\title{SCOPE: Automatic Spectroscopic Analysis for The Poor Man}
+\title{\sick, the spectroscopic inference crank}
 
 \author{Andrew R. Casey\altaffilmark{1}}
-\altaffiltext{1}{Research School of Astronomy \& Astrophysics, Australian National University, Mount Stromlo Observatory, via Cotter Rd, Weston, ACT 2611, Australia; \email{acasey@mso.anu.edu.au}}
+
+\altaffiltext{1}{Institute of Astronomy, University of Cambridge, Madingley Road, Cambdridge, CB3 0HA, United Kingdom; \email{arc@ast.cam.ac.uk}}
+
+% TODO:
+% [ ] Create example code figures for the model
+%  -- use pygmentize when necessary
+% [X] Write utility section
+% [X] Re-run GC analysis with higher walkers + sample, etc
+% [X] Create some awesome GC spectral plots with Seaborn
+%  -- [X] H-R plots for all clusters with isochrones
+%  -- [X] uncertainty in parameters as a function of S/N
+%  -- [ ] Box plot distribution for the clusters
+% [ ] Find and run a SEGUE analysis test case -- the stars in http://iopscience.iop.org/1538-3881/136/5/2070/pdf/1538-3881_136_5_2070.pdf
+% [X] Run Sol at high-resolution?
+%  -- [ ] plot the Sun
+%  -- [ ] plot of random samples + optimization
+%  -- [ ] plot triangle contours for the Sun
+
+
 
 \begin{abstract}
-
+In this paper I introduce \sick{}, the spectroscopic inference crank, an open source probabilistic code for inferring astrophysical parameters from spectra. \sick{} allows any user to easily construct a generative model for their data, and is sufficiently general for use on any kind of quantifiable astrophysical processes. Model fluxes (or intensities) are approximated by efficient multi-dimensional interpolation of pre-computed spectral grids. Additional phenomena that transform the data (e.g., redshift, continuum, smoothing, underestimated variance, and outliers) are incorporated as free parameters. Combining these effects into an objective, quantitative model yields the most precise measurements of astrophysical quantities with justified, credible uncertainties. This approach allows any user to capitalise on the plethora of published synthetic and observed spectra available without extra effort. The need for reproducible generative models is discussed in context of spectroscopic surveys, where software are frequently bespoke and proprietary. All aspects of the probabilistic model are introduced, and implementation details are described. A number of practical example applications are presented. The effectiveness of a generative model approach is demonstrated by precise, objective stellar photospheric measurements on noisy low-resolution spectra. The code is well-tested, parallelised, and available online through GitHub under the MIT license. An interactive version of the code (with commonly used spectral grids) is available through the Amazon Web Services platform to encourage widespread use of the software.
 \end{abstract}
 
 \section{Introduction}
+%TODO%
+% This paragraph needs cleaning up
+Most of what we know about astrophysics has been interpreted from spectra. The discovery of helium \citep{who}, the accelerating expansion of the universe, and countless phenomena on scales between these extremes were all facilitated by spectroscopy. Given how informative spectra is to our understanding of astrophysics, it is not surprising that the last decade has seen a substantial increase of publicly accessible spectra. Large scale surveys have largely driven this trend, each releasing in excess of hundreds of thousands of spectra \citep[e.g.,][]{wigglez,boss,segue,rave}.
+ 
+ All of these surveys have different scientific objectives, target selections, spectral resolutions and coverage, and the data have heterogeneous noise distributions. These reasons have contributed to most collaborations producing bespoke software for analysing their data. This complicates literature comparisons as systematics in analysis techniques can be difficult to quantify without in depth knowledge of the methods. Reproducibility is also affected, as many astrophysics software packages still remain closed-source more than a decade after the original description paper was published. 
+
+Broadly speaking, there are three types of approaches for automated spectral analysis: measurement of spectral features, data-generating models or simplistic template-matching methods. Approaches that measure spectral features are usually the most efficient, but regularly encounter problems with blended (often hidden) lines or non-trivial local continuum. As such, the application of these methods requires some subjective treatment. Data-generative models usually involve computing model spectra from high-energy environments and can be prohibitively expensive to calculate at runtime. As a consequence, template-matching methods have become more prevalent in the literature than data-generating models. For template-matching methods, these synthetic spectra are only generated once to produce a grid of spectra for each permutation of astrophysical quantities.
+
+Although there are differences between template-matching methods, the general procedure is quite similar. Spectra are first placed at rest-frame by calculating line-of-sight velocities, typically by cross-correlation. Rest-frame observed counts are normalised to flux intensities, usually fractional values between zero (representing full absorption) and unity (continuum). The transformed data are compared to a grid of pre-computed model intensities, and the best estimate is found by finding the smallest $\chi^2$ difference (or a similar statistic) between the model and the data. 
+
+Credible uncertainties can be difficult to discern from these methods. Contours in $\Delta\chi^2$ are often taken as a measure of confidence. However in these circumstances the uncertainties in the doppler-shift, smoothing, and continuum normalisation steps are almost always ignored, resulting in ill-characterised uncertainties in astrophysical parameters. Alternatively the uncertainties are frequently assumed to be dominated by systematic effects, and the magnitude of this effect is gauged by comparisons with a `trustworthy' literature sample. The simplest procedure is to then state all objects have the same uncertainties in astrophysical parameters. This is an incorrect approach: there are few, if any, examples of homoscedastic datasets in astrophysics. The noise properties of each spectrum \textit{are} different, and the parameter uncertainties (random and systematic) will differ for every object. Consequently the uncertainties in astrophysical parameters by template-matching methods are generally found to either be incorrectly assumed, underestimated, or at least ill-characterised. 
+
+In addition to altering the parameter uncertainties, the effects of redshift, continuum normalisation and smoothing \textit{will} systematically bias the quoted maximum-likelihood parameters. For example, there are a number of controversial examples within the literature where the subjective (human) decision of continuum placement has significantly altered the scientific conclusions \citep[e.g., see][]{kerzendorf}. The implications of these phenomena must be considered if we are to understand subtle astrophysical processes. Spectroscopy, and science more generally, requires objectivity: one should endeavour to incorporate these phenomena as free parameters into a generative model and infer them simultaneously with our astrophysical parameters.
+
+In this paper I present \sick{}: a well-tested, MIT-licensed probabilistic software package for simultaneously inferring astrophysical and instrumental parameters from spectra. \sick{} employs an approximation to data-generating models: instead of attempting to model all manners of expensive astrophysical processes (e.g., supernova explosions, stars, and any other astrophysically interesting process) at runtime, it performs efficient multi-dimensional interpolation of model spectra from pre-computed grids. This allows the user to easily specify a model using any existing published spectral grid, and infer astrophysical properties from their data. This approach is suitable for a plethora of different astrophysical processes. The probabilistic model is described in Section \ref{sec:model}. A number of examples are included in Section \ref{sec:examples}, where I present accurate and precise objective photospheric measurements using noisy, low-resolution spectra. I conclude in Section \ref{sec:conclusions} with references to the online documentation and applicability of the software.
+
+\section{The Generative Model}
+
+The primary advantage of \sick{} is the simultaneous inference of both astrophysical and other pertinent parameters that can alter the spectra. No spectra are synthesised at runtime, they are only interpolated\footnote{No extrapolation is permitted.} from existing grids. The generative model described here is agnostic as to \textit{what} the astrophysical parameters actually describe. Typical examples might be properties of supernova (e.g., explosion energies and luminosities), galaxy characteristics from integrated light, or mean plasma properties of a stellar photosphere. There are a plethora of synthetic spectral grids published for these types of applications \citep{who;who;who}. All of these models are fully-\sick{} compatible. However given the research background of the author, I will introduce the probabilistic model by considering the problem of inferring mean photospheric properties of the Sun.
+
+A high-resolution ($\mathcal{R} \sim$ 20000) twilight spectrum was obtained from the GIRAFFE/FLAMES archive\footnote{https://www.eso.org/observing/dfo/quality/GIRAFFE/pipeline/solar.html}. A 25 second exposure using the H875.7 setup yields spectra from 848.2\,nm to 899.2\,nm. This setup was chosen as it most closely represents the wavelength region of the Gaia (847-874\,nm) survey. Data points redder than 874\,nm have been discarded to more closely match the Gaia spectral coverage. The data $D_n$ are represented by wavelengths\footnote{Spectral data $D_n$ can be represented as frequencies or any other unit equivalency.} and fluxes at $N$ pixels $\{\lambda_i,F_i\}_{0}^{N}$, and the noise in $\{F_i\}$ is Poisson-distributed with variance $\{\sigma_{i}^{2}\}_{0}^{N}$. 
+
+The AMBRE synthetic spectral library \citep{ambre} has been employed as the the grid of models. These spectra have been calculated using 1D MARCS model atmospheres and synthesised using Turbospectrum \citep{turbospectrum} under the assumption of local thermal equilibrium (LTE). There are 28,344 permutations of effective temperature $T_{\rm eff}$, surface gravity $\log{g}$, overall metallicity $[{\rm M/H}]$ and mean $\alpha$-element enhancement $[\alpha/{\rm Fe}]$. The spacing between grid points varies, but the typical step size is of order 250 K in temperature, 0.25 dex in $\log{g}$, 0.25 dex in [Fe/H] and 0.10 dex in [$\alpha$/Fe]. Each grid point has synthesised intensities between [0, 1]  for two spectral channels: one from 475\,nm to 685\,nm, and a redder channel covering 845\,nm to 895\,nm. Both channels are sampled at approximately $\sim4\times10^{-4}$\,nm, yielding more than $92\times10^9$ pixels. In this example I utilise only the red channel.
+
+The first step of our (approximate) generative model is to interpolate a spectrum. \sick{} utilises the Qhull algorithm \citep{qhull} to linearly interpolate in multiple dimensions. Irregularly-spaced grids are perfectly acceptable; Qhull does not require the grid points to be rectangular or regularly spaced. Large grids of model spectra can be cached for computational efficiency (and this is recommended), allowing for the total size of the model grid to far exceed the available random access memory.\footnote{In practice this is performed through memory-mapping.} I introduce an interpolation function $S(\bm{\psi})$ that produces a model spectrum with $J$ points $\{\lambda_j,I_j\}_{0}^{J}$ at any evaluable point $\bm{\psi} \equiv (T_{\rm eff},\log{g},{\rm [M/H]},[\alpha/{\rm Fe}])$ within the grid boundaries.
+
+\begin{equation}
+S(\bm{\psi}) \rightarrow \{\lambda_j,I_j\}
+\end{equation}
+
+The model spectrum $S(\bm{\psi})$ should always be of higher spectral resolution than the data. Therefore it is necessary to smooth (or broaden) $\{\lambda_j,I_j\}$ with a Gaussian filter of standard deviation $\sigma_{s}$ such that it matches the spectral resolution of the data. For some applications it is often tempting to perform this step \textit{a priori} from the instrument spectral resolution. However it is not necessarily true that the quoted instrumental resolution will perfectly match the data. In truth the data have a \textit{distribution} of spectral resolutions. Even if the spectral resolution is accurately known with low variance, fixing this value will result in under-estimated uncertainties $\sigma(\bm{\psi})$ and likely bias the posterior distribution distributions for $\bm{\psi}$. Employing the free parameter $\sigma_{s}$ allows for the identification of additional instrumental or atmospheric broadening. In our example analysis of stellar spectra, the free parameter $\sigma_{s}$ also aids in the identification of unresolved stellar binary companions.
+
+The doppler shift of the source is modelled by transforming the model spectrum (in $\log\lambda$-sampled space)\footnote{For computational efficiency \sick{} solves for redshift $z$, and returns posterior distributions in the user's preferred units (e.g., km s$^{-1}$).}:
+
+\begin{equation}
+\lambda_{s} = \lambda_{j}(1 + z)
+\end{equation}
+
+After the model spectrum is smoothed and shifted, model intensities are required for the wavelengths $\lambda_i$ of observed pixels. The complete function to yield model intentisies $M_i$ at wavelengths $\lambda_i$ is therefore a function of the parameters of interest $\bm{\psi}$, redshift $z$, smoothing kernel $\sigma_{s}$, and wavelengths $\lambda_i$ of the observed pixels:
+
+\begin{equation}
+ M_{i} \equiv S\left(\bm{\psi},z,\sigma_{s},\lambda_i\right)
+\end{equation}
+
+In principle there is no reason to believe that the doppler-shifted, smoothed model intensities $M_i$ should match the data at all. The counts and shape of observed fluxes are a function of source magnitude, exposure time, instrument sensitivities, atmospheric conditions, and a host of other unaddressed effects. In contrast the model spectra are calculated either as intensities (e.g., $I_j$) or calibrated fluxes to an empirical system. Even for the `true' values of $\bm{\psi}$, a function is required to normalise\footnote{The normalisation process is frequently misrepresented by stellar spectroscopists in the literature. Wherever possible, data should not be transformed. One should seek to fit a model to the data, not the other way around.} the model to the data. As such we will transform the \textit{model} by some function $C$ to fit the data. Although the function $C$ incorporates a number of effects (e.g., source blackbody temperature, dust, instrument sensitivities), they are phenomena that we cannot separate without additional information, and we usually don't care about them. We only want to ensure that we can account for the overall shape of the data, which is usually achievable with a low-order polynomial
+
+\begin{equation}
+C_i = c_{0}\lambda_{i}^{m-1} + c_{1}\lambda_{i}^{m-2} + \dots + c_{m}
+\end{equation}
+
+\noindent{}with $m$ free coefficients $c_{0\dots{}m}$, where $m$ is specified by the user. This allows us to express the \textit{expected flux} $E_i$ at a given observed pixel with wavelength $\lambda_i$ as
+
+\begin{equation}
+E_i = S_{i}\times{}C_i
+\end{equation}
+
+In many astrophysical cases the flux uncertainties $\sigma_{i}$ for a given pixel are not well-characterised. This is often due to unpropagated uncertainties during data reduction. Since the observed flux counts are usually Poisson, in many astrophysical scenarios the pixel flux uncertainty can be made estimated as $\sigma_s \sim 1/\sqrt{f_{i}}$. Knowing that this approximation may under-estimate the noise, we include an additional parameter in our model to account for the possibility that the variance in all pixels is underestimated by some fractional amount $f$:
+
+\begin{equation}
+\sigma_{t_i}^2 = \sigma_{i}^2(1 + f)
+\end{equation}
+
+While this crude noise model is probably unrepresentative of the data in a large number of cases, including \textit{any} noise model is preferable to none. We now have a \textit{generative model} for the data. The frequency (or probability) distribution ${p\left(F_i|\lambda_i,\sigma_i,\bm{\psi},z,\sigma_s,\{c\}_{0}^{m}\right)}$ for $F_i$ is given by
+
+\begin{equation}
+p\left(F_i|\lambda_i,\sigma_{i},\bm{\psi},z,\sigma_{s},\{c\}_{0}^{m},f\right) = 
+ \frac{1}{\sqrt{2\pi\sigma_{t}^2}}\exp{\left(-\frac{\left[F_i - E_i\right]^2}{2\sigma_{t}^2}\right)}
+ \label{eq:p_model}
+\end{equation}
+
+\noindent{}and with the implicit assumption that the data are independently drawn, the likelihood $\mathcal{L}$ is the product of individual probabilities:
+
+\begin{equation}
+\mathcal{L} = \prod_{i=1}^{N}\,p\left(F_i|\lambda_i,\sigma_{i},\bm{\psi},z,\sigma_{s},\{c\}_{0}^{m},f\right)
+\end{equation}
+
+From the original astrophysical parameters $\bm{\psi}$ that we care about, we now have an additional $3 + m$ dimensions to consider. The situation seemingly becomes more complex when we consider separately observed channels (also commonly expressed as apertures, beams, or orders). Many spectrographs provide small portions of spectra (channels) separated by some large gap. The data for each channel are generally captured by different CCDs and are calibrated separately. 
+
+The instrumental parameters $\sigma_{s}$, $\{c_k\}_{k=0}^{m}$, and $f$ are likely to be different for each channel. Although redshift $z$ is an astrophysical effect and should not differ between channels, this may not be true if each channel has been wavelength-calibrated differently. It is therefore prudent to introduce separate parameters $z$, $\sigma_{s}$, $\{c_k\}_{k=0}^{m}$, $f$ for \textit{each} of the $N_{chan}$ observed channels. This scales the total dimensionality of our model as $3\times{}N_{chan} + \sum_{k=0}^{N_{chan}}m_{k}$, in addition to $\bm{\psi}$. The inclusion of all of these parameters is not mandatory: each \sick{} model can be adjusted to include or ignore any combination of phenomena. Most effects have been included in this example for the purpose of introducing the probabilistic model.
+
+Finally, I consider the handling of outliers in the data. These may be in the form of cosmic ray spikes, improper calibration of the data, or poorly modelled spectral regions. Treatment of these artefacts is achieved with a Gaussian mixture model, a combination of two models. This requires the inclusion of two (final) additional parameters: $P_o$ and $V_o$. In the mixture model, the data are fit by the sum of amplitudes ($1 - P_o$ and $P_o$, respectively) of two distributions: the expected fluxes $E_i$, and a normal distribution centered along the continuum function $C_i$ with variance $\sigma_{o}^2 = \sigma_{t}^2 + V_{o}$. The prior distribution function $p\left(V_o\right)$ requires $V_{o}$ to always be positive (Eq. \ref{eq:default_priors}), and as such the outlier distribution will always have a variance larger than its counterpart. Because distributions of smaller variance are more informative, a fit to the expected fluxes $E_{i}$ is generally preferred wherever possible. For brevity we define $\bm{\kappa} \equiv (\bm{\psi},\{z,\sigma_s,\{c_k\}_{k=0}^{m},f\}_{0}^{N_{c}})$, and the likelihood for the mixture model is given by
+ 
+ \begin{equation}
+\mathcal{L} = \prod_{i=1}^{N}\,\left[\left(1 - P_{b}\right)\times{}p_{model}\left(F_i|\lambda_i,\sigma_{i},\bm{\kappa}\right) + P_{b}\times{}p_{outlier}\left(F_i|\lambda_i,\sigma_i,\bm{\kappa},V_{o},P_o\right)\right]
+\end{equation}
+ 
+\noindent{}where $p_{model}$ was defined simply as $p$ in Eq. \ref{eq:p_model} and 
+
+\begin{equation}
+p_{outlier}\left(F_i|\lambda_i,\sigma_i,\bm{\kappa},V_{o},P_o\right) = \frac{1}{\sqrt{2\pi\left(\sigma_{t}^2 + V_{o}^2\right)}} \exp\left(-\frac{[F_i - C_i]^2}{2\left[\sigma_{t}^2 + V_{o}^2\right]}\right)
+\end{equation}
+
+\noindent{}such that $\mathcal{L}$ becomes:
+
+\begin{equation}
+\mathcal{L} = \prod_{i=1}^{N} \left[ \frac{1-P_b}{\sqrt{2\pi\sigma_{t}^2}}\,\exp\,\left(-\frac{[F_i - E_i]^2}{2\sigma_{t}^{2}}\right) + \frac{P_b}{\sqrt{2\pi\left[\sigma_t^2 + V_o\right]}}\,\exp\,\left(-\frac{[F_i - C_i]^2}{2\left[\sigma_t^{2} + V_o\right]}\right)\right]
+\label{eq:full_likelihood}
+\end{equation}
+
+We define the full parameter space by $\bm{\theta} \equiv \left(\bm{\psi},\{z,\sigma_s,\{c_k\}_{k=0}^{m},f\}_{0}^{N_{c}},V_o,P_o\right)$. From Bayes theorem we obtain the posterior probability distribution for $\bm{\theta}$ (up to a constant) as
+
+\begin{eqnarray}
+\mathcal{P} & \propto & likelihood \times prior \nonumber \\
+p(\bm{\theta}|\{F_i\}_{i=1}^{N}) & \propto & p(\{F_i\}_{i=1}^{N}|\bm{\theta})\,\times\,p(\bm{\theta})
+\label{eq:probability}
+\end{eqnarray}
+
+\noindent{}where $p(\bm{\theta}|\{F_i\}_{i=1}^{N})$ is the probability $\mathcal{P}$ of $\bm{\theta}$ given the data, $p(\{F_i\}_{i=1}^{N}|\bm{\theta})$ is our previously defined likelihood function $\mathcal{L}$ (Eq. \ref{eq:full_likelihood}), and $p(\bm{\theta})$ is the prior probability distribution. Prior probability distributions are discussed in Section \ref{sec:priors}.
+
+% Log probability, expand function
+%\begin{eqnarray}
+%\ln({\mathcal{P}}) & \propto & \ln{(likelihood)} + \ln{(prior)} \nonumber \\
+%\ln(\mathcal{P}) & \propto & \prod_{i=1}^{N} \left[ \frac{1-P_b}{\sqrt{2\pi\sigma_{i}^2}}\,\exp\,\left(-\frac{[F_i - E_i]^2}{2\sigma_{i}^{2}}\right) + \frac{P_b}{\sqrt{2\pi\left[\sigma_i^2 + V_o\right]}}\,\exp\,\left(-\frac{[F_i - C_i]^2}{2\left[\sigma_i^{2} + V_o\right]}\right)\right] \nonumber \\
+%& & \dots +  \ln(p(\bm{\theta}))
+%\end{eqnarray}
+
+We seek to maximise $\mathcal{P}$ and calculate the posterior probability distributions for $\bm{\theta}$. Continuing the example of inferring photospheric properties of the Sun, we now have a total of 16 free parameters (including $\bm{\psi}$), requiring us to interpolate between $\sim{}X\times10^{9}$ pixels (only the redder channel) in 4 dimensions. While the description might appear daunting, the problem is tractable, numerically efficient, and easy to configure: the contents of the model filename provided to \sick{} are shown in Figure \ref{fig:solar-model-file}. By default \sick{} numerically solves this problem in three sequential steps: scattering, optimisation, and Monte-Carlo Markov Chain (MCMC) sampling. These approaches are described in the following sections. 
+
+\begin{figure}
+\includegraphics[height=10cm]{solar-model.png}
+\caption{Contents of the \sick{} model file used to infer model parameters given the solar photospheric data.}
+\end{figure}
+
+
+\subsection{Initial Scattering}
+
+In the first step we calculate the probability $\mathcal{P}$ for $N_{sample}$ randomly drawn points from all over the parameter space $\bm{\psi}$. Since \sick{} allows for arbitrarily large parameter spaces in $N_{D}$ dimensions, initially sampling the parameter space $N_{sample}$ times provides a coarse representation of probability so that we do not become `stuck' in a local minima.\footnote{If we did not numerically optimise the probability function and only sampled using MCMC with reasonable priors, becoming stuck in local minima would be less of a problem. However MCMC sampling is much more expensive than numerical optimisation.} If the probability distribution function were smoothly distributed across all $\bm{\psi}$, or the optimisation step (see below) was sufficiently robust, then in principle \textit{any} single point would be an adequate starting guess. However there is no way of knowing \textit{a priori} how smooth the probability distribution function is for a given problem. 
+
+The $N_{samples}$ are uniformly drawn in $\bm{\psi}$ by default, unless priors are specified (see Section \ref{sec:priors}). A model spectrum $S(\bm{\psi})$ is interpolated for each point, which is used to estimate the redshift and continuum parameters. After smoothing the model fluxes $I_j$ by $\sigma_s$ (as drawn from an explicit prior, or estimated by $\left|\mathcal{N}\left(0, 1\right)\right|$) the smoothed spectrum is cross-correlated with the data to yield a redshift $z$. Continuum parameters $\{c_k\}_{k=0}^{m}$ are similarly estimated by fitting a polynomial to the data divided by the smoothed flux at each $\lambda_i$. Estimating continuum and redshift provides us with a reasonable probability for all randomly scattered points. If outliers modelling is included $P_o$ is distributed as $\mathcal{U}\left(0, 1\right)$ by default, and $Y_o$, $V_o$ are estimated by $\mathcal{N}\left(\widetilde{F_i}, \frac{1}{2}\widetilde{F_i}\right)$ and $\mathcal{N}\left(\mbox{Var}\left(F_i\right),\frac{1}{2}\mbox{Var}\left(F_i\right)\right)$ respectively. This procedure is only employed for the initial random scattering stage: it is \textit{not} applicable for MCMC sampling. 
+
+
+\subsection{Optimisation}
+\label{sec:optimise}
+
+After the random scattering step, the most probable $\bm{\theta}$ point is used as an initial guess for numerical optimisation. A number of suitable optimisation algorithms are available in \sick{} through the SciPy optimization \cite{scipy,scipy-optimize} module. This includes the Nelder-Mead \citet[default;][]{nelder-mead}, Broyden-Fletcher-Goldfarb-Shannon \cite{bfgs} and others. Unlike other optimisation techniques, the Nelder-Mead algorithm does not approximate first- or second-order derivatives. As a consequence it can be less efficient than other approaches. However it is robust in high-dimensional space, even in the presence of substantial noise, and has been successfully employed in a wide range of engineering and scientific problems. The reader is encouraged to experiment with other available optimisation algorithms if the Nelder-Mead algorithm proves unsuitable or takes an untenable amount of time.
+
+Since these optimisation algorithms are minimisation techniques and we seek to maximise the log-probability $\ln\mathcal{P}$, we numerically optimise the parameters $\bm{\theta}$ by minimising the negative log-probability $-\mathcal{P}$. After performing the initial scattering phase with $N_{samples} = 100$, the most probable sampled point is $\bm{\psi_{scat}} = [A,B,C,D]$ with $\mathcal{P} = Z$. After optimisation, the most probable values found were X.
+
+
+\subsection{Monte-Carlo Markov Chain Sampling}
+\label{sec:mcmc}
+
+The random scattering and numerical optimisation steps efficiently provide an accurate estimate of the optimal parameters $\bm{\theta}$. Once the optimisation step is complete, \sick{} employs the Metropolis-Hastings MCMC algorithm to sample and fully characterise the posterior probability distribution function of $\bm{\theta}$ given the model. The affine-invariant ensemble sampler proposed by \citet{goodman;weave} is employed, using the emcee implementation \citep{emcee}, which allows for numerical parallelisation of many walkers. All of the relevant arguments (learning parameter $\alpha$, the number of walkers, burn-in and sampling iterations, threads) can be specified in each \sick{} model (Figure \ref{fig:solar-model-file}).
+
+\subsubsection{Priors}
+\label{sec:priors}
+
+Priors represent our initial knowledge about a particular parameter, and are necessary for Bayesian analysis. Prior distributions can be specified by the user in the \sick{} model filename. When no prior is specified, the following uninformative prior distributions are assumed (for all channels, where appropriate):
+
+\begin{eqnarray}
+p\left(\bm{\psi}_i\right) &=& \mathcal{U}\left(\min\left[\bm{\psi}_i\right], \max\left[\bm{\psi}_i\right]\right) \\
+p\left(P_o\right) &=& \mathcal{U}\left(0, 1\right) \\
+p\left(\ln{f}\right) &=& \mathcal{U}\left(-10, 1\right) \\
+p\left(V_o,\sigma_s\right) &=& \left\{
+\begin{array}{c l}      
+    1\,, &\mbox{for values greater than zero}\\
+    0\,, &\mbox{otherwise}
+\end{array}\right. \\
+p\left(z,\{c\}_0^{m}\right) &=& 1 \\
+\label{eq:default_priors}
+\end{eqnarray} 
+
+These priors have been employed for the Solar photosphere example. A consequence of allowing irregular model grids is that a model spectrum cannot be interpolated for some values of $\bm{\psi}$, even if they fall within $\left(\min\left[\bm{\psi}\right], \max\left[\bm{\psi}\right]\right)$. In these cases $p\left(\bm{\psi}\right) = 0$ and thus $\log\left(\mathcal{P}\right) = -\infty$.
+
+%TODO%
+% What prior distributions *can* be specified?
+
+
+\subsubsection{Convergence}
+Quantitatively ensuring numerical convergence for MCMC simulations remains an unsolved problem. There are a number of excellent resources on MCMC sampling, which outline this issue in greater detail. The mean acceptance fraction, auto-correlation times, and values of the parameter chains themselves all provide reasonable proxy indications of convergence. The user is encouraged to inspect these parameters and specify some heuristic for when convergence is unambiguous.
+
+The chains for each parameter (for all X walkers) in our Solar example are shown in Figure X. It appears to have converged after X steps. In our model file we specified to burn in for Y steps, so we discard all steps before Y and take those after Y as the posterior. The posterior distributions are shown in Figure X, with the accepted truth values marked.
+
+%TODO%
+%Chain Plots%
+
+
+\section{Utility}
+A number of realistic \sick{} example applications are discussed to demonstrate the accuracy and precision achievable by employing the described generative model.
+
+\subsection{Gaia Benchmark Stars}
+The `Gaia Benchmarks' are a sample of well-studied stars with mean photospheric properties precisely measured by model-independent methods. Effective temperatures are measured from bolometric fluxes, and surface gravities with interferometry. These analysis techniques yield direct measurements of photospheric properties but are limited in their applicability: there are only a few dozen stars suitable (close and bright enough) for such measurements. However, the benchmarks span a large range of stellar parameter space, making them excellent test cases for analysis methods.
+
+% Where are the data from
+% Tabulated data
+
+% What is the state of the data
+
+The details of the data and posterior distributions are tabulated in Table X, and illustrated in Figure X. The agreement between spectroscopic and direct measurements in all parameters is exquisite, across the entire range of parameter space.  
+
+% Precision, Accuracy, How our uncertainties compare to the mean differences in direct and indirect measurements and how that validates the data
+
+
+\subsection{Globular and Open Clusters}
+Well-studied stars in globular and open clusters are excellent candidates for testing our probabilistic framework. Here we consider a realistic scenario of low-resolution, noisy spectra of candidates observed in multiple clusters. These data were obtained using the AAOmega spectrograph on the Anglo-Australian Telescope in Coonabarabran, Australia. The 580V and 1700D gratings were employed, yielding one channel between X to Y nm with a spectral resolution Z, and another from X to Y nm with spectral resolution Z. Details of the observations are shown in Table X.
+
+%TODO%
+% Table X -- GC/OC details.
+
+Although these data are generally considered to be of low spectral resolution, we show that astrophysical parameters can be accurately inferred with high precision. Each channel was treated identically: individual doppler shifts were permitted in each channel, and the continuum was represented as a second-order polynomial. Outlier modelling was included. Similarly to the benchmark star example, the AMBRE synthetic grid has also been employed. The central $\pm$0.1 nm cores of the Ca II near-infrared triplet lines were masked out (specifically rest wavelengths 849.7-849.9 nm, 854.1-854.3, and 866.1-866.3 nm), as the cores are strongly affected by non-LTE effects that were not treated in the 1D LTE model atmospheres used to generate the model grid. 
+
+The parameter space was randomly sampled 1000 times before numerical optimisation was performed using the Nelder-Mead algorithm. 200 walkers explored the parameter space for a burn-in period of 450 steps, before sampling the posterior for another 50 steps. Plots showing auto-correlation times, chain samples, and mean acceptance fractions were visually inspected and convergence was unambiguously achieved for all sources.
+
+Radial velocities were employed to identify and discard unambiguous non-cluster members. The metallicity distribution of the remaining cluster stars are shown in Figure X, where a comparison to literature is made. The \citet{harris} catalogue has been used as a literature reference for all globular clusters. For Mel 66, the mean metallicity of three high-quality studies devoted to this cluster were used: $\langle[\mbox{Fe/H}]\rangle = -0.44$ as averaged from $-0.43$ \citep{who}, $-0.44$ \citep{who}, and $-0.45$ \citep{who}.
+
+% HR plot of NGC 288
+\begin{figure}
+\includegraphics[width=\textwidth]{figures/sick-ngc288-hr.pdf}
+\caption{Hertzprung-Russell diagram for candidate (red) and radial-velocity confirmed (blue) members of NGC 288. Accessible red giant branch (RGB) and asymptotic giant branch (AGB) NGC 288 candidates were selected from \citet{who} photometry. The separation of RGB/AGB stars is evident from the resultant stellar parameters. A 12 Gyr isochrone of ${{\rm [Fe/H]} = -1.32}$ \citep{harris} and ${[\alpha/{\rm Fe}] = +0.4}$ from \citet{dotter} is overlain.}
+\end{figure}
+
+% Figure of metallicity comparison
+
+The agreement between the literature and our measurements is unprecedented for low-resolution spectra. No systematic trend is present and a negligible mean metallicity offset of $-0.001$ dex is observed over three orders of magnitude. This consensus would be remarkable for good quality high-resolution spectra. We emphasise that our results are not after a fit or `calibration' to the mean cluster abundances: the quoted abundances are the mean inferred metallicities of cluster members.
+
+Individual uncertainties in stellar parameters are extremely reasonable, particularly given the low spectral resolution and $S/N$ of the data. The uncertainties in stellar parameters are shown in Figure \ref{fig:gc-snr} as a function of $S/N$. Perhaps surprisingly, uncertainties of $\sim$75 K in $T_{\rm eff}$, $\sim0.2$ in $\log{g}$, $\sim$0.1 dex in [Fe/H] and $\sim0.05$ dex in [$\alpha$/Fe] are achievable even in the presence of substantial noise (e.g., $S/N \sim 15$). Without performing any `calibration` or ad-hoc posterior corrections -- which are usually entirely empirical and not astrophysically motivated -- we obtain superior precision and accuracy than alternative methods in the literature.
+
+The \sick{} model used to produce these results is shown in Figure Xa, and can be readily applied to large numbers of similar low-resolution spectra (e.g., RAVE, SEGUE, LAMOST, Gaia, or archival spectra from any number of telescopes).
+
+\begin{figure}
+\label{fig:gc-snr}
+\includegraphics[width=\textwidth]{figures/sick-gc-snr.pdf}
+\caption{Maximum absolute stellar parameter uncertainties from low-resolution spectra of globular and open cluster candidate stars as a function of signal-to-noise $S/N$ ratio. $S/N$ is calculated per pixel from the red channel.}
+\end{figure}
+
+% Figure Xa shows a code block where (on left):
+% show the model
+% and on right:
+% pip install sick
+% sick get segue-model
+% ls *
+% sick solve segue-model.yaml segue-spectra-A.fits segue-spectra-B.fits
+
+
+\subsection{SEGUE Calibration Sample}
+
+
+
+
+\section{Conclusion}
+
+A justified, objective probabilistic model has been presented to approximately generate spectroscopic data, and thereby infer astrophysical and instrumental parameters. This approach has a number of advantages over previously published techniques. Preparatory and subjective decisions (e.g., redshift and placement of continuum) are objectively treated within a single mathematical model. This allows us to credibly characterise the posterior distribution functions of all parameters and understand how they affect our astrophysical quantities. Until now, most published techniques -- particularly in the sub-field of stellar spectroscopy -- treat these processes separately, thereby systematically biasing and generally under-estimating their parameter uncertainties.
+
+With applications to both high- and low-resolution stellar spectra, we have demonstrated that the simultaneous incorporation of these effects leads to remarkable improvements in both accuracy and precision over other analysis techniques.
+% The solar spectra shows...
+
+% Benchmark example with low resolution spectra -- how does it compare to GES homogenised quantities?
+
+% GC example
+
+% SEGUE example
+
+
+While the examples have focussed on stellar spectra, generative models can be produced for any kind of quantifiable astrophysical process. The code is MIT-licensed (freely distributable, open source) and has extensive test suite. Complete documentation is available online\footnote{github.com/andycasey/sick/wiki}, complemented with files required to reproduce the examples demonstrated in this paper. The source code is distributed using git, and hosted online at GitHub. 
+
+\acknowledgements
+The author is pleased to thank Sergey Koposov for constructive feedback on this work, David Yong for commentary on the manuscript, and Louise Howes for extensive software testing on earlier versions of this code.
+
+\end{document}
