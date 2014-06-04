@@ -49,7 +49,7 @@ class InferenceTest(unittest.TestCase):
         os.system("tar -xzf test-inference-data.tar")
 
 
-    def runTest(self):
+    def runTest(self, acceptable_ci_multiple=None):
         """
         Create a faux spectrum then infer the model parameters given the faux data.
         """
@@ -131,12 +131,12 @@ class InferenceTest(unittest.TestCase):
         fig.savefig("inference-all.pdf")
 
         # Assert that we have at least some solution
-        acceptable_ci_multiple = 2.5
-        for dimension in model.dimensions:
-            peak_posterior, pos_ci, neg_ci = posteriors[dimension]
-            assert (peak_posterior + acceptable_ci_multiple * pos_ci >= truth[dimension] >= peak_posterior - acceptable_ci_multiple * neg_ci), (
-                "Inferences on the test case were not within {0}-sigma of the {1} truth values".format(acceptable_ci_multiple, dimension))
-
+        if acceptable_ci_multiple is not None:
+            for dimension in model.dimensions:
+                peak_posterior, pos_ci, neg_ci = posteriors[dimension]
+                assert (peak_posterior + acceptable_ci_multiple * pos_ci >= truth[dimension] >= peak_posterior - acceptable_ci_multiple * neg_ci), (
+                    "Inferences on the test case were not within {0}-sigma of the {1} truth values".format(acceptable_ci_multiple, dimension))
+        
 
     def tearDown(self):
         """
