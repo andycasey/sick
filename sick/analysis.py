@@ -6,7 +6,7 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
-__all__ = ["log_prior", "log_likelihood", "log_probability", "solve"]
+__all__ = ["initial_point", "log_prior", "log_likelihood", "log_probability", "solve"]
 
 # Standard library
 import logging
@@ -23,7 +23,7 @@ import acor
 import emcee
 import numpy as np
 import numpy.random as random
-import scipy.optimize, scipy.stats
+from scipy import optimize, stats, ndimage
 
 # Module
 import models, utils, specutils
@@ -31,9 +31,9 @@ import models, utils, specutils
 logger = logging.getLogger(__name__.split(".")[0])
 
 
-def intitial_scatter_point(model, observations):
+def initial_point(model, observations):
     """
-    Return an initial scatter point theta for the model and data provided.
+    Return an initial theta point for the model, given the data.
 
     Args:
         model (sick.models.Model object): The model class.
@@ -71,7 +71,7 @@ def intitial_scatter_point(model, observations):
         "__builtins__": None, "normal": random.normal, "uniform": random.uniform,
         "cross_correlate": specutils.__cross_correlate__, "abs": abs, }
 
-    current_prior = []
+    current_point = []
     model_intensities = {}
     continuum_parameters = {}
 
@@ -81,11 +81,11 @@ def intitial_scatter_point(model, observations):
     for i, dimension in enumerate(model.dimensions):
 
         # Have we got priors for all grid points?
-        if len(current_prior) == len(model.grid_points.dtype.names):
+        if len(current_point) == len(model.grid_points.dtype.names):
 
             # Interpolate intensities at this point
             try:
-                model_intensities.update(model.interpolate_flux(current_prior))
+                model_intensities.update(model.interpolate_flux(current_point))
             except (IndexError, ValueError) as e:
                 break
 
@@ -95,6 +95,13 @@ def intitial_scatter_point(model, observations):
 
             # Smooth the model intensities if required
             for channel in model_intensities.keys():
+                
+                if "normalise.{0}.bandwidth".format(channel) in model.dimensions: 
+                    evaluated_priors["normalise.{0}.bandwidth".format(channel)] = np.random.normal(1000, 1000)
+                if "normalise.{0}.s_scale".format(channel) in model.dimensions:
+                    evaluated_priors["normalise.{0}.s_scale".format(channel)] = np.random.normal(1, 0.1)
+
+
                 if "convolve.{}".format(channel) in model.dimensions:
 
                     # We have to evaluate this prior now
@@ -109,7 +116,11 @@ def intitial_scatter_point(model, observations):
                 # Get continuum knots/coefficients for each aperture
                 observed_channel = observations[model.channels.index(channel)]
 
-                continuum = observed_channel.flux/np.interp(observed_channel.disp,
+                fft_fitler = 1.
+                if "normalise.{0}.bandwidth".format(channel) in evaluated_priors:
+                    fft_fitler = observed_channel.fft(evaluated_priors["normalise.{0}.bandwidth".format(channel)])
+
+                continuum = (observed_channel.flux / fft_fitler)/np.interp(observed_channel.disp,
                     model.dispersion[channel], model_intensities[channel], left=np.nan,
                     right=np.nan)
 
@@ -140,6 +151,8 @@ def intitial_scatter_point(model, observations):
 
                 if method == "polynomial":
                     # Fit polynomial coefficients
+
+
                     order = model.configuration["normalise"][channel]["order"]
                     continuum_parameters[channel] = np.polyfit(observed_channel.disp[finite_continuum], continuum[finite_continuum], order)
 
@@ -184,18 +197,21 @@ def intitial_scatter_point(model, observations):
 
         # Have we already evaluated this dimension?
         if dimension in evaluated_priors.keys():
-            current_prior.append(evaluated_priors[dimension])
+            current_point.append(evaluated_priors[dimension])
             continue
 
         # Is there an explicitly specified distribution for this dimension?
         specified_prior = initial_distributions.get(dimension, False)
-        if specified_prior
+        if specified_prior:
             # Evaluate the prior given the environment information
-            current_prior.append(eval(specified_prior, env))
+            current_point.append(eval(specified_prior, env))
             continue
 
         # These are all implicit priors from here onwards.
         if dimension.startswith("normalise."):
+
+            if dimension.endswith(".bandwidth") or dimension.endswith(".s_scale"): continue
+
             # Get the coefficient
             channel = dimension.split(".")[1]
             coefficient_index = int(dimension.split(".")[2][1:])
@@ -205,23 +221,26 @@ def intitial_scatter_point(model, observations):
             # if the method is a spline, we should produce some scatter around the points
             method = model.configuration["normalise"][channel]["method"]
             if method == "polynomial":
-                current_prior.append(coefficient_value)
+                current_point.append(coefficient_value)
 
             elif method == "spline":
                 # Get the difference between knot points
                 knot_sigma = np.mean(np.diff(continuum_parameters[channel]))/10.
-                current_prior.append(random.normal(coefficient_value, knot_sigma))
+                current_point.append(random.normal(coefficient_value, knot_sigma))
 
         else:
             raise KeyError("Cannot interpret initial scattering distribution for {0}".format(dimension))
 
     # Check that we have the full number of walker values
-    if len(current_prior) == len(model.dimensions):
-        return current_prior
+    if len(current_point) == len(model.dimensions):
+        return current_point
+
+    elif len(current_point) == len(model.grid_points.dtype.names):
+        # To understand recursion, first you must understand recursion.
+        return initial_point(model, observations)
 
     else:
-        # To understand recursion, first you must understand recursion.
-        return prior(model, observations)
+        raise IndexError("length of current point does not match expectations!")
 
 
 def log_prior(theta, model):
@@ -238,8 +257,8 @@ def log_prior(theta, model):
 
     env = { 
         "locals": None, "globals": None, "__name__": None, "__file__": None, "__builtins__": None,
-        "uniform": lambda a, b: partial(scipy.stats.uniform.logpdf, **{"loc": a, "scale": a + b}),
-        "normal": lambda a, b: partial(scipy.stats.norm.logpdf, **{"loc": a, "scale": b})
+        "uniform": lambda a, b: partial(stats.uniform.logpdf, **{"loc": a, "scale": b - a}),
+        "normal": lambda a, b: partial(stats.norm.logpdf, **{"loc": a, "scale": b})
     }
     log_prior = 0
     for dimension, value in zip(model.dimensions, theta):
@@ -247,7 +266,8 @@ def log_prior(theta, model):
         if dimension in model.priors:
             f = eval(model.priors[dimension], env)
             log_prior += f(value)
-            if np.isinf(log_prior): return -np.inf
+            if not np.isfinite(log_prior):
+                return -np.inf
 
         # Check smoothing values
         if dimension.startswith("convolve.") and 0 > value:
@@ -257,6 +277,16 @@ def log_prior(theta, model):
         if dimension == "Pb" and not (1. > value > 0.) \
         or dimension == "Vb" and 0 > value:
             return -np.inf
+
+        # Check for fourier filter parameters
+        if dimension.startswith("normalise."):
+            if dimension.endswith(".bandwidth") and 0 >= value:
+                return -np.inf
+            if dimension.endswith(".s_scale") and 0 >= value:
+                return -np.inf
+
+    logging.debug("Returning log-prior of {0:.2e} for parameters: {1}".format(log_prior,
+        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in zip(model.dimensions, theta)])))
 
     return log_prior
 
@@ -292,8 +322,8 @@ def log_likelihood(theta, model, observations):
             outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_spectrum.variance \
                 + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
 
-            continuum = model._continuum(channel, **theta_dict)
-            outlier_likelihood = -0.5 * ((observed_spectrum.flux - continuum(observed_spectrum.disp))**2 * outlier_inverse_variance \
+            continuum = model._continuum(channel, observed_spectrum, model_flux, **theta_dict)
+            outlier_likelihood = -0.5 * ((observed_spectrum.flux - continuum)**2 * outlier_inverse_variance \
                 - np.log(outlier_inverse_variance))
 
             Pb = theta_dict["Pb"]
@@ -304,7 +334,7 @@ def log_likelihood(theta, model, observations):
             finite = np.isfinite(signal_likelihood)
             likelihood += np.sum(signal_likelihood[finite])
 
-    logger.debug("Returning log likelihood of {0:.2e} for parameters: {1}".format(likelihood,
+    logger.debug("Returning log-likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in theta_dict.iteritems()])))  
 
     return likelihood
@@ -322,7 +352,7 @@ def log_probability(theta, model, observations):
 
     prior = log_prior(theta, model)
     if np.isinf(prior):
-        logger.debug("Returning -inf log-likelihood because log-prior was -inf")
+        logger.debug("Returning -inf log-probability because log-prior was -inf")
         return prior
 
     return prior + log_likelihood(theta, model, observations)
@@ -353,6 +383,13 @@ def sample_ball(point, observed_spectra, model):
             dimensional_std.append(0.1 * point.get(dimension))
 
         elif dimension.startswith("normalise."):
+
+            if dimension.endswith(".bandwidth"):
+                dimensional_std.append(1000.)
+                continue
+            elif dimension.endswith(".s_scale"):
+                dimensional_std.append(0.1)
+                continue
 
             channel = dimension.split(".")[1]
 
@@ -491,7 +528,7 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
    
         pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
 
-        scatter_func = utils.wrapper(intitial_scatter_point, [model, observed_spectra], ignore_x=True)
+        scatter_func = utils.wrapper(initial_point, [model, observed_spectra], ignore_x=True)
         points = pool.map(scatter_func, xrange(samples))
 
         lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
@@ -545,10 +582,11 @@ def optimise(p0, observed_spectra, model, **kwargs):
     # Set some keyword defaults
     kwargs.setdefault("xtol", 100)
     kwargs.setdefault("ftol", 0.1)
+    # And we need to overwrite this one because we want all the information, even if the user doesn't.
     kwargs.update({"full_output": True})
 
     # Optimisation
-    opt_theta, fopt, niter, funcalls, warnflag = scipy.optimize.fmin(
+    opt_theta, fopt, niter, funcalls, warnflag = optimize.fmin(
         lambda theta, model, obs: -log_probability(theta, model, obs), p0,
         args=(model, observed_spectra), **kwargs)
 

@@ -316,7 +316,22 @@ class Spectrum1D(object):
         
         return self.__class__(self.disp, smoothed_flux, variance=self.variance,
             headers=self.headers)
-        
+    
+
+    def fft(self, bandwidth=10., scale=1.):
+
+        s = self.flux.size
+        flux_mirror = np.empty(3*s)
+        flux_mirror[:s] = self.flux[::-1].copy()
+        flux_mirror[s:2*s] = self.flux.copy()
+        flux_mirror[2*s:] = self.flux[::-1].copy()
+
+        fft = np.fft.rfft(flux_mirror)
+        x = np.arange(fft.size)*1.
+        rfft = np.fft.irfft(fft * x/(bandwidth + x))[s:2*s]
+
+        return ndimage.gaussian_filter(self.flux - rfft, scale * s**0.5)
+
 
 def load_aaomega_multispec(filename, fill_value=-1, clean=True):
     """

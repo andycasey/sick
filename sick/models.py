@@ -209,8 +209,6 @@ class Model(object):
 
                 if i == 0:
 
-                    raise NotImplementedError("cannot deal with log/linear interpolation yet")
-
                     # Save the grid points as a record array
                     self.grid_points = np.core.records.fromrecords(points, names=dimensions,
                         formats=["f8"]*len(dimensions))
@@ -414,6 +412,10 @@ class Model(object):
                     raise TypeError("configuration setting 'normalise.{}.order'"
                         " is expected to be an integer-like object".format(channel))
 
+            elif method == "fft_filter":
+                # No additional information required for FFT filter
+                continue
+
             else:
                 raise ValueError("configuration setting 'normalise.{}.method' not recognised"
                     " -- must be spline or polynomial".format(channel))
@@ -560,14 +562,23 @@ class Model(object):
                     if not self.configuration[dimension].get(channel, False): continue
 
                     method = self.configuration[dimension][channel]["method"]
-                    assert method in ("polynomial", "spline")
+                    assert method in ("polynomial", "fft_filter", "spline")
 
                     if method == "polynomial":
                         order = self.configuration[dimension][channel]["order"]
                         dimensions.extend(["normalise.{0}.c{1}".format(channel, i) \
                             for i in range(order + 1)])
+                        # Add FFT filter
+                        #if self.configuration[dimension][channel]["fft_filter"] and not self.configuration[dimension][channel]["fft_filter"]:
+                        #    continue
+                        #dimensions.extend([each.format(channel) for each in ("normalise.{0}.bandwidth", )])
 
-                    else: # Spline
+                    elif method == "fft_filter":
+                        #dimensions.append("normalise.{0}.bw".format(channel))
+                        #dimensions.extend([each.format(channel) for each in ("normalise.{0}.s_scale", "normalise.{0}.bw")])
+                        continue
+
+                    elif method == "spline": # Spline
                         knots = self.configuration[dimension][channel].get("knots", 0)
                         dimensions.extend(["normalise.{0}.k{1}".format(channel, i) \
                             for i in range(knots)])
@@ -895,7 +906,9 @@ class Model(object):
         return pixel_masks
 
 
-    def _continuum(self, channel, **theta):
+
+
+    def _continuum(self, channel, obs, model_flux, **theta):
     
         method = self.configuration["normalise"][channel]["method"]
 
@@ -905,7 +918,60 @@ class Model(object):
             order = self.configuration["normalise"][channel]["order"]
             coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
                 for i in range(order + 1)]
-            return lambda dispersion: np.polyval(coefficients, dispersion)
+
+            fft_filter = 1.
+            if "normalise.{0}.bandwidth".format(channel) in theta:
+                fft_filter = obs.fft(theta["normalise.{0}.bandwidth".format(channel)])
+
+            return np.polyval(coefficients, obs.disp) * fft_filter
+
+        elif method == "fft_filter":
+
+             # TODOD
+            
+            #bw = theta["normalise.{0}.bw".format(channel)]
+            #s_scale = theta["normalise.{0}.s_scale".format(channel)]
+            bw = 100.
+            s_scale = 1.
+            
+            finite = np.isfinite(model_flux)
+            m_flux = model_flux.copy()
+            o_flux = obs.flux.copy()
+            m_flux[~finite] = 1.
+            o_flux[~finite] = 1.
+
+
+
+            # Do the filters
+            # We are already on the observed dispersion map
+            s = m_flux.size
+            flux_mirror = np.empty(3*s)
+            flux_mirror[:s] = m_flux[::-1].copy()
+            flux_mirror[s:2*s] = m_flux.copy()
+            flux_mirror[2*s:] = m_flux[::-1].copy()
+
+            fft = np.fft.rfft(flux_mirror)
+            x = np.arange(fft.size)*1.
+
+            model_rfft = np.fft.irfft(fft * x/(bw + x))[s:2*s]
+            model_cont = ndimage.gaussian_filter(m_flux - model_rfft, s_scale * s**0.5)
+
+            # Obs filter
+            # s remains the same as the model is on the observed dispersion map\
+            assert s == o_flux.size
+            flux_mirror = np.empty(3*s)
+            flux_mirror[:s] = o_flux[::-1].copy()
+            flux_mirror[s:2*s] = o_flux.copy()
+            flux_mirror[2*s:] = o_flux[::-1].copy()
+
+            fft = np.fft.rfft(flux_mirror)
+            x = np.arange(fft.size)*1.
+
+            obs_rfft = np.fft.irfft(fft * x/(bw + x))[s:2*s]
+            obs_cont = ndimage.gaussian_filter(o_flux - obs_rfft, s_scale * s**0.5)
+
+            return obs_cont/model_cont
+
 
         else: raise NotImplementedError   
 
@@ -999,8 +1065,12 @@ class Model(object):
 
             # Normalise model fluxes to the data
             if check_normalisation and self.configuration["normalise"].get(channel, False):
-                continuum = self._continuum(channel, **theta)
-                model_flux *= continuum(model_dispersion)
+
+                index = self.channels.index(channel)
+                obs = observations[index]
+
+                continuum = self._continuum(channel, obs, model_flux, **theta)
+                model_flux *= continuum
 
             model_fluxes.append(model_flux)
 
