@@ -31,7 +31,7 @@ import models, utils, specutils
 logger = logging.getLogger(__name__.split(".")[0])
 
 
-def initial_point(model, observations):
+def initial_point(evaluated_priors, model, observations):
     """
     Return an initial theta point for the model, given the data.
 
@@ -75,10 +75,17 @@ def initial_point(model, observations):
     model_intensities = {}
     continuum_parameters = {}
 
-    evaluated_priors = {}
+    if evaluated_priors is None:
+        evaluated_priors = {}
+
     scaled_observations = {}
 
     for i, dimension in enumerate(model.dimensions):
+
+        # Have we already evaluated this dimension?
+        if dimension in evaluated_priors.keys():
+            current_point.append(evaluated_priors[dimension])
+            continue
 
         # Have we got priors for all grid points?
         if len(current_point) == len(model.grid_points.dtype.names):
@@ -195,11 +202,6 @@ def initial_point(model, observations):
                     env.update({channel:
                         (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])})
 
-        # Have we already evaluated this dimension?
-        if dimension in evaluated_priors.keys():
-            current_point.append(evaluated_priors[dimension])
-            continue
-
         # Is there an explicitly specified distribution for this dimension?
         specified_prior = initial_distributions.get(dimension, False)
         if specified_prior:
@@ -235,12 +237,8 @@ def initial_point(model, observations):
     if len(current_point) == len(model.dimensions):
         return current_point
 
-    elif len(current_point) == len(model.grid_points.dtype.names):
-        # To understand recursion, first you must understand recursion.
-        return initial_point(model, observations)
-
     else:
-        raise IndexError("length of current point does not match expectations!")
+        return current_point + [0.] * (len(model.dimensions) - len(current_point))
 
 
 def log_prior(theta, model):
@@ -505,6 +503,15 @@ def __safe_log_probability(theta, model, observed_spectra):
     else:
         return (theta, probability)
 
+def eval_prior(model):
+
+    env = { "locals": None, "globals": None, "__name__": None, "__file__": None,
+        "__builtins__": None, "normal": random.normal, "uniform": random.uniform,
+        "abs": abs, }
+
+    dimensions = model.grid_points.dtype.names
+    return dict(zip(dimensions, [eval(model.priors[dimension], env) for dimension in dimensions]))
+
 
 def random_scattering(observed_spectra, model, initial_thetas=None):
     """
@@ -528,8 +535,30 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
    
         pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
 
-        scatter_func = utils.wrapper(initial_point, [model, observed_spectra], ignore_x=True)
-        points = pool.map(scatter_func, xrange(samples))
+        # Evaluate psi in serial, then map to parallel
+        astrophysical_samples = (eval_prior(model) for _ in xrange(samples))
+
+
+        scatter_func = utils.wrapper(initial_point, [model, observed_spectra])
+        points = pool.map(scatter_func, astrophysical_samples)
+
+        class serial_scatter(object):
+
+            def __init__(self, n):
+                self.n = n
+                self.sent = 0
+
+            def __iter__(self):
+                return self
+
+            def next(self):
+                if self.sent >= self.n:
+                    raise StopIteration
+                else:
+                    self.sent += 1
+                    return initial_point(model, observed_spectra)
+
+        #scatter_iter = serial_scatter(samples)
 
         lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
         probabilities = pool.map(lnprob_func, points)
