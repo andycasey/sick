@@ -11,6 +11,8 @@ __author__ = ("Triangle.py (corner) was written by Dan Foreman-Mackey, and "
 __all__ = ["chains", "corner"]
 
 import numpy as np
+import matplotlib as mpl
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
