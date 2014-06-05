@@ -25,6 +25,9 @@ import pyfits
 import matplotlib as mpl
 mpl.use("Agg")
 
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+
 import sick
 
 # Initialise logging
@@ -52,11 +55,6 @@ def solve(args):
             args.plot_format.lower(), ", ".join(available)))
 
     all_spectra = [sick.Spectrum.load(filename) for filename in args.spectra]
-
-    if args.plotting:
-        # Import plotting dependencies 
-        import matplotlib.pyplot as plt
-        from matplotlib.ticker import MaxNLocator
 
     # Are there multiple spectra for each source?
     if args.multiple_channels:
@@ -262,7 +260,7 @@ def solve(args):
 
                 # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions)))[:, indices],
+                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices]
                     labels=sick.utils.latexify(model.grid_points.dtype.names),
                     quantiles=[.16, .50, .84], verbose=False)
                 fig.savefig(corner_plot_filename)
