@@ -22,6 +22,9 @@ from time import time
 import numpy as np
 import pyfits
 
+import matplotlib as mpl
+mpl.use("Agg")
+
 import sick
 
 # Initialise logging
@@ -52,12 +55,8 @@ def solve(args):
 
     if args.plotting:
         # Import plotting dependencies 
-        import matplotlib as mpl
-        mpl.use("Agg")
-
         import matplotlib.pyplot as plt
         from matplotlib.ticker import MaxNLocator
-        import triangle
 
     # Are there multiple spectra for each source?
     if args.multiple_channels:
@@ -160,8 +159,8 @@ def solve(args):
             max_parameter_len = max(map(len, model.dimensions))
             for dimension in model.dimensions:
                 posterior_value, pos_uncertainty, neg_uncertainty = posteriors[dimension]
-                logger.info("    {0}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension.rjust(max_parameter_len), posterior_value,
-                    pos_uncertainty, neg_uncertainty))
+                logger.info("    {0}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension.rjust(max_parameter_len),
+                    posterior_value, pos_uncertainty, neg_uncertainty))
 
                 metadata.update({
                     dimension: posterior_value,
@@ -179,7 +178,8 @@ def solve(args):
             
             # Save information related to the data
             metadata.update(dict(
-                [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) for k, spectrum in enumerate(spectra)]
+                [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
+                    for k, spectrum in enumerate(spectra)]
             ))
 
             # Save information related to the analysis
@@ -224,6 +224,7 @@ def solve(args):
             with open(output("model.state"), "wb+") as fp:
                 pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
+            """
             # Get the most likely sample
             ml_index = np.argmax(sampler.lnprobability.reshape(-1))
             ml_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
@@ -234,143 +235,44 @@ def solve(args):
 
             pp_model_fluxes = model(observations=spectra, **dict(zip(model.dimensions, [posteriors[each][0] for each in model.dimensions])))
             ml_model_fluxes = model(observations=spectra, **ml_parameters)
-            #[spectrum.save(filename) for spectrum, filename in zip(spectra, pp_observed_spectra_filenames)]
-            #[spectrum.save(filename) for spectrum, filename in zip(pp_modelled_spectra, pp_modelled_spectra_filenames)]
+            """
 
             # Plot results
             if args.plotting:
 
-                colours = """#002F2F #046380 #A7A373 #8E2800 #B64926 #FFB03B #468966 #A989CD #1695A3 #EB7F00 #2E0927
-                    #D90000 #04756F #FF8C00 #2185C5 #3E454C""".split()
-
                 # Some filenames
-                autocorrelation_plot_filename = output("acor.{}".format(args.plot_format))
+                chain_plot_filename = output("chain.{}".format(args.plot_format))
                 acceptance_plot_filename = output("acceptance.{}".format(args.plot_format))
                 corner_plot_filename = output("corner.{}".format(args.plot_format))
                 pp_spectra_plot_filename = output("ml-spectra.{}".format(args.plot_format))
                 pp_scaled_spectra_plot_filename = output("ml-scaled-spectra.{}".format(args.plot_format))
 
-                # Plot the chains
-                ndim = len(model.dimensions)
-                chain_to_plot = sampler.chain.reshape(-1, ndim)
-                chains_per_plot = len(model.grid_points.dtype.names)
-
-                n = 1
-                for j in xrange(ndim):
-
-                    if j % chains_per_plot == 0:
-                        if j > 0:
-                            [axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
-                            ax.set_xlabel("Iteration")
-                            fig.savefig(output("chain-{0}.{1}".format(n, args.plot_format)))
-                            n += 1
-                        fig = plt.figure()
-
-                    ax = fig.add_subplot(chains_per_plot, 1, (1 + j) % chains_per_plot)
-                    for k in xrange(walkers):
-                        ax.plot(range(1, 1 + len(info["mean_acceptance_fractions"])), info["chain"][k, :, j],
-                            c=colours[j % len(colours)], alpha=0.5)
-                    ax.axvline(model.configuration["solver"]["burn"], ymin=0, ymax=1, linestyle=":", c="k")
-                    ax.set_ylabel(sick.utils.latexify([model.dimensions[j]])[0])
-                    ax.yaxis.set_major_locator(MaxNLocator(4))
-                    ax.set_xlim(0, ax.get_xlim()[1])
-
-                [axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
-                ax.set_xlabel("Step Number")
-                fig.savefig(output("chain-{0}.{1}".format(n, args.plot_format)))
-
                 # Plot the mean acceptance fractions
-                fig = plt.figure()
-                ax = fig.add_subplot(111)
-                ax.plot(range(1, 1 + len(info["mean_acceptance_fractions"])), info["mean_acceptance_fractions"], "k", lw=2)
-                ax.axvline(model.configuration["solver"]["burn"], ymin=0, ymax=1, linestyle=":", c="k")
-                ax.set_xlabel("Iteration")
-                ax.set_ylabel("$\langle{}f_a\\rangle$")
+                fig, ax = plt.subplots()
+                ax.plot(info["mean_acceptance_fractions"], color="k", lw=2)
+                ax.axvline(model.configuration["solver"]["burn"], linestyle=":", color="k")
+                ax.set_xlabel("Step")
+                ax.set_ylabel("$\langle{}a_f\\rangle$")
                 fig.savefig(acceptance_plot_filename)
 
-                # Plot the autocorrelation function
-                fig = plt.figure()
-                ax = fig.add_subplot(111)
-                rho_tau = [acor.function(np.mean(info["chain"][:, :, j], axis=0)) \
-                    for j in xrange(len(model.dimensions))]
+                # Plot the chains
+                fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
+                    burn_in=model.configuration["solver"]["burn"])
+                fig.savefig(chain_plot_filename)
 
-                for i, dimension in enumerate(model.dimensions):
-                    ax.plot(range(1, 1 + len(info["mean_acceptance_fractions"])), rho_tau[i], c=colours[i % len(colours)], lw=2)
-
-                ax.axvline(model.configuration["solver"]["burn"], ymin=0, ymax=1, linestyle=":", c="k")
-                ax.axhline(0, c="#666666")
-                ax.set_xlabel("$\\tau$")
-                ax.set_ylabel("$\\rho(\\tau)$")
-                fig.savefig(autocorrelation_plot_filename)
-
-                # Make a corner plot with just the parameters of interest
+                # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-                fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
+                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions)))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names),
                     quantiles=[.16, .50, .84], verbose=False)
                 fig.savefig(corner_plot_filename)
 
-                # Plot spectra
-                # Sample spectra from posterior
-                n_sample_posterior = 100
-                sample_posterior_fluxes = []
-                sample_posterior_fluxes_normed = []
-                reshaped_chain = sampler.chain.reshape(-1, len(model.dimensions))
-                for i in xrange(n_sample_posterior):
-
-                    theta = dict(zip(model.dimensions, reshaped_chain[np.random.randint(0, len(reshaped_chain))]))
-                    try:
-                        sampler_flux = model(observations=spectra, **theta)
-                        sample_posterior_fluxes.append(sampler_flux)
-
-                        normed_ones = []
-                        for j, (channel, flux) in enumerate(zip(model.channels, sampler_flux)):
-
-                            continuum = model._continuum(channel, spectra[j], flux, **theta)
-                            normed_ones.append(flux/continuum)
-
-                        sample_posterior_fluxes_normed.append(normed_ones)
-
-                    except:
-                        continue
-
-                fig = plt.figure()
-                for i, (channel, pp_model_flux, ml_model_flux, observed_aperture) \
-                in enumerate(zip(model.channels, pp_model_fluxes, ml_model_fluxes, spectra)):
-
-                    ax = fig.add_subplot(len(spectra), 1, i+1)
-
-                    # Get the full boundaries
-                    fmd = np.isfinite(pp_model_flux)
-                    fod = np.isfinite(observed_aperture.flux)
-                    full_extent = [
-                        np.max([observed_aperture.disp[fmd][0], observed_aperture.disp[fod][0]]),
-                        np.min([observed_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
-                    ]
-
-                    ax.plot(observed_aperture.disp, ml_model_flux, 'r', zorder=1)
-                    ax.plot(observed_aperture.disp, observed_aperture.flux, 'k', zorder=100)
-
-                    for sample in sample_posterior_fluxes:
-                        ax.plot(observed_aperture.disp, sample[i], c="#666666", zorder=-1)
-                    
-                    ax.yaxis.set_major_locator(MaxNLocator(4))
-                    ax.set_ylabel("Flux, $F_\lambda$")
-
-                    ax.set_xlim(full_extent)
-
-                    indices = observed_aperture.disp.searchsorted(full_extent)
-                    relevant_fluxes = observed_aperture.flux[indices[0]:indices[1]]
-
-                    ax.set_ylim(
-                        0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
-                        1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
-                    )
-                    
-                ax.set_xlabel("Wavelength, $\lambda$")
+                # Plot some spectra
+                fig = sick.plot.projection(sampler, model, spectra)
                 fig.savefig(pp_spectra_plot_filename)
 
                 # Do the same, but scale the data this time too.
+                """
                 fig = plt.figure()
                 for i, (channel, pp_model_flux, ml_model_flux, observed_aperture) \
                 in enumerate(zip(model.channels, pp_model_fluxes, ml_model_fluxes, spectra)):
@@ -407,6 +309,7 @@ def solve(args):
 
                 ax.set_xlabel("Wavelength, $\lambda$")
                 fig.savefig(pp_scaled_spectra_plot_filename)
+                """
 
                 # Closing the figures isn't enough; matplotlib leaks memory
                 plt.close("all")
