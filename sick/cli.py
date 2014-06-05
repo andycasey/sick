@@ -190,6 +190,9 @@ def solve(args):
                 "time_elapsed": t_elapsed,
                 "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
             })
+
+            # Save the model configuration to the analysis
+            metadata.update({"model_configuration": model.configuration})
             
             # Append an sample and step number
             walkers = model.configuration["solver"]["walkers"]
