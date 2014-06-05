@@ -82,43 +82,25 @@ class InferenceTest(unittest.TestCase):
             spectrum = sick.specutils.Spectrum1D(disp=disp[::2], flux=flux[::2],
                 variance=flux_err[::2]**2)
             observations.append(spectrum)
+	
+	# Plot the noisy spectrum
+	fig, axes = plt.subplots(len(observations))
+	if len(observations) == 1: axes = [axes]
+	for ax, spectrum in zip(axes, observations):
+            ax.plot(spectrum.disp, spectrum.flux, 'k')
+            ax.set_ylabel("Flux, $F_\lambda$")
+            ax.set_yticklabels([])
+            ax.set_xlim(spectrum.disp[0], spectrum.disp[-1])
+        ax.set_xlabel("Wavelength, $\lambda$ [$\AA$]")
+	fig.savefig("spectrum.pdf")
 
         # Now let's solve for the model parameters
         posteriors, sampler, info = sick.solve(observations, model)
 
         # Plot the chains
-        ndim = len(model.dimensions)
-        chain_to_plot = sampler.chain.reshape(-1, ndim)
-        chains_per_plot = len(model.grid_points.dtype.names)
-
-        self.n, subplots = 1, 4
-        steps = model.configuration["solver"]["burn"] + model.configuration["solver"]["sample"]
-        for j, dimension in enumerate(model.dimensions):
-
-            if j % subplots == 0:
-                if j > 0:
-                    [axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
-                    ax.set_xlabel("Iteration")
-                    fig.savefig("chain-{0}.pdf".format(self.n))
-                    self.n += 1
-                fig = plt.figure()
-
-            ax = fig.add_subplot(subplots, 1, (1 + j) % subplots)
-            for k in range(model.configuration["solver"]["walkers"]):
-                ax.plot(range(1, 1 + len(info["mean_acceptance_fractions"])),
-                    info["chain"][k, :, j], c="k", alpha=0.5)
-            ax.axvline(model.configuration["solver"]["burn"], ymin=0, ymax=1,
-                linestyle=":", c="k")
-            ax.set_ylabel(sick.utils.latexify([dimension])[0])
-            ax.yaxis.set_major_locator(MaxNLocator(4))
-    
-            # Plot the truth
-            ax.plot([0, steps], [truth[dimension], truth[dimension]], lw=2, c="#4682b4", zorder=10)
-            ax.set_xlim(0, steps)
-
-        [axes.xaxis.set_ticklabels([]) for axes in fig.axes[:-1]]
-        ax.set_xlabel("Iteration")
-        fig.savefig("chain-{0}.pdf".format(self.n))
+	fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
+            truths=[truth[dimension] for dimension in model.dimensions], burn_in=1000)
+        fig.savefig("chains.pdf")
 
         # Make a corner plot with just the parameters of interest
         psi_len = len(model.grid_points.dtype.names)

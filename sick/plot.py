@@ -83,7 +83,7 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
             ax.plot(xs[walker, :, k], color="k", alpha=alpha)
 
         if burn_in is not None:
-            ax.axvline(burn_in, color="k", marker=":")
+            ax.axvline(burn_in, color="k", linestyle=":")
 
         if truths is not None:
             ax.axhline(truths[k], color=truth_color, lw=2)
