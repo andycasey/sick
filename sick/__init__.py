@@ -11,9 +11,8 @@ import logging
 
 from analysis import solve
 from models import Model
-from specutils import Spectrum
 
-import specutils
+import plot, specutils
 
 # Here we set the default logging level to WARN because -- unless explicitly told otherwise -- we
 # don't want the logger to display everything when the API is being used. When the command-line
