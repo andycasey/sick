@@ -54,7 +54,7 @@ def solve(args):
         raise ValueError("plotting format '{0}' not available. Options: {1}".format(
             args.plot_format.lower(), ", ".join(available)))
 
-    all_spectra = [sick.Spectrum.load(filename) for filename in args.spectra]
+    all_spectra = [sick.specutils.Spectrum.load(filename) for filename in args.spectra]
 
     # Are there multiple spectra for each source?
     if args.multiple_channels:
