@@ -49,12 +49,12 @@ def initial_point(evaluated_priors, model, observations):
     # Default doppler shift priors
     initial_distributions = model.priors.copy()
     initial_distributions.update(dict(
-        [("z.{}".format(c), "cross_correlate({})".format(c)) for c in model.channels]
+        [("z.{0}".format(c), "cross_correlate({0})".format(c)) for c in model.channels]
     ))
 
     # Default smoothing priors should be absolute normals
     initial_distributions.update(dict(zip(
-        ["convolve.{}".format(channel) for channel in model.channels],
+        ["convolve.{0}".format(channel) for channel in model.channels],
         ["abs(normal(0, 1))"] * len(model.channels)
     )))
 
@@ -82,6 +82,8 @@ def initial_point(evaluated_priors, model, observations):
 
     if evaluated_priors is None:
         evaluated_priors = {}
+    else:
+        evaluated_priors = evaluated_priors.copy()
 
     scaled_observations = {}
 
@@ -114,13 +116,13 @@ def initial_point(evaluated_priors, model, observations):
                     evaluated_priors["normalise.{0}.s_scale".format(channel)] = np.random.normal(1, 0.1)
 
 
-                if "convolve.{}".format(channel) in model.dimensions:
+                if "convolve.{0}".format(channel) in model.dimensions:
 
                     # We have to evaluate this prior now
-                    sigma = eval(initial_distributions["convolve.{}".format(channel)], env)
+                    sigma = eval(initial_distributions["convolve.{0}".format(channel)], env)
                     kernel = (sigma/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(model.dispersion[channel]))
                     
-                    evaluated_priors["convolve.{}".format(channel)] = sigma
+                    evaluated_priors["convolve.{0}".format(channel)] = sigma
 
                     # Smooth the model intensities
                     model_intensities[channel] = ndimage.gaussian_filter1d(model_intensities[channel], kernel)
@@ -307,7 +309,7 @@ def log_likelihood(theta, model, observations):
     for (channel, model_flux, model_continuum, observed_spectrum) in zip(model.channels, model_fluxes, model_continua, observations):
 
         signal_inverse_variance = 1.0/(observed_spectrum.variance \
-            + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
+            + model_flux**2 * np.exp(2. * theta_dict["jitter.{0}".format(channel)]))
 
         signal_likelihood = -0.5 * ((observed_spectrum.flux - model_flux)**2 * signal_inverse_variance \
             - np.log(signal_inverse_variance))
@@ -315,7 +317,7 @@ def log_likelihood(theta, model, observations):
         # Are we modelling the outliers as well?
         if "Pb" in theta_dict.keys():
             outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_spectrum.variance \
-                + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
+                + model_flux**2 * np.exp(2. * theta_dict["jitter.{0}".format(channel)]))
 
             #continuum = model._continuum(channel, observed_spectrum, model_flux, **theta_dict)
             outlier_likelihood = -0.5 * ((observed_spectrum.flux - model_continuum)**2 * outlier_inverse_variance \
@@ -528,38 +530,28 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
 
     if initial_thetas is None:
    
-        pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
-
         # Evaluate psi in serial, then map to parallel
         astrophysical_samples = (eval_prior(model) for _ in xrange(samples))
 
+        pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
+        try:
+            scatter_func = utils.wrapper(initial_point, [model, observed_spectra])
+            points = pool.map(scatter_func, astrophysical_samples)
 
-        scatter_func = utils.wrapper(initial_point, [model, observed_spectra])
-        points = pool.map(scatter_func, astrophysical_samples)
+            lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
+            probabilities = pool.map(lnprob_func, points)
 
-        class serial_scatter(object):
+        except:
+            logging.exception("Exception raised while doing random random_scattering")
+            raise
 
-            def __init__(self, n):
-                self.n = n
-                self.sent = 0
+        else:
+            index = np.argmax(probabilities)
+            p0 = points[index]
 
-            def __iter__(self):
-                return self
-
-            def next(self):
-                if self.sent >= self.n:
-                    raise StopIteration
-                else:
-                    self.sent += 1
-                    return initial_point(model, observed_spectra)
-
-        #scatter_iter = serial_scatter(samples)
-
-        lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
-        probabilities = pool.map(lnprob_func, points)
-
-        index = np.argmax(probabilities)
-        p0 = points[index]
+        finally:
+            pool.close()
+            pool.join()
 
     else:
 
@@ -572,9 +564,6 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
 
         index = np.argmax([result[1] for result in results])
         p0 = results[index][0]
-
-    pool.close()
-    pool.join()
 
     logger.info("Calculating log probabilities of {0:.0f} prior points took {1:.2f} seconds".format(
         samples, time() - ta))
