@@ -30,6 +30,11 @@ import models, utils, specutils
 
 logger = logging.getLogger(__name__.split(".")[0])
 
+_prior_eval_env_ = { 
+    "locals": None, "globals": None, "__name__": None, "__file__": None, "__builtins__": None,
+    "uniform": lambda a, b: partial(stats.uniform.logpdf, **{"loc": a, "scale": b - a}),
+    "normal": lambda a, b: partial(stats.norm.logpdf, **{"loc": a, "scale": b})
+}
 
 def initial_point(evaluated_priors, model, observations):
     """
@@ -253,19 +258,12 @@ def log_prior(theta, model):
         The logarithmic prior for the parameters theta.
     """
 
-    env = { 
-        "locals": None, "globals": None, "__name__": None, "__file__": None, "__builtins__": None,
-        "uniform": lambda a, b: partial(stats.uniform.logpdf, **{"loc": a, "scale": b - a}),
-        "normal": lambda a, b: partial(stats.norm.logpdf, **{"loc": a, "scale": b})
-    }
     log_prior = 0
     for dimension, value in zip(model.dimensions, theta):
 
         if dimension in model.priors:
-            f = eval(model.priors[dimension], env)
+            f = eval(model.priors[dimension], _prior_eval_env_)
             log_prior += f(value)
-            if not np.isfinite(log_prior):
-                return -np.inf
 
         # Check smoothing values
         if dimension.startswith("convolve.") and 0 > value:
@@ -285,7 +283,6 @@ def log_prior(theta, model):
 
     logging.debug("Returning log-prior of {0:.2e} for parameters: {1}".format(log_prior,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in zip(model.dimensions, theta)])))
-
     return log_prior
 
 
@@ -302,12 +299,12 @@ def log_likelihood(theta, model, observations):
     theta_dict = dict(zip(model.dimensions, theta))
 
     try:
-        model_fluxes = model(observations=observations, **theta_dict)
+        model_fluxes, model_continua = model(observations=observations, full_output=True, **theta_dict)
     except:
         return -np.inf
 
     likelihood = 0
-    for (channel, model_flux, observed_spectrum) in zip(model.channels, model_fluxes, observations):
+    for (channel, model_flux, model_continuum, observed_spectrum) in zip(model.channels, model_fluxes, model_continua, observations):
 
         signal_inverse_variance = 1.0/(observed_spectrum.variance \
             + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
@@ -320,8 +317,8 @@ def log_likelihood(theta, model, observations):
             outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_spectrum.variance \
                 + model_flux**2 * np.exp(2. * theta_dict["jitter.{}".format(channel)]))
 
-            continuum = model._continuum(channel, observed_spectrum, model_flux, **theta_dict)
-            outlier_likelihood = -0.5 * ((observed_spectrum.flux - continuum)**2 * outlier_inverse_variance \
+            #continuum = model._continuum(channel, observed_spectrum, model_flux, **theta_dict)
+            outlier_likelihood = -0.5 * ((observed_spectrum.flux - model_continuum)**2 * outlier_inverse_variance \
                 - np.log(outlier_inverse_variance))
 
             Pb = theta_dict["Pb"]
@@ -334,7 +331,6 @@ def log_likelihood(theta, model, observations):
 
     logger.debug("Returning log-likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in theta_dict.iteritems()])))  
-
     return likelihood
 
 
@@ -371,7 +367,7 @@ def sample_ball(point, observed_spectra, model):
 
         if dimension in model.grid_points.dtype.names:
             # Set sigma to be 30% of the dimension dynamic range
-            dimensional_std.append(0.1 * np.ptp(model.grid_boundaries[dimension]))
+            dimensional_std.append(0.05 * np.ptp(model.grid_boundaries[dimension]))
            
         elif dimension.startswith("z."):
             # Set the velocity sigma to be 1 km/s
@@ -445,7 +441,6 @@ def sample_ball(point, observed_spectra, model):
     for ji in jitter_indices:
         p0[:, ji] = np.random.uniform(-10, 1, size=walkers)
 
-
     # Write over Pb priors
     all_fluxes = np.array(list(chain(*[each.flux for each in observed_spectra])))
     all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
@@ -478,7 +473,7 @@ def sample_ball(point, observed_spectra, model):
             
             for channel, observed_channel, model_channel_flux in zip(model.channels, observed_spectra, model_channels):
 
-                continuum = (observed_channel.flux + 3. * np.random.normal(0, 1e-12 + np.abs(np.sqrt(observed_channel.variance))))/model_channel_flux
+                continuum = (observed_channel.flux + np.random.normal(0, 1e-12 + np.abs(np.sqrt(observed_channel.variance))))/model_channel_flux
                 finite = np.isfinite(continuum)
                 if np.sum(finite) == 0: break
 
@@ -609,8 +604,13 @@ def optimise(p0, observed_spectra, model, **kwargs):
     full_output = "full_output" in kwargs and kwargs["full_output"]
 
     # Set some keyword defaults
-    kwargs.setdefault("xtol", 100)
-    kwargs.setdefault("ftol", 0.1)
+    default_kwargs = {
+        "maxfun": 1000,
+        "xtol": 100,
+        "ftol": 0.1
+    }
+    [kwargs.setdefault(k, v) for k, v in default_kwargs.iteritems()]
+    
     # And we need to overwrite this one because we want all the information, even if the user doesn't.
     kwargs.update({"full_output": True})
 

@@ -996,7 +996,7 @@ class Model(object):
         """
 
 
-    def __call__(self, observations=None, **theta):
+    def __call__(self, observations=None, full_output=False, **theta):
         """
         Return normalised, doppler-shifted, convolved and transformed model fluxes.
 
@@ -1007,17 +1007,15 @@ class Model(object):
         """
 
         # Get the grid point and interpolate
-        point = [theta[parameter] for parameter in self.grid_points.dtype.names]
-        interpolated_flux = self.interpolate_flux(point)
+        interpolated_flux = self.interpolate_flux(
+            [theta[parameter] for parameter in self.grid_points.dtype.names]
+        )
 
         model_fluxes = []
-        check_normalisation = "normalise" in self.configuration.keys()
-        
-        for channel in self.channels:
+        model_continua = []
+        for channel, model_flux in interpolated_flux.iteritems():
                 
-            # TODO do we actualy need to do a copy?
-            model_dispersion = self.dispersion[channel].copy()
-            model_flux = interpolated_flux[channel].copy()
+            model_dispersion = self.dispersion[channel]
 
             # Any smoothing to apply?
             key = "convolve.{}".format(channel)
@@ -1038,10 +1036,8 @@ class Model(object):
 
                 # Interpolate flux to log-lambda dispersion
                 log_model_flux = np.interp(log_model_dispersion, model_dispersion, model_flux, left=np.nan, right=np.nan)
-                
                 model_dispersion = log_model_dispersion * (1. + z)
                 model_flux = log_model_flux
-
 
             # Interpolate model fluxes to observed dispersion map
             if observations is not None:
@@ -1052,27 +1048,31 @@ class Model(object):
 
             # Apply masks if necessary
             if self.configuration.get("masks", None):
-                regions = self.configuration["masks"].get(channel, None)
-                if regions:
-                    for region in self.configuration["masks"][channel]:
-                        if key in theta:
-                            z = theta[key]
-                            # This is an approximation, but a sufficient one.
-                            region = np.array(region) * (1. + z)
+                regions = self.configuration["masks"].get(channel, [])
+                for region in regions: 
+                    if key in theta:
+                        z = theta[key]
+                        region = np.array(region) * (1. + z)
 
-                        index_start, index_end = np.searchsorted(model_dispersion, region)
-                        model_flux[index_start:index_end] = np.nan
+                    index_start, index_end = np.searchsorted(model_dispersion, region)
+                    model_flux[index_start:index_end] = np.nan
 
             # Normalise model fluxes to the data
-            if check_normalisation and self.configuration["normalise"].get(channel, False):
+            if "normalise" in self.configuration and self.configuration["normalise"].get(channel, False):
 
                 index = self.channels.index(channel)
                 obs = observations[index]
 
                 continuum = self._continuum(channel, obs, model_flux, **theta)
                 model_flux *= continuum
+                model_continua.append(continuum)
+
+            else:
+                model_continua.append(0.)
 
             model_fluxes.append(model_flux)
 
+        if full_output:
+            return (model_fluxes, model_continua)
         return model_fluxes
 
