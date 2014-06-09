@@ -622,63 +622,33 @@ def optimise(p0, observed_spectra, model, **kwargs):
     return opt_theta
 
 
-def solve(observed_spectra, model, initial_thetas=None, **kwargs):
+def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=None, sample=None):
     """
-    Solve for the model parameters theta given the observed spectra.
-
-    Args:
-        observed_spectra (list of specutils.Spectrum1D objects): The observed spectra.
-        model (sick.models.Model object): The model class.
+    Set up an EnsembleSampler and sample the parameters given the model and data.
     """
 
-    t_init = time()
-
-    # Load our model if necessary
     if not isinstance(model, models.Model):
         model = models.Model(model)
-
-    # Set the aperture mapping from observed spectra to model spectra
-    # For example, which index in our list of spectra corresponds to
-    # 'blue', or 'red' in our model
     model.map_channels(observed_spectra)
-    
-    # Set up MCMC settnigs and result arrays
-    walkers, burn, sample = [model.configuration["solver"][k] for k in ("walkers", "burn", "sample")]
+
+    # Set up MCMC settings and arrays
+    walkers = model.configuration["solver"]["walkers"]
+    if burn is None:
+        burn = model.configuration["solver"]["burn"]
+    if sample is None:
+        sample = model.configuration["solver"]["sample"]
+
     mean_acceptance_fractions = np.zeros(burn + sample)
     autocorrelation_time = np.zeros((burn, len(model.dimensions)))
-
-    # Perform any optimisation and initialise priors
-    if model.configuration["solver"].get("optimise", True):
-        
-        most_probable_scattered_point = random_scattering(observed_spectra, model, initial_thetas)
-
-        kwargs_copy = kwargs.copy()
-        kwargs_copy.update({"full_output": True})
-        opt_theta, fopt, niter, funcalls, warnflag = optimise(most_probable_scattered_point, observed_spectra,
-            model, **kwargs_copy)
-
-        # Sample around opt_theta using some sensible things
-        p0 = sample_ball(dict(zip(model.dimensions, opt_theta)), observed_spectra, model)
-        #p0 = np.array([opt_theta + 1e-4 * random.randn(len(model.dimensions)) for each in range(walkers)])
-
-    else:
-        warnflag, p0 = 0, priors.explicit(model, observed_spectra)
-
-    logger.info("Priors summary:")
-    for i, dimension in enumerate(model.dimensions):
-        if len(p0.shape) > 1 and p0.shape[1] > 1:
-            logger.info("  Parameter {0} - mean: {1:.4e}, std: {2:.4e}, min: {3:.4e}, max: {4:.4e}".format(
-                dimension, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
-        else:
-            logger.info(" Parameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
 
     # Initialise the sampler
     sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_probability,
         args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
     # Start sampling
-    for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, iterations=burn)):
-        mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
+    for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0,
+        lnprob0=lnprob0, rstate0=rstate0, iterations=burn)):
+            mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
         
         # Announce progress
         logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log probability"
@@ -695,7 +665,7 @@ def solve(observed_spectra, model, initial_thetas=None, **kwargs):
     sampler.reset()
 
     logger.info("Sampling posterior...")
-    for j, state in enumerate(sampler.sample(pos, iterations=sample)):#, rstate0=rstate)):
+    for j, state in enumerate(sampler.sample(pos, iterations=sample)):
         mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
 
     # Concatenate the existing chain and lnprobability with the posterior samples
@@ -723,10 +693,63 @@ def solve(observed_spectra, model, initial_thetas=None, **kwargs):
         "chain": chain,
         "lnprobability": lnprobability,
         "mean_acceptance_fractions": mean_acceptance_fractions,
+    }
+    return posteriors, sampler, additional_info
+
+
+def solve(observed_spectra, model, initial_thetas=None, **kwargs):
+    """
+    Solve for the model parameters theta given the observed spectra.
+
+    Args:
+        observed_spectra (list of specutils.Spectrum1D objects): The observed spectra.
+        model (sick.models.Model object): The model class.
+    """
+
+    t_init = time()
+
+    # Load our model if necessary
+    if not isinstance(model, models.Model):
+        model = models.Model(model)
+
+    # Set the aperture mapping from observed spectra to model spectra
+    # For example, which index in our list of spectra corresponds to
+    # 'blue', or 'red' in our model
+    model.map_channels(observed_spectra)
+    
+    # Perform any optimisation and initialise priors
+    if model.configuration["solver"].get("optimise", True):
+        
+        most_probable_scattered_point = random_scattering(observed_spectra, model, initial_thetas)
+
+        kwargs_copy = kwargs.copy()
+        kwargs_copy.update({"full_output": True})
+        opt_theta, fopt, niter, funcalls, warnflag = optimise(most_probable_scattered_point, observed_spectra,
+            model, **kwargs_copy)
+
+        # Sample around opt_theta using some sensible things
+        p0 = sample_ball(dict(zip(model.dimensions, opt_theta)), observed_spectra, model)
+        #p0 = np.array([opt_theta + 1e-4 * random.randn(len(model.dimensions)) for each in range(walkers)])
+
+    else:
+        warnflag, p0 = 0, priors.explicit(model, observed_spectra)
+
+    logger.info("Starting point summary:")
+    for i, dimension in enumerate(model.dimensions):
+        if len(p0.shape) > 1 and p0.shape[1] > 1:
+            logger.info("  Parameter {0} - mean: {1:.4e}, std: {2:.4e}, min: {3:.4e}, max: {4:.4e}".format(
+                dimension, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
+        else:
+            logger.info(" Parameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
+
+    # Perform MCMC sampling
+    posteriors, sampler, additional_info = sample(observed_spectra, model, p0)
+
+    # Update the additional_info dictionary with information from other steps    
+    additional_info.update({ 
         "warnflag": warnflag,
         "time_elapsed": time() - t_init
-    }
-
+    })
     logger.info("Completed in {0:.2f} seconds".format(additional_info["time_elapsed"]))
 
     return (posteriors, sampler, additional_info)

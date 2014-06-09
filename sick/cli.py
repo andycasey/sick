@@ -33,6 +33,215 @@ import sick
 # Initialise logging
 logger = logging.getLogger("sick")
 
+def resume(args):
+    """
+    Resume a MCMC simulation from a previous state.
+    """
+
+    if not os.path.exists(args.model):
+        raise IOError("model filename {0} does not exist".format(args.model))
+
+    if not os.path.exists(args.state_filename):
+        raise IOError("state filename {0} does not exist".format(args.state_filename))
+
+    if args.plotting:
+        fig = plt.figure()
+        available = fig.canvas.get_supported_filetypes().keys()
+        plt.close(fig)
+
+        if args.plot_format.lower() not in available:
+            raise ValueError("plotting format '{0}' not available: Options are: {1}".format(
+                args.plot_format.lower(), ", ".join(available)))
+
+    # Are there multiple spectra for each source?
+    if args.multiple_channels:
+        # If so, they should all have the same length (e.g. same number of objects)
+        if len(set(map(len, all_spectra))) > 1:
+            raise IOError("filenames contain different number of spectra")
+
+        # OK, they have the same length. They are probably apertures of the same
+        # stars. Let's join them properly
+        sorted_spectra = []
+        num_stars, num_apertures = len(all_spectra[0]), len(all_spectra)
+        for i in xrange(num_stars):
+            sorted_spectra.append([all_spectra[j][i] for j in xrange(num_apertures)])
+
+        all_spectra = sorted_spectra
+    else:
+        all_spectra = [all_spectra]
+
+     # Load the model
+    model = sick.models.Model(args.model)
+
+    # Display some information about the model
+    logger.info("Model information: {0}".format(model))
+    logger.info("Configuration:")
+
+    # Serialise as YAML for readability
+    for line in yaml.dump(model.configuration).split("\n"):
+        logger.info("  {0}".format(line))
+
+    # Load the state
+    with open(args.state_filename, "rb") as fp:
+        p0, lnprobability, rstate = pickle.load(fp)
+
+    # Define headers that we want in the results filename 
+    default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
+        "MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE", "UTEND", "UTSTART", )
+    default_metadata = {
+        "model": model.hash, 
+        "input_filenames": ", ".join(args.spectra),
+        "sick_version": sick.__version__,
+        "walkers": model.configuration["solver"]["walkers"],
+    }
+
+    for i, spectra in enumerate(all_spectra, start=1):
+
+        # Force spectra as a list
+        if not isinstance(spectra, (list, tuple)):
+            spectra = [spectra]
+
+        logger.info("Starting on object #{0} (RA {1}, DEC {2} -- {3})".format(i, spectra[0].headers.get("RA", "None"),
+            spectra[0].headers.get("DEC", "None"), spectra[0].headers.get("OBJECT", "Unknown")))
+
+        # Create metadata and put header information in
+        if args.skip > i - 1:
+            logger.info("Skipping object #{0}".format(i))
+            continue
+
+        # Does a solution already exist for this star? If so are we authorised to clobber it?
+        output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
+
+        metadata = {}
+        header_columns = []
+        for header in default_headers:
+            if header not in spectra[0].headers: continue
+            header_columns.append(header)
+            metadata[header] = spectra[0].headers[header]
+
+        # Set defaults for metadata
+        metadata.update({"run_id": i})
+        metadata.update(default_metadata)
+        
+        try:
+            posteriors, sampler, info = sick.analysis.sample(spectra, model, p0=p0, lnprob0=lnprobability,
+                rstate0=rstate, burn=args.burn, sample=args.sample)
+
+        except:
+            logger.exception("Failed to analyse #{0}:".format(i))
+            if args.debug: raise
+
+        else:
+            
+            # Update results with the posteriors
+            logger.info("Posteriors:")
+            max_parameter_len = max(map(len, model.dimensions))
+            for dimension in model.dimensions:
+                posterior_value, pos_uncertainty, neg_uncertainty = posteriors[dimension]
+                logger.info("    {0}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension.rjust(max_parameter_len),
+                    posterior_value, pos_uncertainty, neg_uncertainty))
+
+                metadata.update({
+                    dimension: posterior_value,
+                    "u_maxabs_{0}".format(dimension): np.abs([neg_uncertainty, pos_uncertainty]).max(),
+                    "u_pos_{0}".format(dimension): pos_uncertainty,
+                    "u_neg_{0}".format(dimension): neg_uncertainty,
+                })
+
+            # Save information related to the data
+            metadata.update(dict(
+                [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
+                    for k, spectrum in enumerate(spectra)]
+            ))
+
+            # Save information related to the analysis
+            metadata.update({
+                "warnflag": info["warnflag"],
+                "maximum_log_likelihood": np.max(info["lnprobability"][np.isfinite(info["lnprobability"])]),
+                "chain_filename": chain_filename,
+                "time_elapsed": info["time_elapsed"],
+                "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
+                "model_configuration": model.configuration
+            })
+            
+            # Append an sample and step number
+            chain_filename = output("chain.fits")
+            # TODO: Append the chain to the existing chain, if chain_filename already exists
+
+            walkers = model.configuration["solver"]["walkers"]
+            chain_length = info["chain"].shape[0] * info["chain"].shape[1]
+            chain = np.core.records.fromarrays(
+                np.vstack([
+                    np.arange(1, 1 + chain_length),
+                    np.arange(1, 1 + chain_length) % walkers,
+                    info["chain"].reshape(-1, len(model.dimensions)).T,
+                    info["lnprobability"].reshape(-1, 1).T
+                ]),
+                names=["Iteration", "Sample"] + model.dimensions + ["ln_likelihood"],
+                formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
+
+            # Save the chain
+            primary_hdu = pyfits.PrimaryHDU()
+            table_hdu = pyfits.BinTableHDU(chain)
+            hdulist = pyfits.HDUList([primary_hdu, table_hdu])
+            hdulist.writeto(chain_filename, clobber=True)
+
+            with open(output("result.json"), "wb+") as fp:
+                json.dump(metadata, fp)
+
+            # Close sampler pool
+            if model.configuration["solver"].get("threads", 1) > 1:
+                sampler.pool.close()
+                sampler.pool.join()
+
+            # Save sampler state
+            with open(output("model.state"), "wb+") as fp:
+                pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
+
+            # Plot results
+            if args.plotting:
+
+                # Some filenames
+                chain_plot_filename = output("chain.{0}".format(args.plot_format))
+                acceptance_plot_filename = output("acceptance.{0}".format(args.plot_format))
+                corner_plot_filename = output("corner.{0}".format(args.plot_format))
+                pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
+                
+                # Plot the mean acceptance fractions
+                fig, ax = plt.subplots()
+                ax.plot(info["mean_acceptance_fractions"], color="k", lw=2)
+                ax.axvline(model.configuration["solver"]["burn"], linestyle=":", color="k")
+                ax.set_xlabel("Step")
+                ax.set_ylabel("$\langle{}a_f\\rangle$")
+                fig.savefig(acceptance_plot_filename)
+
+                # Plot the chains
+                fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
+                    burn_in=model.configuration["solver"]["burn"])
+                fig.savefig(chain_plot_filename)
+
+                # Make a corner plot with just the astrophysical parameters
+                indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
+                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
+                    labels=sick.utils.latexify(model.grid_points.dtype.names),
+                    quantiles=[.16, .50, .84], verbose=False)
+                fig.savefig(corner_plot_filename)
+
+                # Plot some spectra
+                fig = sick.plot.projection(sampler, model, spectra)
+                fig.savefig(pp_spectra_plot_filename)
+
+                # Closing the figures isn't enough; matplotlib leaks memory
+                plt.close("all")
+
+            # Delete some things
+            del sampler, chain, primary_hdu, table_hdu, hdulist
+
+        # We can only resume the state from a single object
+        break
+    logger.info("Fin.")
+    
+
 def download(args):
     """
     Download requested files.
@@ -49,10 +258,14 @@ def solve(args):
     if not os.path.exists(args.model):
         raise IOError("model filename {0} does not exist".format(args.model))
 
-    available = ("pdf", "jpg", "png", "eps")
-    if args.plotting and args.plot_format.lower() not in available:
-        raise ValueError("plotting format '{0}' not available. Options: {1}".format(
-            args.plot_format.lower(), ", ".join(available)))
+    if args.plotting:
+        fig = plt.figure()
+        available = fig.canvas.get_supported_filetypes().keys()
+        plt.close(fig)
+
+        if args.plot_format.lower() not in available:
+            raise ValueError("plotting format '{0}' not available: Options are: {1}".format(
+                args.plot_format.lower(), ", ".join(available)))
 
     all_spectra = [sick.specutils.Spectrum.load(filename) for filename in args.spectra]
 
@@ -131,7 +344,6 @@ def solve(args):
         metadata.update({"run_id": i})
         metadata.update(default_metadata)
         
-        t_init = time()
         try:
             posteriors, sampler, info = sick.solve(spectra, model)
 
@@ -139,18 +351,7 @@ def solve(args):
             logger.exception("Failed to analyse #{0}:".format(i))
             if args.debug: raise
 
-            try: all_results
-            except NameError:
-                # Cannot add to results because we don't know all the model dimensions. We must continue
-                # until we find one result that works
-                continue
-            else:
-                row = np.core.records.fromrecords([[metadata.get(key, np.nan) for key in metadata_columns]],
-                    dtype=all_results.dtype)
-                all_results = np.append(all_results, row)
-
         else:
-            t_elapsed = int(time() - t_init)
             
             # Update results with the posteriors
             logger.info("Posteriors:")
@@ -167,13 +368,6 @@ def solve(args):
                     "u_neg_{0}".format(dimension): neg_uncertainty,
                 })
 
-            # Set some filename variables
-            chain_filename = output("chain.fits")
-            pp_observed_spectra_filenames = [output("pp-obs-{0}.fits".format(channel)) \
-                for channel in model.channels]
-            pp_modelled_spectra_filenames = [output("pp-mod-{0}.fits".format(channel)) \
-                for channel in model.channels]
-            
             # Save information related to the data
             metadata.update(dict(
                 [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
@@ -185,16 +379,12 @@ def solve(args):
                 "warnflag": info["warnflag"],
                 "maximum_log_likelihood": np.max(info["lnprobability"][np.isfinite(info["lnprobability"])]),
                 "chain_filename": chain_filename,
-                "pp_observed_spectra_filenames": ",".join(pp_observed_spectra_filenames),
-                "pp_modelled_spectra_filenames": ",".join(pp_modelled_spectra_filenames),
-                "time_elapsed": t_elapsed,
+                "time_elapsed": info["time_elapsed"],
                 "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
+                "model_configuration": model.configuration
             })
 
-            # Save the model configuration to the analysis
-            metadata.update({"model_configuration": model.configuration})
-            
-            # Append an sample and step number
+            chain_filename = output("chain.fits")
             walkers = model.configuration["solver"]["walkers"]
             chain_length = info["chain"].shape[0] * info["chain"].shape[1]
             chain = np.core.records.fromarrays(
@@ -225,19 +415,6 @@ def solve(args):
             with open(output("model.state"), "wb+") as fp:
                 pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
 
-            """
-            # Get the most likely sample
-            ml_index = np.argmax(sampler.lnprobability.reshape(-1))
-            ml_parameters = dict(zip(model.dimensions, sampler.chain.reshape(-1, len(model.dimensions))[ml_index]))
-            ml_metadata = metadata.copy()
-            ml_metadata.update(ml_parameters)
-            with open(output("pp.json"), "wb+") as fp:
-                json.dump(ml_metadata, fp)
-
-            pp_model_fluxes = model(observations=spectra, **dict(zip(model.dimensions, [posteriors[each][0] for each in model.dimensions])))
-            ml_model_fluxes = model(observations=spectra, **ml_parameters)
-            """
-
             # Plot results
             if args.plotting:
 
@@ -245,9 +422,7 @@ def solve(args):
                 chain_plot_filename = output("chain.{0}".format(args.plot_format))
                 acceptance_plot_filename = output("acceptance.{0}".format(args.plot_format))
                 corner_plot_filename = output("corner.{0}".format(args.plot_format))
-                pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
-                pp_scaled_spectra_plot_filename = output("ml-scaled-spectra.{0}".format(args.plot_format))
-
+                
                 # Plot the mean acceptance fractions
                 fig, ax = plt.subplots()
                 ax.plot(info["mean_acceptance_fractions"], color="k", lw=2)
@@ -271,46 +446,6 @@ def solve(args):
                 # Plot some spectra
                 fig = sick.plot.projection(sampler, model, spectra)
                 fig.savefig(pp_spectra_plot_filename)
-
-                # Do the same, but scale the data this time too.
-                """
-                fig = plt.figure()
-                for i, (channel, pp_model_flux, ml_model_flux, observed_aperture) \
-                in enumerate(zip(model.channels, pp_model_fluxes, ml_model_fluxes, spectra)):
-
-                    ax = fig.add_subplot(len(spectra), 1, i+1)
-
-                    # Get the full boundaries
-                    fmd = np.isfinite(pp_model_flux)
-                    fod = np.isfinite(observed_aperture.flux)
-                    full_extent = [
-                        np.max([observed_aperture.disp[fmd][0], observed_aperture.disp[fod][0]]),
-                        np.min([observed_aperture.disp[fmd][-1], observed_aperture.disp[fod][-1]])
-                    ]
-
-                    continuum = model._continuum(channel, observed_aperture, ml_model_flux, **ml_parameters)
-                    ax.plot(observed_aperture.disp, ml_model_flux/continuum, 'r', zorder=1)
-                    ax.plot(observed_aperture.disp, observed_aperture.flux/continuum, 'k', zorder=100)
-
-                    for sample in sample_posterior_fluxes_normed:
-                        ax.plot(observed_aperture.disp, sample[i], c="#666666", zorder=-1)
-                    
-                    ax.yaxis.set_major_locator(MaxNLocator(4))
-                    ax.plot(full_extent, [1, 1], ':', c='k', zorder=-1)
-                    ax.set_ylabel("Scaled Flux, $F_\lambda/C_\lambda$")
-
-                    ax.set_xlim(full_extent)
-                    indices = observed_aperture.disp.searchsorted(full_extent)
-                    relevant_fluxes = (observed_aperture.flux/continuum)[indices[0]:indices[1]]
-
-                    ax.set_ylim(
-                        0.90 * relevant_fluxes[np.isfinite(relevant_fluxes)].min(),
-                        1.10 * relevant_fluxes[np.isfinite(relevant_fluxes)].max()
-                    )
-
-                ax.set_xlabel("Wavelength, $\lambda$")
-                fig.savefig(pp_scaled_spectra_plot_filename)
-                """
 
                 # Closing the figures isn't enough; matplotlib leaks memory
                 plt.close("all")
@@ -460,6 +595,32 @@ def main():
         help="Resume MCMC simulation from a previously calculated state.")
     resume_parser.add_argument("model", type=str,
         help="The model filename in YAML- or JSON-style formatting.")
+    resume_parser.add_argument("state_filename", type=str,
+        help="The filename containing the pickled MCMC state.")
+    resume_parser.add_argument("burn", type=int,
+        help="The number of MCMC steps to burn.")
+    resume_parser.add_argument("sample", type=int,
+        help="The number of MCMC steps to sample after burn-in.")
+    resume_parser.add_argument("spectra", nargs="+",
+        help="Filenames of (observed) spectroscopic data.")
+    resume_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", type=str,
+        default=os.getcwd(),
+        help="Directory where to save output files to.")
+    resume_parser.add_argument("--filename-prefix", "-p", dest="filename_prefix", default="sick",
+        help="The filename prefix to use for the output files.")
+    resume_parser.add_argument("--multi-channel", "-mc", dest="multiple_channels",
+        action="store_true", default=False,
+        help="Use if each source has multiple spectral channels. Default is false, implying that "
+        "any additional spectra refers to a different source.")
+    resume_parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0,
+        help="Number of sources to skip (default: %(default)s)")
+    resume_parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True,
+        help="Disable plotting.")
+    resume_parser.add_argument("--plot-format", "-pf", dest="plot_format", action="store", type=str,
+        default="jpg",
+        help="Format for output plots (default: %(default)s). Available formats are (case insensitive):"
+        " PDF, JPG, PNG, EPS")
+    resume_parser.set_defaults(func=resume)
 
     # Parse arguments and specify logging level
     args = parser.parse_args()
