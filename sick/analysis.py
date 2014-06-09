@@ -86,7 +86,7 @@ def initial_point(evaluated_priors, model, observations):
         evaluated_priors = evaluated_priors.copy()
 
     scaled_observations = {}
-
+    
     for i, dimension in enumerate(model.dimensions):
 
         # Have we already evaluated this dimension?
@@ -114,7 +114,6 @@ def initial_point(evaluated_priors, model, observations):
                     evaluated_priors["normalise.{0}.bandwidth".format(channel)] = np.random.normal(1000, 1000)
                 if "normalise.{0}.s_scale".format(channel) in model.dimensions:
                     evaluated_priors["normalise.{0}.s_scale".format(channel)] = np.random.normal(1, 0.1)
-
 
                 if "convolve.{0}".format(channel) in model.dimensions:
 
@@ -646,12 +645,13 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
         args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
     # Start sampling
-    for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0,
+    for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, \
         lnprob0=lnprob0, rstate0=rstate0, iterations=burn)):
-            mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
+        
+        mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
         
         # Announce progress
-        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log probability"
+        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log probability"\
             " in last step was {2:.3e}".format(i + 1, mean_acceptance_fractions[i],
                 np.max(sampler.lnprobability[:, i])))
 
@@ -719,7 +719,7 @@ def solve(observed_spectra, model, initial_thetas=None, **kwargs):
     
     # Perform any optimisation and initialise priors
     if model.configuration["solver"].get("optimise", True):
-        
+
         most_probable_scattered_point = random_scattering(observed_spectra, model, initial_thetas)
 
         kwargs_copy = kwargs.copy()

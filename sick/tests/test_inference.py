@@ -6,7 +6,6 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <andy@ast.cam.ac.uk>"
 
-import gzip
 import os
 import unittest
 import urllib
@@ -48,7 +47,7 @@ class InferenceTest(unittest.TestCase):
         urllib.urlretrieve(TEST_DATA_URL, "test-inference-data.tar.gz")
 
         # Uncompress the data
-        os.system("gunzip test-inference-data.tar.gz")
+        os.system("gunzip -f test-inference-data.tar.gz")
         os.system("tar -xzf test-inference-data.tar")
 
 
@@ -82,23 +81,23 @@ class InferenceTest(unittest.TestCase):
             spectrum = sick.specutils.Spectrum1D(disp=disp[::2], flux=flux[::2],
                 variance=flux_err[::2]**2)
             observations.append(spectrum)
-	
-	# Plot the noisy spectrum
-	fig, axes = plt.subplots(len(observations))
-	if len(observations) == 1: axes = [axes]
-	for ax, spectrum in zip(axes, observations):
+
+        # Plot the noisy spectrum
+        fig, axes = plt.subplots(len(observations))
+        if len(observations) == 1: axes = [axes]
+        for ax, spectrum in zip(axes, observations):
             ax.plot(spectrum.disp, spectrum.flux, 'k')
             ax.set_ylabel("Flux, $F_\lambda$")
             ax.set_yticklabels([])
             ax.set_xlim(spectrum.disp[0], spectrum.disp[-1])
-        ax.set_xlabel("Wavelength, $\lambda$ [$\AA$]")
-	fig.savefig("spectrum.pdf")
+            ax.set_xlabel("Wavelength, $\lambda$ [$\AA$]")
+        fig.savefig("spectrum.pdf")
 
         # Now let's solve for the model parameters
         posteriors, sampler, info = sick.solve(observations, model)
 
         # Plot the chains
-	fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
+        fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
             truths=[truth[dimension] for dimension in model.dimensions], burn_in=1000)
         fig.savefig("chains.pdf")
 
@@ -129,8 +128,7 @@ class InferenceTest(unittest.TestCase):
         """
 
         # Remove the plots we produced
-        filenames = ["chain-{0}.pdf".format(n) for n in xrange(1, self.n+1)]
-        filenames.extend(["inference.pdf", "inference-all.pdf"])
+        filenames = ["chains.pdf", "spectrum.pdf", "inference.pdf", "inference-all.pdf"]
 
         # Remove the model filenames
         filenames.extend(["inference-model.yaml", "inference-dispersion.memmap", "inference-flux.memmap",

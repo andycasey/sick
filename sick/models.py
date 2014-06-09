@@ -207,7 +207,6 @@ class Model(object):
                         channel))
 
                 if i == 0:
-
                     # Save the grid points as a record array
                     self.grid_points = np.core.records.fromrecords(points, names=dimensions,
                         formats=["f8"]*len(dimensions))
@@ -220,6 +219,9 @@ class Model(object):
         # Pre-compute the grid boundaries
         self.grid_boundaries = dict(zip(self.grid_points.dtype.names, [(np.min(self.grid_points[_]), np.max(self.grid_points[_])) \
             for _ in self.grid_points.dtype.names]))
+
+        # Initialise the dimensions property to avoid nasty fringe cases
+        _ = self.dimensions
 
         return None
 
