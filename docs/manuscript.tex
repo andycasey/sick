@@ -155,7 +155,7 @@ p(\bm{\theta}|\{F_i\}_{i=1}^{N}) & \propto & p(\{F_i\}_{i=1}^{N}|\bm{\theta})\,\
 %& & \dots +  \ln(p(\bm{\theta}))
 %\end{eqnarray}
 
-We seek to maximise $\mathcal{P}$ and calculate the posterior probability distributions for $\bm{\theta}$. Continuing the example of inferring photospheric properties of the Sun, we now have a total of 16 free parameters (including $\bm{\psi}$), requiring us to interpolate between $\sim{}X\times10^{9}$ pixels (only the redder channel) in 4 dimensions. While the description might appear daunting, the problem is tractable, numerically efficient, and easy to configure: the contents of the model filename provided to \sick{} are shown in Figure \ref{fig:solar-model-file}. By default \sick{} numerically solves this problem in three sequential steps: scattering, optimisation, and Monte-Carlo Markov Chain (MCMC) sampling. These approaches are described in the following sections. 
+We seek to maximise $\mathcal{P}$ and calculate the posterior probability distributions for $\bm{\theta}$. Continuing the example of inferring photospheric properties of the Sun, we now have a total of 16 free parameters (including $\bm{\psi}$), requiring us to interpolate between $\sim{}X\times10^{9}$ pixels (only the redder channel) in 4 dimensions. While the description might appear daunting, the problem is tractable, numerically efficient, and easy to configure: the contents of the model filename provided to \sick{} are shown in Figure \ref{fig:solar-model-file}. By default \sick{} numerically solves this problem in three sequential steps, which are described in the following sections: scattering, optimisation, and Monte-Carlo Markov Chain (MCMC) sampling.
 
 \begin{figure}
 \includegraphics[height=10cm]{solar-model.png}
@@ -165,7 +165,7 @@ We seek to maximise $\mathcal{P}$ and calculate the posterior probability distri
 
 \subsection{Initial Scattering}
 
-In the first step we calculate the probability $\mathcal{P}$ for $N_{sample}$ randomly drawn points from all over the parameter space $\bm{\psi}$. Since \sick{} allows for arbitrarily large parameter spaces in $N_{D}$ dimensions, initially sampling the parameter space $N_{sample}$ times provides a coarse representation of probability so that we do not become `stuck' in a local minima.\footnote{If we did not numerically optimise the probability function and only sampled using MCMC with reasonable priors, becoming stuck in local minima would be less of a problem. However MCMC sampling is much more expensive than numerical optimisation.} If the probability distribution function were smoothly distributed across all $\bm{\psi}$, or the optimisation step (see below) was sufficiently robust, then in principle \textit{any} single point would be an adequate starting guess. However there is no way of knowing \textit{a priori} how smooth the probability distribution function is for a given problem. 
+In the first step we calculate the log-probability $\log{(\mathcal{P})}$ for $N_{sample}$ randomly drawn points from all over the parameter space $\bm{\psi}$. Since \sick{} allows for arbitrarily large parameter spaces in $N_{D}$ dimensions, initially sampling the parameter space $N_{sample}$ times provides a coarse representation of probability so that we do not become `stuck' in a local minima.\footnote{If we did not numerically optimise the probability function and only sampled using MCMC with reasonable priors, becoming stuck in local minima would be less of a problem. However MCMC sampling is much more expensive than numerical optimisation.} If the probability distribution function were smoothly distributed across all $\bm{\psi}$, or the optimisation step (see below) was sufficiently robust, then in principle \textit{any} single point would be an adequate starting guess. However there is no way of knowing \textit{a priori} how smooth the probability distribution function is for a given problem. 
 
 The $N_{samples}$ are uniformly drawn in $\bm{\psi}$ by default, unless priors are specified (see Section \ref{sec:priors}). A model spectrum $S(\bm{\psi})$ is interpolated for each point, which is used to estimate the redshift and continuum parameters. After smoothing the model fluxes $I_j$ by $\sigma_s$ (as drawn from an explicit prior, or estimated by $\left|\mathcal{N}\left(0, 1\right)\right|$) the smoothed spectrum is cross-correlated with the data to yield a redshift $z$. Continuum parameters $\{c_k\}_{k=0}^{m}$ are similarly estimated by fitting a polynomial to the data divided by the smoothed flux at each $\lambda_i$. Estimating continuum and redshift provides us with a reasonable probability for all randomly scattered points. If outliers modelling is included $P_o$ is distributed as $\mathcal{U}\left(0, 1\right)$ by default, and $Y_o$, $V_o$ are estimated by $\mathcal{N}\left(\widetilde{F_i}, \frac{1}{2}\widetilde{F_i}\right)$ and $\mathcal{N}\left(\mbox{Var}\left(F_i\right),\frac{1}{2}\mbox{Var}\left(F_i\right)\right)$ respectively. This procedure is only employed for the initial random scattering stage: it is \textit{not} applicable for MCMC sampling. 
 
@@ -175,13 +175,26 @@ The $N_{samples}$ are uniformly drawn in $\bm{\psi}$ by default, unless priors a
 
 After the random scattering step, the most probable $\bm{\theta}$ point is used as an initial guess for numerical optimisation. A number of suitable optimisation algorithms are available in \sick{} through the SciPy optimization \cite{scipy,scipy-optimize} module. This includes the Nelder-Mead \citet[default;][]{nelder-mead}, Broyden-Fletcher-Goldfarb-Shannon \cite{bfgs} and others. Unlike other optimisation techniques, the Nelder-Mead algorithm does not approximate first- or second-order derivatives. As a consequence it can be less efficient than other approaches. However it is robust in high-dimensional space, even in the presence of substantial noise, and has been successfully employed in a wide range of engineering and scientific problems. The reader is encouraged to experiment with other available optimisation algorithms if the Nelder-Mead algorithm proves unsuitable or takes an untenable amount of time.
 
-Since these optimisation algorithms are minimisation techniques and we seek to maximise the log-probability $\ln\mathcal{P}$, we numerically optimise the parameters $\bm{\theta}$ by minimising the negative log-probability $-\mathcal{P}$. After performing the initial scattering phase with $N_{samples} = 100$, the most probable sampled point is $\bm{\psi_{scat}} = [A,B,C,D]$ with $\mathcal{P} = Z$. After optimisation, the most probable values found were X.
+Since these optimisation algorithms are minimisation techniques and we seek to maximise the log-probability $\log{\left(\mathcal{P}\right)}$, we numerically optimise the parameters $\bm{\theta}$ by minimising the negative log-probability $-\log{\left(\mathcal{P}\right)}$. After performing the initial scattering phase with $N_{samples} = 100$, the most probable sampled point is $\bm{\psi_{scat}} = [A,B,C,D]$ with $\log{\left(\mathcal{P}\right)} = Z$. After optimisation, the most probable values found were X.
 
 
 \subsection{Monte-Carlo Markov Chain Sampling}
 \label{sec:mcmc}
 
 The random scattering and numerical optimisation steps efficiently provide an accurate estimate of the optimal parameters $\bm{\theta}$. Once the optimisation step is complete, \sick{} employs the Metropolis-Hastings MCMC algorithm to sample and fully characterise the posterior probability distribution function of $\bm{\theta}$ given the model. The affine-invariant ensemble sampler proposed by \citet{goodman;weave} is employed, using the emcee implementation \citep{emcee}, which allows for numerical parallelisation of many walkers. All of the relevant arguments (learning parameter $\alpha$, the number of walkers, burn-in and sampling iterations, threads) can be specified in each \sick{} model (Figure \ref{fig:solar-model-file}).
+
+\subsubsection{Initial Point}
+\label{sec:initial-point}
+If the optimisation steps is not employed, initial points for the MCMC chains are drawn in the same way as described in the scattering process. When the optimisation step is used, the initial points are taken from a small multi-dimensional ball around the optimised parameters $\bm{\theta_{opt}}$.
+
+% Width of the ball
+
+\begin{eqnarray}
+T_{\rm eff} = 5590_{-125}^{+151}\,\mbox{K},\,\,\,\,\, \log{g} = 4.44_{-0.23}^{+0.28},\,\,\,\,\, [\mbox{Fe/H}] = -0.48_{-0.16}^{+0.21},\,\,\,\,\, [\alpha/\mbox{Fe}] = 0.02_{-0.14}^{+0.13} \\
+\end{eqnarray}
+
+% Continuum
+The standard deviation of each dimension can be specified in the \sick{} model filename.
 
 \subsubsection{Priors}
 \label{sec:priors}
