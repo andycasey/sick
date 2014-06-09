@@ -11,10 +11,14 @@ __author__ = ("Triangle.py (corner) was written by Dan Foreman-Mackey, and "
 __all__ = ["chains", "corner"]
 
 import numpy as np
+import matplotlib as mpl
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
 from triangle import corner
+
+import specutils
 
 def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     alpha=0.5, fig=None):
@@ -104,10 +108,10 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
 
 
 # Can do it from: data, model, sampler, n
-def projection(sampler, model, data, n=100, fig=None):
+def projection(sampler, model, data, n=100, extents=None, fig=None):
 
     if not isinstance(data, (tuple, list)) or \
-    any([not isinstance(each, sick.specutils.Spectrum1D) for each in data]):
+    any([not isinstance(each, specutils.Spectrum1D) for each in data]):
         raise TypeError("Data must be a list-type of Spectrum1D objects.")
 
     K = len(data)
@@ -132,7 +136,7 @@ def projection(sampler, model, data, n=100, fig=None):
                 "dimensions K={1}".format(len(fig.axes), K))
 
     # Find the most probable sampled theta and compute spectra for it
-    max_lnprob_index = np.argmax(sampler.flatlnprobability)
+    max_lnprob_index = np.argmax(sampler.lnprobability.flatten())
     max_lnprob_theta = sampler.flatchain[max_lnprob_index]
     max_lnprob_fluxes = model(observations=data, **dict(zip(model.dimensions, max_lnprob_theta)))
 
@@ -166,7 +170,7 @@ def projection(sampler, model, data, n=100, fig=None):
         # By default only show common overlap between the model and spectral data
         if extents is None:
             finite_data = np.isfinite(observed_spectrum.flux)
-            finite_model = np.isfinite(model_flux)
+            finite_model = np.isfinite(max_lnprob_flux)
 
             x_extent = [
                 np.max([observed_spectrum.disp[indices][0]  for indices in (finite_model, finite_data)]),
@@ -174,9 +178,10 @@ def projection(sampler, model, data, n=100, fig=None):
             ]
 
             indices = observed_spectrum.disp.searchsorted(x_extent)
+            finite_observed_flux = observed_spectrum.flux[indices[0]:indices[1]]
             y_extent = [
-                0.9 * np.min(observed_aperture.flux[indices[0]:indices[1]]),
-                1.1 * np.max(observed_aperture.flux[indices[0]:indices[1]])
+                0.9 * np.min(finite_observed_flux[np.isfinite(finite_observed_flux)]),
+                1.1 * np.max(finite_observed_flux[np.isfinite(finite_observed_flux)])
             ]
             ax.set_xlim(x_extent)
             ax.set_ylim(y_extent)
@@ -186,10 +191,9 @@ def projection(sampler, model, data, n=100, fig=None):
             ax.set_ylim(extents[k][1])
 
         # Labels and ticks
-        if k < K - 1:
-            ax.set_xticklabels([])
-        else:
-            ax.set_xlabel("Step")
+        if not (k < K - 1):
+            ax.set_xlabel("Wavelength, $\lambda$ ($\AA$)")
+
         ax.set_ylabel("Flux, $F_\lambda$")
         ax.yaxis.set_label_coords(-0.05, 0.5)
 

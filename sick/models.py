@@ -130,7 +130,6 @@ class Model(object):
                 for i, channel in enumerate(self.channels):
                     if not "flux_filename" in self.configuration["channels"][channel]:
                         missing_flux_filenames.append(channel)
-                        #raise KeyError("no flux filename specified for {} channel".format(channel))
                         continue
 
                     fluxes.append(np.memmap(self.configuration["channels"][channel]["flux_filename"], 
@@ -142,7 +141,7 @@ class Model(object):
             total_dispersion_pixels = sum(map(len, self.dispersion.values()))
             if total_flux_pixels != total_dispersion_pixels:
                 for channel in missing_flux_filenames:
-                    logger.warn("No flux filename specified for {} channel".format(channel))
+                    logger.warn("No flux filename specified for {0} channel".format(channel))
 
                 raise ValueError("the total flux pixels ({0}) was different to what was expected ({1})".format(
                     total_flux_pixels, total_dispersion_pixels))
@@ -277,7 +276,7 @@ class Model(object):
 
             self._priors = {}
             self._priors.update(dict(zip(
-                ["jitter.{}".format(channel) for channel in self.channels],
+                ["jitter.{0}".format(channel) for channel in self.channels],
                 ["uniform(-10, 1)"] * len(self.channels)
             )))
             self._priors.update(dict(zip(self.grid_points.dtype.names,
@@ -386,7 +385,7 @@ class Model(object):
 
             settings = self.configuration["normalise"][channel]
             if "method" not in settings:
-                raise KeyError("configuration setting 'normalise.{}.method' not found".format(channel))
+                raise KeyError("configuration setting 'normalise.{0}.method' not found".format(channel))
 
             method = settings["method"]
             if method == "spline":
@@ -395,21 +394,21 @@ class Model(object):
                 if not isinstance(knots, (int, )):
                     # Could be a list-type of rest wavelength points
                     if not isinstance(knots, (tuple, list, np.ndarray)):
-                        raise TypeError("configuration setting 'normalise.{}.knots' is expected"
+                        raise TypeError("configuration setting 'normalise.{0}.knots' is expected"
                             "to be an integer or a list-type of rest wavelength points".format(channel))
 
                     try: map(float, knots) 
                     except (TypeError, ValueError) as e:
-                        raise TypeError("configuration setting 'normalise.{}.knots' is expected"
+                        raise TypeError("configuration setting 'normalise.{0}.knots' is expected"
                             "to be an integer or a list-type of rest wavelength points".format(channel))
 
             elif method == "polynomial":
 
                 if "order" not in settings:
-                    raise KeyError("configuration setting 'normalise.{}.order' not found".format(channel))
+                    raise KeyError("configuration setting 'normalise.{0}.order' not found".format(channel))
 
                 elif not isinstance(settings["order"], (float, int)):
-                    raise TypeError("configuration setting 'normalise.{}.order'"
+                    raise TypeError("configuration setting 'normalise.{0}.order'"
                         " is expected to be an integer-like object".format(channel))
 
             elif method == "fft_filter":
@@ -417,7 +416,7 @@ class Model(object):
                 continue
 
             else:
-                raise ValueError("configuration setting 'normalise.{}.method' not recognised"
+                raise ValueError("configuration setting 'normalise.{0}.method' not recognised"
                     " -- must be spline or polynomial".format(channel))
         
         return True
@@ -438,11 +437,11 @@ class Model(object):
         integer_keys_required = ("sample", "walkers", "burn")
         for key in integer_keys_required:
             if key not in solver:
-                raise KeyError("configuration setting 'solver.{}' not found".format(key))
+                raise KeyError("configuration setting 'solver.{0}' not found".format(key))
 
             try: int(solver[key])
             except (ValueError, TypeError) as e:
-                raise TypeError("configuration setting 'solver.{}' must be an integer-like type".format(key))
+                raise TypeError("configuration setting 'solver.{0}' must be an integer-like type".format(key))
 
         if solver.get("optimise", True):
 
@@ -585,12 +584,12 @@ class Model(object):
 
             elif dimension == "doppler_shift":
                 # Check which channels have doppler shifts allowed and add them
-                dimensions.extend(["z.{}".format(each) \
+                dimensions.extend(["z.{0}".format(each) \
                     for each in self.channels if self.configuration[dimension].get(each, False)])
 
             elif dimension == "convolve":
                 # Check which channels have smoothing allowed and add them
-                dimensions.extend(["convolve.{}".format(each) \
+                dimensions.extend(["convolve.{0}".format(each) \
                     for each in self.channels if self.configuration[dimension].get(each, False)])  
 
             elif dimension == "outliers" and self.configuration["outliers"]:
@@ -598,7 +597,7 @@ class Model(object):
                 dimensions.extend(["Pb", "Vb"])
         
         # Append jitter
-        dimensions.extend(["jitter.{}".format(channel) for channel in self.channels])
+        dimensions.extend(["jitter.{0}".format(channel) for channel in self.channels])
 
         # Cache for future
         setattr(self, "_dimensions", dimensions)
@@ -651,7 +650,7 @@ class Model(object):
             filenames = [grid_points_filename, flux_filename] + dispersion_filenames.values()
             filenames_exist = map(os.path.exists, filenames)
             if any(filenames_exist):
-                raise IOError("filename {} exists and we've been asked not to clobber it".format(
+                raise IOError("filename {0} exists and we've been asked not to clobber it".format(
                     filenames[filenames_exist.index(True)]))
 
         if not isinstance(smoothing_kernels, dict) and smoothing_kernels is not None:
@@ -895,8 +894,8 @@ class Model(object):
                 if self.configuration["masks"][channel] is not None:
 
                     for region in self.configuration["masks"][channel]:
-                        if "z.{}".format(channel) in theta:
-                            z = theta["z.{}".format(channel)]
+                        if "z.{0}".format(channel) in theta:
+                            z = theta["z.{0}".format(channel)]
                             region = np.array(region) * (1. + z)
                             
                         index_start, index_end = np.searchsorted(dispersion_map, region)
@@ -996,7 +995,7 @@ class Model(object):
         """
 
 
-    def __call__(self, observations=None, **theta):
+    def __call__(self, observations=None, full_output=False, **theta):
         """
         Return normalised, doppler-shifted, convolved and transformed model fluxes.
 
@@ -1007,20 +1006,18 @@ class Model(object):
         """
 
         # Get the grid point and interpolate
-        point = [theta[parameter] for parameter in self.grid_points.dtype.names]
-        interpolated_flux = self.interpolate_flux(point)
+        interpolated_flux = self.interpolate_flux(
+            [theta[parameter] for parameter in self.grid_points.dtype.names]
+        )
 
         model_fluxes = []
-        check_normalisation = "normalise" in self.configuration.keys()
-        
-        for channel in self.channels:
+        model_continua = []
+        for channel, model_flux in interpolated_flux.iteritems():
                 
-            # TODO do we actualy need to do a copy?
-            model_dispersion = self.dispersion[channel].copy()
-            model_flux = interpolated_flux[channel].copy()
+            model_dispersion = self.dispersion[channel]
 
             # Any smoothing to apply?
-            key = "convolve.{}".format(channel)
+            key = "convolve.{0}".format(channel)
             if key in theta:
                 profile_sigma = theta[key] / (2.*(2*np.log(2))**0.5)
                 true_profile_sigma = profile_sigma / np.mean(np.diff(model_dispersion))
@@ -1038,10 +1035,8 @@ class Model(object):
 
                 # Interpolate flux to log-lambda dispersion
                 log_model_flux = np.interp(log_model_dispersion, model_dispersion, model_flux, left=np.nan, right=np.nan)
-                
                 model_dispersion = log_model_dispersion * (1. + z)
                 model_flux = log_model_flux
-
 
             # Interpolate model fluxes to observed dispersion map
             if observations is not None:
@@ -1052,27 +1047,84 @@ class Model(object):
 
             # Apply masks if necessary
             if self.configuration.get("masks", None):
-                regions = self.configuration["masks"].get(channel, None)
-                if regions:
-                    for region in self.configuration["masks"][channel]:
-                        if key in theta:
-                            z = theta[key]
-                            # This is an approximation, but a sufficient one.
-                            region = np.array(region) * (1. + z)
+                regions = self.configuration["masks"].get(channel, [])
+                for region in regions: 
+                    if key in theta:
+                        z = theta[key]
+                        region = np.array(region) * (1. + z)
 
-                        index_start, index_end = np.searchsorted(model_dispersion, region)
-                        model_flux[index_start:index_end] = np.nan
+                    index_start, index_end = np.searchsorted(model_dispersion, region)
+                    model_flux[index_start:index_end] = np.nan
+
+            # Any FFT filtering to apply?
+            if self.configuration.get("fft_filter", False):
+
+                index = self.channels.index(channel)
+                obs = observations[index]
+
+                finite = np.isfinite(obs.flux)
+
+                obs_flux = np.interp(obs.disp, obs.disp[finite], obs.flux[finite])
+
+                bw = 10000.
+                sconst = 0.01
+
+                # Filter the obs
+                s = obs.disp.size
+                tmp = np.empty(s)
+                tmp[:s] = obs_flux.copy()
+                #tmp[s:2*s] = obs_flux.copy()
+                #tmp[2*s:] = obs_flux[::-1].copy()
+
+                edge_buffer = 0.1 * (obs.disp[-1] - obs.disp[0])
+                low_w_indices = np.nonzero(obs.disp < obs.disp[0] + edge_buffer)[0]
+                high_w_indices = np.nonzero(obs.disp > obs.disp[-1] - edge_buffer)[0]
+
+                apod_curve = np.ones(s, dtype='d')
+                apod_curve[low_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (obs.disp[low_w_indices] - obs.disp[0])/edge_buffer)))/2.
+                apod_curve[high_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (obs.disp[-1] - obs.disp[high_w_indices])/edge_buffer)))/2.
+
+
+                fft = np.fft.rfft(tmp * apod_curve)
+                x = np.arange(fft.size)*1.
+                obs_rfft = np.fft.irfft(fft*x/(bw + x))
+                obs_cont = ndimage.gaussian_filter(obs_flux - obs_rfft, sconst * s**0.5)
+
+                # Filter the syn
+                s = model_flux.size
+                assert model_flux.size == obs.disp.size
+                tmp = np.empty(s)
+                tmp[:s] = model_flux.copy()
+                #tmp[s:2*s] = model_flux.copy()
+                #tmp[2*s:] = model_flux[::-1].copy()
+                fft = np.fft.rfft(tmp * apod_curve)
+                x = np.arange(fft.size)*1.
+                model_rfft = np.fft.irfft(fft*x/(bw + x))
+                model_cont = ndimage.gaussian_filter(model_flux - model_rfft, sconst * s**0.5)
+               
+                cont_scale = obs_cont/model_cont
+
+
+                model_flux *= cont_scale
+                model_continua.append(cont_scale)
+
 
             # Normalise model fluxes to the data
-            if check_normalisation and self.configuration["normalise"].get(channel, False):
+            if "normalise" in self.configuration and self.configuration["normalise"].get(channel, False):
 
                 index = self.channels.index(channel)
                 obs = observations[index]
 
                 continuum = self._continuum(channel, obs, model_flux, **theta)
                 model_flux *= continuum
+                model_continua.append(continuum)
+
+            else:
+                model_continua.append(0.)
 
             model_fluxes.append(model_flux)
 
+        if full_output:
+            return (model_fluxes, model_continua)
         return model_fluxes
 

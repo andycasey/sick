@@ -25,6 +25,9 @@ import pyfits
 import matplotlib as mpl
 mpl.use("Agg")
 
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+
 import sick
 
 # Initialise logging
@@ -51,12 +54,7 @@ def solve(args):
         raise ValueError("plotting format '{0}' not available. Options: {1}".format(
             args.plot_format.lower(), ", ".join(available)))
 
-    all_spectra = [sick.Spectrum.load(filename) for filename in args.spectra]
-
-    if args.plotting:
-        # Import plotting dependencies 
-        import matplotlib.pyplot as plt
-        from matplotlib.ticker import MaxNLocator
+    all_spectra = [sick.specutils.Spectrum.load(filename) for filename in args.spectra]
 
     # Are there multiple spectra for each source?
     if args.multiple_channels:
@@ -84,7 +82,7 @@ def solve(args):
 
     # Serialise as YAML for readability
     for line in yaml.dump(model.configuration).split("\n"):
-        logger.info("  {}".format(line))
+        logger.info("  {0}".format(line))
 
     # Define headers that we want in the results filename 
     default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
@@ -171,9 +169,9 @@ def solve(args):
 
             # Set some filename variables
             chain_filename = output("chain.fits")
-            pp_observed_spectra_filenames = [output("pp-obs-{}.fits".format(channel)) \
+            pp_observed_spectra_filenames = [output("pp-obs-{0}.fits".format(channel)) \
                 for channel in model.channels]
-            pp_modelled_spectra_filenames = [output("pp-mod-{}.fits".format(channel)) \
+            pp_modelled_spectra_filenames = [output("pp-mod-{0}.fits".format(channel)) \
                 for channel in model.channels]
             
             # Save information related to the data
@@ -192,6 +190,9 @@ def solve(args):
                 "time_elapsed": t_elapsed,
                 "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
             })
+
+            # Save the model configuration to the analysis
+            metadata.update({"model_configuration": model.configuration})
             
             # Append an sample and step number
             walkers = model.configuration["solver"]["walkers"]
@@ -241,11 +242,11 @@ def solve(args):
             if args.plotting:
 
                 # Some filenames
-                chain_plot_filename = output("chain.{}".format(args.plot_format))
-                acceptance_plot_filename = output("acceptance.{}".format(args.plot_format))
-                corner_plot_filename = output("corner.{}".format(args.plot_format))
-                pp_spectra_plot_filename = output("ml-spectra.{}".format(args.plot_format))
-                pp_scaled_spectra_plot_filename = output("ml-scaled-spectra.{}".format(args.plot_format))
+                chain_plot_filename = output("chain.{0}".format(args.plot_format))
+                acceptance_plot_filename = output("acceptance.{0}".format(args.plot_format))
+                corner_plot_filename = output("corner.{0}".format(args.plot_format))
+                pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
+                pp_scaled_spectra_plot_filename = output("ml-scaled-spectra.{0}".format(args.plot_format))
 
                 # Plot the mean acceptance fractions
                 fig, ax = plt.subplots()
@@ -262,7 +263,7 @@ def solve(args):
 
                 # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions)))[:, indices],
+                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names),
                     quantiles=[.16, .50, .84], verbose=False)
                 fig.savefig(corner_plot_filename)
@@ -368,7 +369,8 @@ def aggregate(args):
     sorted_columns.extend(all_dimensional_columns)
 
     other_columns = sorted(set(columns).difference(sorted_columns))
-    sorted_columns.extend(list(other_columns))
+    ignore_columns = ("model_configuration", )
+    sorted_columns.extend(list(set(other_columns).difference(ignore_columns)))
 
     # Create data types
     formats = [("f8", "|S256")[isinstance(results[0][each], str)] for each in sorted_columns]

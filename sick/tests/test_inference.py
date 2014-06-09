@@ -73,7 +73,7 @@ class InferenceTest(unittest.TestCase):
 
             N = len(disp)
             flux_err = 0.1 + 0.5 * np.random.randn(N)
-            jitter_true = np.exp(truth["jitter.{}".format(channel)])
+            jitter_true = np.exp(truth["jitter.{0}".format(channel)])
 
             flux += np.abs(jitter_true*flux) * np.random.randn(N)
             flux += flux_err * np.random.randn(N)
