@@ -82,7 +82,7 @@ def solve(args):
 
     # Serialise as YAML for readability
     for line in yaml.dump(model.configuration).split("\n"):
-        logger.info("  {}".format(line))
+        logger.info("  {0}".format(line))
 
     # Define headers that we want in the results filename 
     default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
@@ -169,9 +169,9 @@ def solve(args):
 
             # Set some filename variables
             chain_filename = output("chain.fits")
-            pp_observed_spectra_filenames = [output("pp-obs-{}.fits".format(channel)) \
+            pp_observed_spectra_filenames = [output("pp-obs-{0}.fits".format(channel)) \
                 for channel in model.channels]
-            pp_modelled_spectra_filenames = [output("pp-mod-{}.fits".format(channel)) \
+            pp_modelled_spectra_filenames = [output("pp-mod-{0}.fits".format(channel)) \
                 for channel in model.channels]
             
             # Save information related to the data
@@ -242,11 +242,11 @@ def solve(args):
             if args.plotting:
 
                 # Some filenames
-                chain_plot_filename = output("chain.{}".format(args.plot_format))
-                acceptance_plot_filename = output("acceptance.{}".format(args.plot_format))
-                corner_plot_filename = output("corner.{}".format(args.plot_format))
-                pp_spectra_plot_filename = output("ml-spectra.{}".format(args.plot_format))
-                pp_scaled_spectra_plot_filename = output("ml-scaled-spectra.{}".format(args.plot_format))
+                chain_plot_filename = output("chain.{0}".format(args.plot_format))
+                acceptance_plot_filename = output("acceptance.{0}".format(args.plot_format))
+                corner_plot_filename = output("corner.{0}".format(args.plot_format))
+                pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
+                pp_scaled_spectra_plot_filename = output("ml-scaled-spectra.{0}".format(args.plot_format))
 
                 # Plot the mean acceptance fractions
                 fig, ax = plt.subplots()
@@ -369,7 +369,8 @@ def aggregate(args):
     sorted_columns.extend(all_dimensional_columns)
 
     other_columns = sorted(set(columns).difference(sorted_columns))
-    sorted_columns.extend(list(other_columns))
+    ignore_columns = ("model_configuration", )
+    sorted_columns.extend(list(set(other_columns).difference(ignore_columns)))
 
     # Create data types
     formats = [("f8", "|S256")[isinstance(results[0][each], str)] for each in sorted_columns]

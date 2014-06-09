@@ -130,7 +130,6 @@ class Model(object):
                 for i, channel in enumerate(self.channels):
                     if not "flux_filename" in self.configuration["channels"][channel]:
                         missing_flux_filenames.append(channel)
-                        #raise KeyError("no flux filename specified for {} channel".format(channel))
                         continue
 
                     fluxes.append(np.memmap(self.configuration["channels"][channel]["flux_filename"], 
@@ -1056,6 +1055,59 @@ class Model(object):
 
                     index_start, index_end = np.searchsorted(model_dispersion, region)
                     model_flux[index_start:index_end] = np.nan
+
+            # Any FFT filtering to apply?
+            if self.configuration.get("fft_filter", False):
+
+                index = self.channels.index(channel)
+                obs = observations[index]
+
+                finite = np.isfinite(obs.flux)
+
+                obs_flux = np.interp(obs.disp, obs.disp[finite], obs.flux[finite])
+
+                bw = 10000.
+                sconst = 0.01
+
+                # Filter the obs
+                s = obs.disp.size
+                tmp = np.empty(s)
+                tmp[:s] = obs_flux.copy()
+                #tmp[s:2*s] = obs_flux.copy()
+                #tmp[2*s:] = obs_flux[::-1].copy()
+
+                edge_buffer = 0.1 * (obs.disp[-1] - obs.disp[0])
+                low_w_indices = np.nonzero(obs.disp < obs.disp[0] + edge_buffer)[0]
+                high_w_indices = np.nonzero(obs.disp > obs.disp[-1] - edge_buffer)[0]
+
+                apod_curve = np.ones(s, dtype='d')
+                apod_curve[low_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (obs.disp[low_w_indices] - obs.disp[0])/edge_buffer)))/2.
+                apod_curve[high_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (obs.disp[-1] - obs.disp[high_w_indices])/edge_buffer)))/2.
+
+
+                fft = np.fft.rfft(tmp * apod_curve)
+                x = np.arange(fft.size)*1.
+                obs_rfft = np.fft.irfft(fft*x/(bw + x))
+                obs_cont = ndimage.gaussian_filter(obs_flux - obs_rfft, sconst * s**0.5)
+
+                # Filter the syn
+                s = model_flux.size
+                assert model_flux.size == obs.disp.size
+                tmp = np.empty(s)
+                tmp[:s] = model_flux.copy()
+                #tmp[s:2*s] = model_flux.copy()
+                #tmp[2*s:] = model_flux[::-1].copy()
+                fft = np.fft.rfft(tmp * apod_curve)
+                x = np.arange(fft.size)*1.
+                model_rfft = np.fft.irfft(fft*x/(bw + x))
+                model_cont = ndimage.gaussian_filter(model_flux - model_rfft, sconst * s**0.5)
+               
+                cont_scale = obs_cont/model_cont
+
+
+                model_flux *= cont_scale
+                model_continua.append(cont_scale)
+
 
             # Normalise model fluxes to the data
             if "normalise" in self.configuration and self.configuration["normalise"].get(channel, False):
