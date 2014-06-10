@@ -153,6 +153,9 @@ def projection(sampler, model, data, n=100, extents=None, fig=None):
                 continue
             else:
                 sampled_fluxes.append(sampler_flux)
+    
+    if len(data) == 1:
+        axes = [axes]
 
     for k, (ax, max_lnprob_flux, observed_spectrum) in enumerate(zip(axes, max_lnprob_fluxes, data)):
 
