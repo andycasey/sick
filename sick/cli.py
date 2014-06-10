@@ -53,6 +53,8 @@ def resume(args):
             raise ValueError("plotting format '{0}' not available: Options are: {1}".format(
                 args.plot_format.lower(), ", ".join(available)))
 
+    all_spectra = [sick.specutils.Spectrum.load(filename) for filename in args.spectra]
+
     # Are there multiple spectra for each source?
     if args.multiple_channels:
         # If so, they should all have the same length (e.g. same number of objects)
@@ -135,8 +137,9 @@ def resume(args):
             
             # Update results with the posteriors
             logger.info("Posteriors:")
-            max_parameter_len = max(map(len, model.dimensions))
-            for dimension in model.dimensions:
+            max_parameter_len = max(map(len, posteriors.keys()))
+            sorted_dimensions = sick.utils.unique_preserved_list([] + model.dimensions + posteriors.keys())
+            for dimension in sorted_dimensions:
                 posterior_value, pos_uncertainty, neg_uncertainty = posteriors[dimension]
                 logger.info("    {0}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension.rjust(max_parameter_len),
                     posterior_value, pos_uncertainty, neg_uncertainty))
@@ -155,34 +158,49 @@ def resume(args):
             ))
 
             # Save information related to the analysis
+            chain_filename = output("chain.fits")
             metadata.update({
-                "warnflag": info["warnflag"],
+                "warnflag": info.get("warnflag", 0),
                 "maximum_log_likelihood": np.max(info["lnprobability"][np.isfinite(info["lnprobability"])]),
                 "chain_filename": chain_filename,
                 "time_elapsed": info["time_elapsed"],
                 "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
                 "model_configuration": model.configuration
             })
-            
-            # Append an sample and step number
-            chain_filename = output("chain.fits")
-            # TODO: Append the chain to the existing chain, if chain_filename already exists
+
+            # If the chain filename already exists, we will simply append to it
+            chain_length = info["chain"].shape[0] * info["chain"].shape[1]
+            if os.path.exists(chain_filename):
+                image = pyfits.open(chain_filename)
+                table_hdu = pyfits.new_table(image[1].data, nrows=len(image[1].data) + chain_length)
+                offset = len(image[1].data)
+
+            else:
+                offset = 0
 
             walkers = model.configuration["solver"]["walkers"]
-            chain_length = info["chain"].shape[0] * info["chain"].shape[1]
-            chain = np.core.records.fromarrays(
+            sampled_chain = np.core.records.fromarrays(
                 np.vstack([
-                    np.arange(1, 1 + chain_length),
-                    np.arange(1, 1 + chain_length) % walkers,
+                    np.arange(1 + offset, 1 + offset + chain_length),
+                    np.arange(1 + offset, 1 + offset + chain_length) % walkers,
                     info["chain"].reshape(-1, len(model.dimensions)).T,
                     info["lnprobability"].reshape(-1, 1).T
                 ]),
                 names=["Iteration", "Sample"] + model.dimensions + ["ln_likelihood"],
                 formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
 
+            if offset > 0:
+                table_hdu.data[-chain_length:] = sampled_chain
+                chain = np.vstack([table_hdu.data[dimension] for dimension in model.dimensions]).T.reshape((walkers, -1, len(model.dimensions)))
+                burn_offset = int(offset / walkers)
+
+            else:
+                chain = info["chain"]
+                table_hdu = pyfits.BinTableHDU(sampled_chain)
+                burn_ofset = 0
+            
             # Save the chain
             primary_hdu = pyfits.PrimaryHDU()
-            table_hdu = pyfits.BinTableHDU(chain)
             hdulist = pyfits.HDUList([primary_hdu, table_hdu])
             hdulist.writeto(chain_filename, clobber=True)
 
@@ -216,8 +234,8 @@ def resume(args):
                 fig.savefig(acceptance_plot_filename)
 
                 # Plot the chains
-                fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
-                    burn_in=model.configuration["solver"]["burn"])
+                fig = sick.plot.chains(chain, labels=sick.utils.latexify(model.dimensions),
+                    burn_in=model.configuration["solver"]["burn"] + burn_offset)
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
@@ -375,6 +393,7 @@ def solve(args):
             ))
 
             # Save information related to the analysis
+            chain_filename = output("chain.fits")
             metadata.update({
                 "warnflag": info["warnflag"],
                 "maximum_log_likelihood": np.max(info["lnprobability"][np.isfinite(info["lnprobability"])]),
@@ -383,8 +402,7 @@ def solve(args):
                 "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
                 "model_configuration": model.configuration
             })
-
-            chain_filename = output("chain.fits")
+            
             walkers = model.configuration["solver"]["walkers"]
             chain_length = info["chain"].shape[0] * info["chain"].shape[1]
             chain = np.core.records.fromarrays(
@@ -422,6 +440,7 @@ def solve(args):
                 chain_plot_filename = output("chain.{0}".format(args.plot_format))
                 acceptance_plot_filename = output("acceptance.{0}".format(args.plot_format))
                 corner_plot_filename = output("corner.{0}".format(args.plot_format))
+                pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
                 
                 # Plot the mean acceptance fractions
                 fig, ax = plt.subplots()
@@ -533,7 +552,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="sick, the spectroscopic inference crank",
         epilog="See 'sick COMMAND -h' for more information on a specific command. Documentation"
-        " and examples available online at http://astrowizici.st/sick")
+        " and examples available online at https://github.com/andycasey/sick/wiki")
     
     # Create subparsers
     subparsers = parser.add_subparsers(title="command", dest="command",
