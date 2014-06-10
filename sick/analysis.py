@@ -47,7 +47,7 @@ def initial_point(evaluated_priors, model, observations):
 
     # Set the default priors:
     # Default doppler shift priors
-    initial_distributions = model.priors.copy()
+    initial_distributions = {}
     initial_distributions.update(dict(
         [("z.{0}".format(c), "cross_correlate({0})".format(c)) for c in model.channels]
     ))
@@ -71,10 +71,12 @@ def initial_point(evaluated_priors, model, observations):
     # Environment variables for explicit priors
     # The channel names will be passed to contain all the information required
     # for cross-correlation
-
     env = { "locals": None, "globals": None, "__name__": None, "__file__": None,
         "__builtins__": None, "normal": random.normal, "uniform": random.uniform,
         "cross_correlate": specutils.__cross_correlate__, "abs": abs, }
+
+    # Overwrite initial_distributions with any explicit priors:
+    initial_distributions.update(model.priors.copy())
 
     current_point = []
     model_intensities = {}
@@ -626,6 +628,8 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
     Set up an EnsembleSampler and sample the parameters given the model and data.
     """
 
+    t_init = time()
+
     if not isinstance(model, models.Model):
         model = models.Model(model)
     model.map_channels(observed_spectra)
@@ -645,18 +649,23 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
         args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
     # Start sampling
-    for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, \
-        lnprob0=lnprob0, rstate0=rstate0, iterations=burn)):
-        
-        mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
-        
-        # Announce progress
-        logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log probability"\
-            " in last step was {2:.3e}".format(i + 1, mean_acceptance_fractions[i],
-                np.max(sampler.lnprobability[:, i])))
+    try:
+        for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, \
+            lnprob0=lnprob0, rstate0=rstate0, iterations=burn)):
+            
+            mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
+            
+            # Announce progress
+            logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log probability"\
+                " in last step was {2:.3e}".format(i + 1, mean_acceptance_fractions[i],
+                    np.max(sampler.lnprobability[:, i])))
 
-        if mean_acceptance_fractions[i] in (0, 1):
-            raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
+            if mean_acceptance_fractions[i] in (0, 1):
+                raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
+
+    except KeyboardInterrupt as e:
+        # Convergence achieved.
+        mean_acceptance_fractions = mean_acceptance_fractions[i + 1 + sample]
 
     # Save the chain and calculated log probabilities for later
     chain, lnprobability = sampler.chain, sampler.lnprobability
@@ -693,6 +702,7 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
         "chain": chain,
         "lnprobability": lnprobability,
         "mean_acceptance_fractions": mean_acceptance_fractions,
+        "time_elapsed": time() - t_init
     }
     return posteriors, sampler, additional_info
 

@@ -331,7 +331,6 @@ class Model(object):
                 logging.warn("Multiple model channels found for observed channel {0} ({1:.0f} to {2:.0f}). Using '{0}'"
                     " because it's closest by mean dispersion.".format(i, observed_wlmin, observed_wlmax, channels_found[0]))
 
-
             mapped_channels.append(channels_found[0])
 
         # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
@@ -569,17 +568,13 @@ class Model(object):
                         order = self.configuration[dimension][channel]["order"]
                         dimensions.extend(["normalise.{0}.c{1}".format(channel, i) \
                             for i in range(order + 1)])
-                        # Add FFT filter
-                        #if self.configuration[dimension][channel]["fft_filter"] and not self.configuration[dimension][channel]["fft_filter"]:
-                        #    continue
-                        #dimensions.extend([each.format(channel) for each in ("normalise.{0}.bandwidth", )])
-
+                        
                     elif method == "fft_filter":
                         #dimensions.append("normalise.{0}.bw".format(channel))
                         #dimensions.extend([each.format(channel) for each in ("normalise.{0}.s_scale", "normalise.{0}.bw")])
                         continue
 
-                    elif method == "spline": # Spline
+                    elif method == "spline":
                         knots = self.configuration[dimension][channel].get("knots", 0)
                         dimensions.extend(["normalise.{0}.k{1}".format(channel, i) \
                             for i in range(knots)])
@@ -1057,59 +1052,6 @@ class Model(object):
 
                     index_start, index_end = np.searchsorted(model_dispersion, region)
                     model_flux[index_start:index_end] = np.nan
-
-            # Any FFT filtering to apply?
-            if self.configuration.get("fft_filter", False):
-
-                index = self.channels.index(channel)
-                obs = observations[index]
-
-                finite = np.isfinite(obs.flux)
-
-                obs_flux = np.interp(obs.disp, obs.disp[finite], obs.flux[finite])
-
-                bw = 10000.
-                sconst = 0.01
-
-                # Filter the obs
-                s = obs.disp.size
-                tmp = np.empty(s)
-                tmp[:s] = obs_flux.copy()
-                #tmp[s:2*s] = obs_flux.copy()
-                #tmp[2*s:] = obs_flux[::-1].copy()
-
-                edge_buffer = 0.1 * (obs.disp[-1] - obs.disp[0])
-                low_w_indices = np.nonzero(obs.disp < obs.disp[0] + edge_buffer)[0]
-                high_w_indices = np.nonzero(obs.disp > obs.disp[-1] - edge_buffer)[0]
-
-                apod_curve = np.ones(s, dtype='d')
-                apod_curve[low_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (obs.disp[low_w_indices] - obs.disp[0])/edge_buffer)))/2.
-                apod_curve[high_w_indices] = (1.0 + np.cos(np.pi*(1.0 - (obs.disp[-1] - obs.disp[high_w_indices])/edge_buffer)))/2.
-
-
-                fft = np.fft.rfft(tmp * apod_curve)
-                x = np.arange(fft.size)*1.
-                obs_rfft = np.fft.irfft(fft*x/(bw + x))
-                obs_cont = ndimage.gaussian_filter(obs_flux - obs_rfft, sconst * s**0.5)
-
-                # Filter the syn
-                s = model_flux.size
-                assert model_flux.size == obs.disp.size
-                tmp = np.empty(s)
-                tmp[:s] = model_flux.copy()
-                #tmp[s:2*s] = model_flux.copy()
-                #tmp[2*s:] = model_flux[::-1].copy()
-                fft = np.fft.rfft(tmp * apod_curve)
-                x = np.arange(fft.size)*1.
-                model_rfft = np.fft.irfft(fft*x/(bw + x))
-                model_cont = ndimage.gaussian_filter(model_flux - model_rfft, sconst * s**0.5)
-               
-                cont_scale = obs_cont/model_cont
-
-
-                model_flux *= cont_scale
-                model_continua.append(cont_scale)
-
 
             # Normalise model fluxes to the data
             if "normalise" in self.configuration and self.configuration["normalise"].get(channel, False):
