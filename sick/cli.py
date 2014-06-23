@@ -153,7 +153,7 @@ def resume(args):
 
             # Save information related to the data
             metadata.update(dict(
-                [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
+                [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)]).tolist()) \
                     for k, spectrum in enumerate(spectra)]
             ))
 
@@ -387,10 +387,10 @@ def solve(args):
                 })
 
             # Save information related to the data
-            metadata.update(dict(
-                [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
-                    for k, spectrum in enumerate(spectra)]
-            ))
+            #metadata.update(dict(
+            #    [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
+            #        for k, spectrum in enumerate(spectra)]
+            #))
 
             # Save information related to the analysis
             chain_filename = output("chain.fits")
@@ -527,7 +527,7 @@ def aggregate(args):
     sorted_columns.extend(list(set(other_columns).difference(ignore_columns)))
 
     # Create data types
-    formats = [("f8", "|S256")[isinstance(results[0][each], str)] for each in sorted_columns]
+    formats = [("f8", "|S256")[isinstance(results[-1][each], (str, unicode))] for each in sorted_columns]
 
     # Create table
     results_table = np.core.records.fromrecords(
