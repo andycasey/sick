@@ -60,7 +60,7 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     lbdim = 0.5 * factor
     trdim = 0.2 * factor
     whspace = 0.10
-    width = 8.
+    width = 15.
     height = factor*K + factor * (K - 1.) * whspace
     dimy = lbdim + height + trdim
     dimx = lbdim + width + trdim
@@ -108,7 +108,7 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
 
 
 # Can do it from: data, model, sampler, n
-def projection(sampler, model, data, n=100, extents=None, fig=None):
+def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None):
 
     if not isinstance(data, (tuple, list)) or \
     any([not isinstance(each, specutils.Spectrum1D) for each in data]):
@@ -125,8 +125,10 @@ def projection(sampler, model, data, n=100, extents=None, fig=None):
     dimy = lbdim + height + trdim
     dimx = lbdim + width + trdim
 
+    if figsize is None:
+        figsize = (dimx, dimy)
     if fig is None:
-        fig, axes = plt.subplots(K, 1, figsize=(dimx, dimy))
+        fig, axes = plt.subplots(K, 1, figsize=figsize)
 
     else:
         try:
