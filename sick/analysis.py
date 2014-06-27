@@ -331,6 +331,8 @@ def log_likelihood(theta, model, observations):
         else:
             finite = np.isfinite(signal_likelihood)
             likelihood += np.sum(signal_likelihood[finite])
+    if likelihood == 0:
+        return -np.inf
 
     logger.debug("Returning log-likelihood of {0:.2e} for parameters: {1}".format(likelihood,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in theta_dict.iteritems()])))  
