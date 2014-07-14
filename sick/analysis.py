@@ -689,9 +689,9 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
 
     # AGAINST MY BETTER JUDGEMENT:
     # Calculate a reduced chi-sq value for the most likely theta.
-    ml_model_fluxes = model(observations=observations, **dict(zip(model.parameters, ml_values)))
+    ml_model_fluxes = model(observations=observed_spectra, **dict(zip(model.parameters, ml_values)))
     r_chi_sq, num_pixels = 0, 0
-    for observed_spectrum, model_flux in zip(observations, ml_model_fluxes):
+    for observed_spectrum, model_flux in zip(observed_spectra, ml_model_fluxes):
         chi_sq = (observed_spectrum.flux - model_flux)**2/observed_spectrum.variance
         r_chi_sq += np.nansum(chi_sq)
         num_pixels += np.sum(np.isfinite(chi_sq))
