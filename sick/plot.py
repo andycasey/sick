@@ -8,11 +8,10 @@ __author__ = ("Triangle.py (corner) was written by Dan Foreman-Mackey, and "
     "Andy Casey wrote the other plotting functions to match the (beautiful)"
     "look of triangle.py")
 
-__all__ = ["chains", "corner"]
+__all__ = ["chains", "corner", "projection"]
 
 import numpy as np
 import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 

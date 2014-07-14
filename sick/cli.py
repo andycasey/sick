@@ -141,7 +141,7 @@ def resume(args):
             sorted_dimensions = sick.utils.unique_preserved_list([] + model.dimensions + posteriors.keys())
             for dimension in sorted_dimensions:
                 posterior_value, pos_uncertainty, neg_uncertainty = posteriors[dimension]
-                logger.info("    {0}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension.rjust(max_parameter_len),
+                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(dimension.rjust(max_parameter_len),
                     posterior_value, pos_uncertainty, neg_uncertainty))
 
                 metadata.update({
@@ -236,14 +236,15 @@ def resume(args):
 
                 # Plot the chains
                 fig = sick.plot.chains(chain, labels=sick.utils.latexify(model.dimensions),
-                    burn_in=model.configuration["solver"]["burn"] + burn_offset)
+                    burn_in=model.configuration["solver"]["burn"] + burn_offset, truth_color='r',
+                    truths=[posteriors[model.dimensions.index(dimension)][0] for dimension in model.dimensions])
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posterior[index][0] for index in indices])
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[index][0] for index in indices])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
@@ -377,7 +378,7 @@ def solve(args):
             max_parameter_len = max(map(len, model.dimensions))
             for dimension in model.dimensions:
                 posterior_value, pos_uncertainty, neg_uncertainty = posteriors[dimension]
-                logger.info("    {0}: {1:.2f} (+{2:.2f}, -{3:.2f})".format(dimension.rjust(max_parameter_len),
+                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(dimension.rjust(max_parameter_len),
                     posterior_value, pos_uncertainty, neg_uncertainty))
 
                 metadata.update({
@@ -455,14 +456,14 @@ def solve(args):
                 # Plot the chains
                 fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
                     burn_in=model.configuration["solver"]["burn"], truth_color='r',
-                    truths=[posterior[model.dimensions.index(dimension)][0] for dimension in model.dimensions])
+                    truths=[posteriors[model.dimensions.index(dimension)][0] for dimension in model.dimensions])
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posterior[index][0] for index in indices])
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[index][0] for index in indices])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
