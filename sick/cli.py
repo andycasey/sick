@@ -160,6 +160,7 @@ def resume(args):
             # Save information related to the analysis
             chain_filename = output("chain.fits")
             metadata.update({
+                "reduced_chi_sq": info["reduced_chi_sq"],
                 "warnflag": info.get("warnflag", 0),
                 "maximum_log_likelihood": np.max(info["lnprobability"][np.isfinite(info["lnprobability"])]),
                 "chain_filename": chain_filename,
@@ -242,7 +243,7 @@ def resume(args):
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posterior[index][0] for index in indices],)
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posterior[index][0] for index in indices])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
@@ -453,19 +454,21 @@ def solve(args):
 
                 # Plot the chains
                 fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
-                    burn_in=model.configuration["solver"]["burn"])
+                    burn_in=model.configuration["solver"]["burn"], truth_color='r',
+                    truths=[posterior[model.dimensions.index(dimension)][0] for dimension in model.dimensions])
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
-                    labels=sick.utils.latexify(model.grid_points.dtype.names),
-                    quantiles=[.16, .50, .84], verbose=False)
+                    labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posterior[index][0] for index in indices])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
                 fig = sick.plot.projection(sampler, model, spectra)
                 fig.savefig(pp_spectra_plot_filename)
+                raise a
 
                 # Closing the figures isn't enough; matplotlib leaks memory
                 plt.close("all")
