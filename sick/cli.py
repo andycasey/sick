@@ -241,8 +241,8 @@ def resume(args):
                 # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
-                    labels=sick.utils.latexify(model.grid_points.dtype.names),
-                    quantiles=[.16, .50, .84], verbose=False)
+                    labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posterior[index][0] for index in indices],)
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra

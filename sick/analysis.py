@@ -597,7 +597,8 @@ def optimise(p0, observed_spectra, model, **kwargs):
 
     # Set some keyword defaults
     default_kwargs = {
-        "maxfun": 1000,
+        "maxfun": 10000,
+        "maxiter": 10000,
         "xtol": 100,
         "ftol": 0.1
     }
