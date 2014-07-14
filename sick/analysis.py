@@ -687,6 +687,16 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
     ml_index = np.argmax(lnprobability.reshape(-1))
     ml_values = chain.reshape(-1, len(model.dimensions))[ml_index]
 
+    # AGAINST MY BETTER JUDGEMENT:
+    # Calculate a reduced chi-sq value for the most likely theta.
+    ml_model_fluxes = model(observations=observations, **dict(zip(model.parameters, ml_values)))
+    r_chi_sq, num_pixels = 0, 0
+    for observed_spectrum, model_flux in zip(observations, ml_model_fluxes):
+        chi_sq = (observed_spectrum.flux - model_flux)**2/observed_spectrum.variance
+        r_chi_sq += np.nansum(chi_sq)
+        num_pixels += np.sum(np.isfinite(chi_sq))
+    r_chi_sq /= (num_pixels - len(model.parameters) - 1)
+
     # Get the quantiles
     posteriors = {}
     for parameter_name, ml_value, (quantile_16, quantile_84) in zip(model.dimensions, ml_values, 
@@ -704,7 +714,8 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
         "chain": chain,
         "lnprobability": lnprobability,
         "mean_acceptance_fractions": mean_acceptance_fractions,
-        "time_elapsed": time() - t_init
+        "time_elapsed": time() - t_init,
+        "reduced_chi_sq": r_chi_sq
     }
     return posteriors, sampler, additional_info
 

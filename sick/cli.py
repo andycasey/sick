@@ -387,14 +387,15 @@ def solve(args):
                 })
 
             # Save information related to the data
-            #metadata.update(dict(
-            #    [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
-            #        for k, spectrum in enumerate(spectra)]
-            #))
+            metadata.update(dict(
+                [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
+                    for k, spectrum in enumerate(spectra)]
+            ))
 
             # Save information related to the analysis
             chain_filename = output("chain.fits")
             metadata.update({
+                "reduced_chi_sq": info["reduced_chi_sq"],
                 "warnflag": info["warnflag"],
                 "maximum_log_likelihood": np.max(info["lnprobability"][np.isfinite(info["lnprobability"])]),
                 "chain_filename": chain_filename,
