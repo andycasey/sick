@@ -39,8 +39,7 @@ def latexify(labels, default_latex_labels=None):
         "teff": "$T_{\\rm eff}$ [K]",
         "feh": "[Fe/H]",
         "logg": "$\log{g}$",
-        "alpha": "[$\\alpha$/Fe]",
-        "jitter": "$lnf$"
+        "alpha": "[$\\alpha$/Fe]"
     }
 
     if default_latex_labels is not None:
@@ -57,7 +56,7 @@ def latexify(labels, default_latex_labels=None):
         if label in common_labels.keys():
             latex_labels.append(common_labels[label])
         
-        elif label.startswith("jitter."):
+        elif label.startswith("f."):
             aperture = label.split(".")[1]
             latex_labels.append("$ln(f_{{{0}}})$".format(aperture))
 

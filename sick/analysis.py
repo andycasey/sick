@@ -292,7 +292,7 @@ def log_likelihood(theta, model, observations):
     for (channel, model_flux, model_continuum, observed_spectrum) in zip(model.channels, model_fluxes, model_continua, observations):
 
         signal_inverse_variance = 1.0/(observed_spectrum.variance \
-            + model_flux**2 * np.exp(2. * theta_dict["jitter.{0}".format(channel)]))
+            + model_flux**2 * np.exp(2. * theta_dict["f.{0}".format(channel)]))
 
         signal_likelihood = -0.5 * ((observed_spectrum.flux - model_flux)**2 * signal_inverse_variance \
             - np.log(signal_inverse_variance))
@@ -300,7 +300,7 @@ def log_likelihood(theta, model, observations):
         # Are we modelling the outliers as well?
         if "Pb" in theta_dict.keys():
             outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_spectrum.variance \
-                + model_flux**2 * np.exp(2. * theta_dict["jitter.{0}".format(channel)]))
+                + model_flux**2 * np.exp(2. * theta_dict["f.{0}".format(channel)]))
 
             #continuum = model._continuum(channel, observed_spectrum, model_flux, **theta_dict)
             outlier_likelihood = -0.5 * ((observed_spectrum.flux - model_continuum)**2 * outlier_inverse_variance \

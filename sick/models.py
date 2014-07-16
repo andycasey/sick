@@ -275,7 +275,7 @@ class Model(object):
 
             self._priors = {}
             self._priors.update(dict(zip(
-                ["jitter.{0}".format(channel) for channel in self.channels],
+                ["f.{0}".format(channel) for channel in self.channels],
                 ["uniform(-10, 1)"] * len(self.channels)
             )))
             self._priors.update(dict(zip(self.grid_points.dtype.names,
@@ -582,7 +582,7 @@ class Model(object):
                 parameters.extend(["Pb", "Vb"])
         
         # Append jitter
-        parameters.extend(["jitter.{0}".format(channel) for channel in self.channels])
+        parameters.extend(["f.{0}".format(channel) for channel in self.channels])
 
         # Cache for future
         setattr(self, "_parameters", parameters)
