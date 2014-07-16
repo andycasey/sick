@@ -112,11 +112,6 @@ def initial_point(evaluated_priors, model, observations):
             # Smooth the model intensities if required
             for channel in model_intensities.keys():
                 
-                if "normalise.{0}.bandwidth".format(channel) in model.parameters: 
-                    evaluated_priors["normalise.{0}.bandwidth".format(channel)] = np.random.normal(1000, 1000)
-                if "normalise.{0}.s_scale".format(channel) in model.parameters:
-                    evaluated_priors["normalise.{0}.s_scale".format(channel)] = np.random.normal(1, 0.1)
-
                 if "convolve.{0}".format(channel) in model.parameters:
 
                     # We have to evaluate this prior now
@@ -216,8 +211,6 @@ def initial_point(evaluated_priors, model, observations):
         # These are all implicit priors from here onwards.
         if parameter.startswith("normalise."):
 
-            if parameter.endswith(".bandwidth") or parameter.endswith(".s_scale"): continue
-
             # Get the coefficient
             channel = parameter.split(".")[1]
             coefficient_index = int(parameter.split(".")[2][1:])
@@ -272,13 +265,6 @@ def log_prior(theta, model):
         if parameter == "Pb" and not (1. > value > 0.) \
         or parameter == "Vb" and 0 > value:
             return -np.inf
-
-        # Check for fourier filter parameters
-        if parameter.startswith("normalise."):
-            if parameter.endswith(".bandwidth") and 0 >= value:
-                return -np.inf
-            if parameter.endswith(".s_scale") and 0 >= value:
-                return -np.inf
 
     logging.debug("Returning log-prior of {0:.2e} for parameters: {1}".format(log_prior,
         ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in zip(model.parameters, theta)])))
@@ -378,13 +364,6 @@ def sample_ball(point, observed_spectra, model):
             parameteral_std.append(0.1 * point.get(parameter))
 
         elif parameter.startswith("normalise."):
-
-            if parameter.endswith(".bandwidth"):
-                parameteral_std.append(1000.)
-                continue
-            elif parameter.endswith(".s_scale"):
-                parameteral_std.append(0.1)
-                continue
 
             channel = parameter.split(".")[1]
 
