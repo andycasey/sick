@@ -89,11 +89,11 @@ def initial_point(evaluated_priors, model, observations):
 
     scaled_observations = {}
     
-    for i, dimension in enumerate(model.dimensions):
+    for i, parameter in enumerate(model.parameters):
 
-        # Have we already evaluated this dimension?
-        if dimension in evaluated_priors.keys():
-            current_point.append(evaluated_priors[dimension])
+        # Have we already evaluated this parameter?
+        if parameter in evaluated_priors.keys():
+            current_point.append(evaluated_priors[parameter])
             continue
 
         # Have we got priors for all grid points?
@@ -112,12 +112,12 @@ def initial_point(evaluated_priors, model, observations):
             # Smooth the model intensities if required
             for channel in model_intensities.keys():
                 
-                if "normalise.{0}.bandwidth".format(channel) in model.dimensions: 
+                if "normalise.{0}.bandwidth".format(channel) in model.parameters: 
                     evaluated_priors["normalise.{0}.bandwidth".format(channel)] = np.random.normal(1000, 1000)
-                if "normalise.{0}.s_scale".format(channel) in model.dimensions:
+                if "normalise.{0}.s_scale".format(channel) in model.parameters:
                     evaluated_priors["normalise.{0}.s_scale".format(channel)] = np.random.normal(1, 0.1)
 
-                if "convolve.{0}".format(channel) in model.dimensions:
+                if "convolve.{0}".format(channel) in model.parameters:
 
                     # We have to evaluate this prior now
                     sigma = eval(initial_distributions["convolve.{0}".format(channel)], env)
@@ -210,21 +210,21 @@ def initial_point(evaluated_priors, model, observations):
                     env.update({channel:
                         (log_observed_dispersion[finite], interpolated_observed_intensities[finite], interpolated_model_intensities[finite])})
 
-        # Is there an explicitly specified distribution for this dimension?
-        specified_prior = initial_distributions.get(dimension, False)
+        # Is there an explicitly specified distribution for this parameter?
+        specified_prior = initial_distributions.get(parameter, False)
         if specified_prior:
             # Evaluate the prior given the environment information
             current_point.append(eval(specified_prior, env))
             continue
 
         # These are all implicit priors from here onwards.
-        if dimension.startswith("normalise."):
+        if parameter.startswith("normalise."):
 
-            if dimension.endswith(".bandwidth") or dimension.endswith(".s_scale"): continue
+            if parameter.endswith(".bandwidth") or parameter.endswith(".s_scale"): continue
 
             # Get the coefficient
-            channel = dimension.split(".")[1]
-            coefficient_index = int(dimension.split(".")[2][1:])
+            channel = parameter.split(".")[1]
+            coefficient_index = int(parameter.split(".")[2][1:])
             coefficient_value = continuum_parameters[channel][coefficient_index]
 
             # Polynomial coefficients will introduce their own scatter
@@ -239,14 +239,14 @@ def initial_point(evaluated_priors, model, observations):
                 current_point.append(random.normal(coefficient_value, knot_sigma))
 
         else:
-            raise KeyError("Cannot interpret initial scattering distribution for {0}".format(dimension))
+            raise KeyError("Cannot interpret initial scattering distribution for {0}".format(parameter))
 
     # Check that we have the full number of walker values
-    if len(current_point) == len(model.dimensions):
+    if len(current_point) == len(model.parameters):
         return current_point
 
     else:
-        return current_point + [0.] * (len(model.dimensions) - len(current_point))
+        return current_point + [0.] * (len(model.parameters) - len(current_point))
 
 
 def log_prior(theta, model):
@@ -254,7 +254,7 @@ def log_prior(theta, model):
     Return the prior for a set of theta given the model.
 
     Args:
-        theta (list): The theta parameters that correspond with model.dimensions
+        theta (list): The theta parameters that correspond with model.parameters
         model (sick.models.Model object): The model class.
     
     Returns:
@@ -262,30 +262,30 @@ def log_prior(theta, model):
     """
 
     log_prior = 0
-    for dimension, value in zip(model.dimensions, theta):
+    for parameter, value in zip(model.parameters, theta):
 
-        if dimension in model.priors:
-            f = eval(model.priors[dimension], _prior_eval_env_)
+        if parameter in model.priors:
+            f = eval(model.priors[parameter], _prior_eval_env_)
             log_prior += f(value)
 
         # Check smoothing values
-        if dimension.startswith("convolve.") and 0 > value:
+        if parameter.startswith("convolve.") and 0 > value:
             return -np.inf
 
         # Check for outlier parameters
-        if dimension == "Pb" and not (1. > value > 0.) \
-        or dimension == "Vb" and 0 > value:
+        if parameter == "Pb" and not (1. > value > 0.) \
+        or parameter == "Vb" and 0 > value:
             return -np.inf
 
         # Check for fourier filter parameters
-        if dimension.startswith("normalise."):
-            if dimension.endswith(".bandwidth") and 0 >= value:
+        if parameter.startswith("normalise."):
+            if parameter.endswith(".bandwidth") and 0 >= value:
                 return -np.inf
-            if dimension.endswith(".s_scale") and 0 >= value:
+            if parameter.endswith(".s_scale") and 0 >= value:
                 return -np.inf
 
     logging.debug("Returning log-prior of {0:.2e} for parameters: {1}".format(log_prior,
-        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in zip(model.dimensions, theta)])))
+        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in zip(model.parameters, theta)])))
     return log_prior
 
 
@@ -294,12 +294,12 @@ def log_likelihood(theta, model, observations):
     Return the logarithmic likelihood for a set of theta given the model.
 
     Args:
-        theta (list): The theta parameters that correspond with model.dimensions
+        theta (list): The theta parameters that correspond with model.parameters
         model (sick.models.Model object): The model class.
         observations (list of specutils.Spectrum1D objects): The data.
     """
 
-    theta_dict = dict(zip(model.dimensions, theta))
+    theta_dict = dict(zip(model.parameters, theta))
 
     try:
         model_fluxes, model_continua = model(observations=observations, full_output=True, **theta_dict)
@@ -344,7 +344,7 @@ def log_probability(theta, model, observations):
     Return the logarithmic probability (prior + likelihood) for theta given the data.
 
     Args:
-        theta (list): The theta parameters that correspond with model.dimensions
+        theta (list): The theta parameters that correspond with model.parameters
         model (sick.models.Model object): The model class.
         observations (list of specutils.Spectrum1D objects): The data.
     """
@@ -359,52 +359,52 @@ def log_probability(theta, model, observations):
 
 def sample_ball(point, observed_spectra, model):
     """
-    Return a multi-dimensional Gaussian around a ball point.
+    Return a multi-parameteral Gaussian around a ball point.
 
     """ 
     
     # Create a sample ball around the result point
-    ball_point = [point.get(dimension, 0) for dimension in model.dimensions]
+    ball_point = [point.get(parameter, 0) for parameter in model.parameters]
     
-    dimensional_std = []
+    parameteral_std = []
     jitter_indices = []
-    for di, dimension in enumerate(model.dimensions):
+    for di, parameter in enumerate(model.parameters):
 
-        if dimension in model.grid_points.dtype.names:
-            # Set sigma to be 30% of the dimension dynamic range
-            dimensional_std.append(0.05 * np.ptp(model.grid_boundaries[dimension]))
+        if parameter in model.grid_points.dtype.names:
+            # Set sigma to be 30% of the parameter dynamic range
+            parameteral_std.append(0.05 * np.ptp(model.grid_boundaries[parameter]))
            
-        elif dimension.startswith("z."):
+        elif parameter.startswith("z."):
             # Set the velocity sigma to be 1 km/s
-            dimensional_std.append(10./299792458e-3)
+            parameteral_std.append(10./299792458e-3)
             
-        elif dimension.startswith("convolve."): 
-            dimensional_std.append(0.1 * point.get(dimension))
+        elif parameter.startswith("convolve."): 
+            parameteral_std.append(0.1 * point.get(parameter))
 
-        elif dimension.startswith("normalise."):
+        elif parameter.startswith("normalise."):
 
-            if dimension.endswith(".bandwidth"):
-                dimensional_std.append(1000.)
+            if parameter.endswith(".bandwidth"):
+                parameteral_std.append(1000.)
                 continue
-            elif dimension.endswith(".s_scale"):
-                dimensional_std.append(0.1)
+            elif parameter.endswith(".s_scale"):
+                parameteral_std.append(0.1)
                 continue
 
-            channel = dimension.split(".")[1]
+            channel = parameter.split(".")[1]
 
             """
-            if dimension.endswith(".s"):
+            if parameter.endswith(".s"):
                 # Spline treatment of continuum
                 s = np.random.normal(ball_point[di], np.sqrt(2*ball_point[di]))
-                dimensional_std.append(np.max([s, 0]))
+                parameteral_std.append(np.max([s, 0]))
             """
-            coefficient = dimension.split(".")[2]
+            coefficient = parameter.split(".")[2]
 
             if coefficient.startswith("k"): # Spline knots
                 coefficient = int(coefficient[1:])
 
                 # There are better ways to do this
-                dimensional_std.append(1)
+                parameteral_std.append(1)
 
             else: 
                 # Polynomial treatment of continuum
@@ -432,15 +432,15 @@ def sample_ball(point, observed_spectra, model):
                 # And we arbitrarily specify <delta_y> to be ~3x the mean uncertainty in flux.
                 dispersion = observed_channel.disp.mean()
                 flux_scale = 3. * np.sqrt(observed_channel.variance[np.isfinite(observed_channel.variance)].mean())
-                dimensional_std.append(flux_scale/(dispersion**(order - coefficient)))
+                parameteral_std.append(flux_scale/(dispersion**(order - coefficient)))
 
         else:
             # Jitter
-            dimensional_std.append(0.1)
+            parameteral_std.append(0.1)
             jitter_indices.append(di)
             
     walkers = model.configuration["solver"]["walkers"]
-    p0 = emcee.utils.sample_ball(ball_point, dimensional_std, size=walkers)
+    p0 = emcee.utils.sample_ball(ball_point, parameteral_std, size=walkers)
 
     # Write over jitter priors
     for ji in jitter_indices:
@@ -449,18 +449,18 @@ def sample_ball(point, observed_spectra, model):
     # Write over Pb priors
     all_fluxes = np.array(list(chain(*[each.flux for each in observed_spectra])))
     all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
-    for i, dimension in enumerate(model.dimensions):
-        if dimension == "Pb":
+    for i, parameter in enumerate(model.parameters):
+        if parameter == "Pb":
             p0[:, i] = np.abs(np.random.normal(0, 0.3, size=walkers))
 
-        elif dimension == "Vb":
+        elif parameter == "Vb":
             p0[:, i] = np.random.normal(0, np.std(all_fluxes), size=walkers)**2
 
     # Write over normalisation priors if necessary
     for i, pi in enumerate(p0):
 
         # Model the flux, but don't normalise it.
-        pi_parameters = dict(zip(model.dimensions, pi))
+        pi_parameters = dict(zip(model.parameters, pi))
         for channel in model.channels:
             n = 0
             while "normalise.{channel}.c{n}".format(channel=channel, n=n) in pi_parameters.keys():
@@ -488,7 +488,7 @@ def sample_ball(point, observed_spectra, model):
                 
                 # Write over the prior values
                 for j, coefficient in enumerate(coefficients):
-                    index = model.dimensions.index("normalise.{channel}.c{n}".format(channel=channel, n=j))
+                    index = model.parameters.index("normalise.{channel}.c{n}".format(channel=channel, n=j))
                     p0[i, index] = coefficient
 
 
@@ -509,8 +509,8 @@ def eval_prior(model):
         "__builtins__": None, "normal": random.normal, "uniform": random.uniform,
         "abs": abs, }
 
-    dimensions = model.grid_points.dtype.names
-    return dict(zip(dimensions, [eval(model.priors[dimension], env) for dimension in dimensions]))
+    parameters = model.grid_points.dtype.names
+    return dict(zip(parameters, [eval(model.priors[parameter], env) for parameter in parameters]))
 
 
 def random_scattering(observed_spectra, model, initial_thetas=None):
@@ -588,8 +588,8 @@ def optimise(p0, observed_spectra, model, **kwargs):
     """
 
     logger.info("Optimising from point:")
-    for dimension, value in zip(model.dimensions, p0):
-        logger.info("  {0}: {1:.2e}".format(dimension, value))
+    for parameter, value in zip(model.parameters, p0):
+        logger.info("  {0}: {1:.2e}".format(parameter, value))
 
     ta = time()
 
@@ -645,10 +645,10 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
         sample = model.configuration["solver"]["sample"]
 
     mean_acceptance_fractions = np.zeros(burn + sample)
-    autocorrelation_time = np.zeros((burn, len(model.dimensions)))
+    autocorrelation_time = np.zeros((burn, len(model.parameters)))
 
     # Initialise the sampler
-    sampler = emcee.EnsembleSampler(walkers, len(model.dimensions), log_probability,
+    sampler = emcee.EnsembleSampler(walkers, len(model.parameters), log_probability,
         args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
 
     # Start sampling
@@ -686,23 +686,23 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
 
     # Get the maximum likelihood theta
     ml_index = np.argmax(lnprobability.reshape(-1))
-    ml_values = chain.reshape(-1, len(model.dimensions))[ml_index]
+    ml_values = chain.reshape(-1, len(model.parameters))[ml_index]
 
     # AGAINST MY BETTER JUDGEMENT:
     # Calculate a reduced chi-sq value for the most likely theta.
-    ml_model_fluxes = model(observations=observed_spectra, **dict(zip(model.dimensions, ml_values)))
+    ml_model_fluxes = model(observations=observed_spectra, **dict(zip(model.parameters, ml_values)))
     r_chi_sq, num_pixels = 0, 0
     for observed_spectrum, model_flux in zip(observed_spectra, ml_model_fluxes):
         chi_sq = (observed_spectrum.flux - model_flux)**2/observed_spectrum.variance
         r_chi_sq += np.nansum(chi_sq)
         num_pixels += np.sum(np.isfinite(chi_sq))
-    r_chi_sq /= (num_pixels - len(model.dimensions) - 1)
+    r_chi_sq /= (num_pixels - len(model.parameters) - 1)
 
     # Get the quantiles
     posteriors = {}
-    for parameter_name, ml_value, (quantile_16, quantile_84) in zip(model.dimensions, ml_values, 
+    for parameter_name, ml_value, (quantile_16, quantile_84) in zip(model.parameters, ml_values, 
         map(lambda v: (v[2]-v[1], v[1]-v[0]),
-            zip(*np.percentile(sampler.chain.reshape(-1, len(model.dimensions)), [16, 50, 84], axis=0)))):
+            zip(*np.percentile(sampler.chain.reshape(-1, len(model.parameters)), [16, 50, 84], axis=0)))):
         posteriors[parameter_name] = (ml_value, quantile_16, quantile_84)
 
         # Transform redshift posteriors to velocity posteriors
@@ -752,19 +752,19 @@ def solve(observed_spectra, model, initial_thetas=None, **kwargs):
             model, **kwargs_copy)
 
         # Sample around opt_theta using some sensible things
-        p0 = sample_ball(dict(zip(model.dimensions, opt_theta)), observed_spectra, model)
-        #p0 = np.array([opt_theta + 1e-4 * random.randn(len(model.dimensions)) for each in range(walkers)])
+        p0 = sample_ball(dict(zip(model.parameters, opt_theta)), observed_spectra, model)
+        #p0 = np.array([opt_theta + 1e-4 * random.randn(len(model.parameters)) for each in range(walkers)])
 
     else:
         warnflag, p0 = 0, priors.explicit(model, observed_spectra)
 
     logger.info("Starting point summary:")
-    for i, dimension in enumerate(model.dimensions):
+    for i, parameter in enumerate(model.parameters):
         if len(p0.shape) > 1 and p0.shape[1] > 1:
             logger.info("  Parameter {0} - mean: {1:.4e}, std: {2:.4e}, min: {3:.4e}, max: {4:.4e}".format(
-                dimension, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
+                parameter, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
         else:
-            logger.info(" Parameter {0} - initial point: {1:.2e}".format(dimension, p0[i]))
+            logger.info(" Parameter {0} - initial point: {1:.2e}".format(parameter, p0[i]))
 
     # Perform MCMC sampling
     posteriors, sampler, additional_info = sample(observed_spectra, model, p0)

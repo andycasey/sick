@@ -97,21 +97,21 @@ class InferenceTest(unittest.TestCase):
         posteriors, sampler, info = sick.solve(observations, model)
 
         # Plot the chains
-        fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
-            truths=[truth[dimension] for dimension in model.dimensions], burn_in=1000)
+        fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.parameters),
+            truths=[truth[parameter] for parameter in model.parameters], burn_in=1000)
         fig.savefig("chains.pdf")
 
         # Make a corner plot with just the parameters of interest
         psi_len = len(model.grid_points.dtype.names)
-        fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, :psi_len],
+        fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, :psi_len],
             labels=sick.utils.latexify(model.grid_points.dtype.names), quantiles=[.16, .50, .84], verbose=False,
-            truths=[truth[dimension] for dimension in model.dimensions[:psi_len]], extents=[0.95]*psi_len)
+            truths=[truth[parameter] for parameter in model.parameters[:psi_len]], extents=[0.95]*psi_len)
         fig.savefig("inference.pdf")
 
         # Make a corner plot with *all* of the model parameters
-        fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions)),
-            labels=sick.utils.latexify(model.dimensions), quantiles=[.16, .50, .84], verbose=False,
-            truths=[truth[dimension] for dimension in model.dimensions])
+        fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters)),
+            labels=sick.utils.latexify(model.parameters), quantiles=[.16, .50, .84], verbose=False,
+            truths=[truth[parameter] for parameter in model.parameters])
         fig.savefig("inference-all.pdf")
 
         # Make a projection plot
@@ -120,10 +120,10 @@ class InferenceTest(unittest.TestCase):
 
         # Assert that we have at least some solution
         if acceptable_ci_multiple is not None:
-            for dimension in model.dimensions:
-                peak_posterior, pos_ci, neg_ci = posteriors[dimension]
-                assert (peak_posterior + acceptable_ci_multiple * pos_ci >= truth[dimension] >= peak_posterior - acceptable_ci_multiple * neg_ci), (
-                    "Inferences on the test case were not within {0}-sigma of the {1} truth values".format(acceptable_ci_multiple, dimension))
+            for parameter in model.parameters:
+                peak_posterior, pos_ci, neg_ci = posteriors[parameter]
+                assert (peak_posterior + acceptable_ci_multiple * pos_ci >= truth[parameter] >= peak_posterior - acceptable_ci_multiple * neg_ci), (
+                    "Inferences on the test case were not within {0}-sigma of the {1} truth values".format(acceptable_ci_multiple, parameter))
         
 
     def tearDown(self):

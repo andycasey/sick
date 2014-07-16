@@ -24,13 +24,13 @@ import specutils
 def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     alpha=0.5, fig=None):
     """
-    Create a plot showing the walker values for each dimension at every step.
+    Create a plot showing the walker values for each parameter at every step.
 
     Args:
         xs (array_like) : The samples. This should be a 3D array of size 
-            (n_walkers, n_steps, n_dimensions)
+            (n_walkers, n_steps, n_parameters)
 
-        labels (iterable, optional) : A list of names for the dimensions.
+        labels (iterable, optional) : A list of names for the parameters.
 
         truths (iterable, optional) : A list of reference values to indicate on
             the plots.
@@ -74,7 +74,7 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
             axes = np.array(fig.axes).reshape((1, K))
         except:
             raise ValueError("Provided figure has {0} axes, but data has "
-                "dimensions K={1}".format(len(fig.axes), K))
+                "parameters K={1}".format(len(fig.axes), K))
 
     lm = lbdim / dimx
     bm = lbdim / dimy
@@ -156,12 +156,12 @@ def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None
             axes = np.array(fig.axes).reshape((1, K))
         except:
             raise ValueError("Provided figure has {0} axes, but data has "
-                "dimensions K={1}".format(len(fig.axes), K))
+                "parameters K={1}".format(len(fig.axes), K))
 
     # Find the most probable sampled theta and compute spectra for it
     max_lnprob_index = np.argmax(sampler.lnprobability.flatten())
     max_lnprob_theta = sampler.flatchain[max_lnprob_index]
-    max_lnprob_fluxes = model(observations=data, **dict(zip(model.dimensions, max_lnprob_theta)))
+    max_lnprob_fluxes = model(observations=data, **dict(zip(model.parameters, max_lnprob_theta)))
 
     if n > 0:
         # Draw samples from sampler.chain and compute spectra for them
@@ -169,7 +169,7 @@ def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None
         n_samples = len(sampler.flatchain)
 
         for i in range(n):
-            sampled_theta = dict(zip(model.dimensions, sampler.flatchain[np.random.randint(0, n_samples)]))
+            sampled_theta = dict(zip(model.parameters, sampler.flatchain[np.random.randint(0, n_samples)]))
             try:
                 sampler_flux = model(observations=data, **sampled_theta)
             except:

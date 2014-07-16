@@ -29,7 +29,7 @@ from utils import human_readable_digit
 from specutils import Spectrum1D
 
 logger = logging.getLogger(__name__.split(".")[0])
-_scope_interpolator_ = None
+_sick_interpolator = None
 
 def load_model_data(filename, **kwargs):
     """
@@ -93,21 +93,18 @@ class Model(object):
         if validate:
             self.validate()
 
-        # For legacy purposes, we need to explicitly get a data type
-        dtype = np.double if self.configuration["solver"].get("use_double", False) else np.float32
-
         # Regardless of whether the model is cached or not, the dispersion is specified in
         # the same way: channels -> <channel_name> -> dispersion_filename
 
         # Load the dispersions
         self.dispersion = dict(zip(self.channels, \
-            [load_model_data(self.configuration["channels"][channel]["dispersion_filename"], dtype=dtype) \
+            [load_model_data(self.configuration["channels"][channel]["dispersion_filename"], dtype=np.double) \
             for channel in self.channels]))
 
         # Is this a cached model?
         if "points_filename" in self.configuration["channels"]:
 
-            # Grid points must be pickled data so that the dimension names are known
+            # Grid points must be pickled data so that the parameter names are known
             with open(self.configuration["channels"]["points_filename"], "rb") as fp:
                 self.grid_points = pickle.load(fp)
                 num_points = len(self.grid_points)
@@ -115,14 +112,14 @@ class Model(object):
             if len(self.grid_points.dtype.names) == 0:
                 raise TypeError("cached grid points filename has no column names")
 
-            global _scope_interpolator_
+            global _sick_interpolator
 
             # Do we have a single filename for all fluxes?
             missing_flux_filenames = []
             if "flux_filename" in self.configuration["channels"]:
                 
                 fluxes = np.memmap(self.configuration["channels"]["flux_filename"], 
-                    mode="r+", dtype=dtype).reshape((num_points, -1))
+                    mode="r+", dtype=np.double).reshape((num_points, -1))
 
             else:
                 # We are expecting flux filenames in each channel (this is less efficient)
@@ -133,7 +130,7 @@ class Model(object):
                         continue
 
                     fluxes.append(np.memmap(self.configuration["channels"][channel]["flux_filename"], 
-                        mode="r+", dtype=dtype).reshape((num_points, -1)))
+                        mode="r+", dtype=np.double).reshape((num_points, -1)))
 
                 fluxes = fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes)
 
@@ -160,7 +157,7 @@ class Model(object):
                 #points = np.ascontiguousarray(points, dtype=points.dtype)
             
 
-            _scope_interpolator_ = interpolate.LinearNDInterpolator(points, fluxes)
+            _sick_interpolator = interpolate.LinearNDInterpolator(points, fluxes)
             del fluxes
 
         else:
@@ -173,7 +170,7 @@ class Model(object):
             self.grid_points = None
             self.flux_filenames = {}
 
-            dimensions = []
+            parameters = []
             for i, channel in enumerate(self.channels):
 
                 # We will store the filenames and we will load and interpolate on the fly
@@ -188,8 +185,8 @@ class Model(object):
                     match = re.match(re_match, os.path.basename(filename))
 
                     if match is not None:
-                        if len(dimensions) == 0:
-                            dimensions = sorted(match.groupdict().keys(), key=re_match.index)
+                        if len(parameters) == 0:
+                            parameters = sorted(match.groupdict().keys(), key=re_match.index)
            
                         points.append(map(float, match.groups()))
                         matched_filenames.append(filename)
@@ -208,8 +205,8 @@ class Model(object):
 
                 if i == 0:
                     # Save the grid points as a record array
-                    self.grid_points = np.core.records.fromrecords(points, names=dimensions,
-                        formats=["f8"]*len(dimensions))
+                    self.grid_points = np.core.records.fromrecords(points, names=parameters,
+                        formats=["f8"]*len(parameters))
                     self.flux_filenames[channel] = matched_filenames
 
                 else:
@@ -220,8 +217,8 @@ class Model(object):
         self.grid_boundaries = dict(zip(self.grid_points.dtype.names, [(np.min(self.grid_points[_]), np.max(self.grid_points[_])) \
             for _ in self.grid_points.dtype.names]))
 
-        # Initialise the dimensions property to avoid nasty fringe cases
-        _ = self.dimensions
+        # Initialise the parameters property to avoid nasty fringe cases
+        _ = self.parameters
 
         return None
 
@@ -238,8 +235,8 @@ class Model(object):
         return u"{module}.Model({num_models} models; {num_total_parameters} parameters: {num_nuisance_parameters} additional parameters,"\
             " {num_grid_parameters} grid parameters: {parameters}; {num_channels} channels: {channels}; ~{num_pixels} pixels)".format(
             module=self.__module__, num_models=num_models, num_channels=num_channels, channels=', '.join(self.channels),
-            num_pixels=human_readable_digit(num_pixels), num_total_parameters=len(self.dimensions),
-            num_nuisance_parameters=len(self.dimensions) - len(self.grid_points.dtype.names), 
+            num_pixels=human_readable_digit(num_pixels), num_total_parameters=len(self.parameters),
+            num_nuisance_parameters=len(self.parameters) - len(self.grid_points.dtype.names), 
             num_grid_parameters=len(self.grid_points.dtype.names), parameters=', '.join(self.grid_points.dtype.names))
 
 
@@ -282,7 +279,7 @@ class Model(object):
                 ["uniform(-10, 1)"] * len(self.channels)
             )))
             self._priors.update(dict(zip(self.grid_points.dtype.names,
-                ["uniform({0}, {1})".format(*self.grid_boundaries[dimension]) for dimension in self.grid_points.dtype.names]
+                ["uniform({0}, {1})".format(*self.grid_boundaries[parameter]) for parameter in self.grid_points.dtype.names]
             )))
 
             self._priors.update(self.configuration.get("priors", {}))
@@ -545,61 +542,61 @@ class Model(object):
 
 
     @property
-    def dimensions(self):
+    def parameters(self):
         """
-        Return the dimensions for the model.
+        Return the parameters for the model.
         """
 
-        if hasattr(self, "_dimensions"):
-            return self._dimensions
+        if hasattr(self, "_parameters"):
+            return self._parameters
 
-        dimensions = [] + list(self.grid_points.dtype.names)
-        for dimension in self.configuration.keys():
+        parameters = [] + list(self.grid_points.dtype.names)
+        for parameter in self.configuration.keys():
         
-            if dimension == "normalise":
-                # Append normalisation dimensions for each channel
+            if parameter == "normalise":
+                # Append normalisation parameters for each channel
                 for channel in self.channels:
-                    if not self.configuration[dimension].get(channel, False): continue
+                    if not self.configuration[parameter].get(channel, False): continue
 
-                    method = self.configuration[dimension][channel]["method"]
+                    method = self.configuration[parameter][channel]["method"]
                     assert method in ("polynomial", "fft_filter", "spline")
 
                     if method == "polynomial":
-                        order = self.configuration[dimension][channel]["order"]
-                        dimensions.extend(["normalise.{0}.c{1}".format(channel, i) \
+                        order = self.configuration[parameter][channel]["order"]
+                        parameters.extend(["normalise.{0}.c{1}".format(channel, i) \
                             for i in range(order + 1)])
                         
                     elif method == "fft_filter":
-                        #dimensions.append("normalise.{0}.bw".format(channel))
-                        #dimensions.extend([each.format(channel) for each in ("normalise.{0}.s_scale", "normalise.{0}.bw")])
+                        #parameters.append("normalise.{0}.bw".format(channel))
+                        #parameters.extend([each.format(channel) for each in ("normalise.{0}.s_scale", "normalise.{0}.bw")])
                         continue
 
                     elif method == "spline":
-                        knots = self.configuration[dimension][channel].get("knots", 0)
-                        dimensions.extend(["normalise.{0}.k{1}".format(channel, i) \
+                        knots = self.configuration[parameter][channel].get("knots", 0)
+                        parameters.extend(["normalise.{0}.k{1}".format(channel, i) \
                             for i in range(knots)])
 
-            elif dimension == "doppler_shift":
+            elif parameter == "doppler_shift":
                 # Check which channels have doppler shifts allowed and add them
-                dimensions.extend(["z.{0}".format(each) \
-                    for each in self.channels if self.configuration[dimension].get(each, False)])
+                parameters.extend(["z.{0}".format(each) \
+                    for each in self.channels if self.configuration[parameter].get(each, False)])
 
-            elif dimension == "convolve":
+            elif parameter == "convolve":
                 # Check which channels have smoothing allowed and add them
-                dimensions.extend(["convolve.{0}".format(each) \
-                    for each in self.channels if self.configuration[dimension].get(each, False)])  
+                parameters.extend(["convolve.{0}".format(each) \
+                    for each in self.channels if self.configuration[parameter].get(each, False)])  
 
-            elif dimension == "outliers" and self.configuration["outliers"]:
-                # Append outlier dimensions
-                dimensions.extend(["Pb", "Vb"])
+            elif parameter == "outliers" and self.configuration["outliers"]:
+                # Append outlier parameters
+                parameters.extend(["Pb", "Vb"])
         
         # Append jitter
-        dimensions.extend(["jitter.{0}".format(channel) for channel in self.channels])
+        parameters.extend(["jitter.{0}".format(channel) for channel in self.channels])
 
         # Cache for future
-        setattr(self, "_dimensions", dimensions)
+        setattr(self, "_parameters", parameters)
         
-        return dimensions
+        return parameters
 
 
     def cache(self, grid_points_filename, dispersion_filenames, flux_filename,
@@ -686,8 +683,7 @@ class Model(object):
             pickle.dump(self.grid_points, fp)
 
         # Create empty memmap
-        dtype = np.double if self.configuration["solver"].get("use_double", False) else np.float32
-        flux = np.memmap(flux_filename, dtype=dtype, mode="w+", shape=(n_points, np.sum(n_pixels)))
+        flux = np.memmap(flux_filename, dtype=np.double, mode="w+", shape=(n_points, np.sum(n_pixels)))
         for i in xrange(n_points):
 
             logger.info("Caching point {0} of {1} ({2:.1f}%)".format(i+1, n_points, 100*(i+1.)/n_points))
@@ -711,14 +707,14 @@ class Model(object):
         for channel, dispersion_filename in dispersion_filenames.iteritems():
             si, ei = wavelength_indices[channel]
 
-            disp = np.memmap(dispersion_filename, dtype=dtype, mode="w+",
+            disp = np.memmap(dispersion_filename, dtype=np.double, mode="w+",
                 shape=self.dispersion[channel][si:ei:sampling_rate[channel]].shape)
             disp[:] = np.ascontiguousarray(self.dispersion[channel][si:ei:sampling_rate[channel]],
-                dtype=dtype)
+                dtype=np.double)
             del disp
 
         # Arrays must be contiguous
-        flux[:] = np.ascontiguousarray(flux, dtype=dtype)
+        flux[:] = np.ascontiguousarray(flux, dtype=np.double)
 
         # Now we need to save the flux to disk
         del flux
@@ -740,7 +736,7 @@ class Model(object):
 
         Args:
             point (list): The point to find neighbours around.
-            n (int): The number of neighbours to find on each side, in each dimension.
+            n (int): The number of neighbours to find on each side, in each parameter.
         Returns:
             indices (np.array): The indices of the nearest neighbours.
         Raises:
@@ -778,8 +774,8 @@ class Model(object):
             index (int): The index of the point in the model grid, if it exists. Otherwise False.
         """
 
-        num_dimensions = len(self.grid_points.dtype.names)
-        index = np.all(self.grid_points.view(np.float).reshape((-1, num_dimensions)) == np.array([point]).view(np.float),
+        num_parameters = len(self.grid_points.dtype.names)
+        index = np.all(self.grid_points.view(np.float).reshape((-1, num_parameters)) == np.array([point]).view(np.float),
             axis=-1)
         return False if not any(index) else np.where(index)[0][0]
 
@@ -796,8 +792,8 @@ class Model(object):
             ValueError: when a flux point could not be interpolated (e.g., outside grid boundaries)
         """
 
-        global _scope_interpolator_
-        if _scope_interpolator_ is not None:
+        global _sick_interpolator
+        if _sick_interpolator is not None:
        
             transformed_point = np.array(point).copy() 
             # Is there any logarithmic parameter rescaling that we should be doing?
@@ -834,7 +830,7 @@ class Model(object):
             else:
                 transformed_point = point
 
-            interpolated_flux = _scope_interpolator_(*transformed_point)
+            interpolated_flux = _sick_interpolator(*transformed_point)
             
             if np.all(~np.isfinite(interpolated_flux)):
                 raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")    

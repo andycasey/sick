@@ -37,8 +37,9 @@ class Spectrum(object):
 
             else:
                 if isinstance(spectra, Spectrum1D) and spectra.variance is None:
-                    # Assume some S/N of ~250
+                    # Assume some S/N of ~50
                     assumed_snr = 50
+                    logging.warn("Assuming S/N ratio of {0}".format(assumed_snr))
                     spectra.variance = (stats.poisson.rvs([assumed_snr**2], size=len(spectra.disp))/float(assumed_snr**2) - 1.)**2
 
                 return spectra

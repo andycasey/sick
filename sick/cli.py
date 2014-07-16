@@ -138,17 +138,17 @@ def resume(args):
             # Update results with the posteriors
             logger.info("Posteriors:")
             max_parameter_len = max(map(len, posteriors.keys()))
-            sorted_dimensions = sick.utils.unique_preserved_list([] + model.dimensions + posteriors.keys())
-            for dimension in sorted_dimensions:
-                posterior_value, pos_uncertainty, neg_uncertainty = posteriors[dimension]
-                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(dimension.rjust(max_parameter_len),
+            sorted_parameters = sick.utils.unique_preserved_list([] + model.parameters + posteriors.keys())
+            for parameter in sorted_parameters:
+                posterior_value, pos_uncertainty, neg_uncertainty = posteriors[parameter]
+                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(parameter.rjust(max_parameter_len),
                     posterior_value, pos_uncertainty, neg_uncertainty))
 
                 metadata.update({
-                    dimension: posterior_value,
-                    "u_maxabs_{0}".format(dimension): np.abs([neg_uncertainty, pos_uncertainty]).max(),
-                    "u_pos_{0}".format(dimension): pos_uncertainty,
-                    "u_neg_{0}".format(dimension): neg_uncertainty,
+                    parameter: posterior_value,
+                    "u_maxabs_{0}".format(parameter): np.abs([neg_uncertainty, pos_uncertainty]).max(),
+                    "u_pos_{0}".format(parameter): pos_uncertainty,
+                    "u_neg_{0}".format(parameter): neg_uncertainty,
                 })
 
             # Save information related to the data
@@ -184,15 +184,15 @@ def resume(args):
                 np.vstack([
                     np.arange(1 + offset, 1 + offset + chain_length),
                     np.arange(1 + offset, 1 + offset + chain_length) % walkers,
-                    info["chain"].reshape(-1, len(model.dimensions)).T,
+                    info["chain"].reshape(-1, len(model.parameters)).T,
                     info["lnprobability"].reshape(-1, 1).T
                 ]),
-                names=["Iteration", "Sample"] + model.dimensions + ["ln_likelihood"],
-                formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
+                names=["Iteration", "Sample"] + model.parameters + ["ln_likelihood"],
+                formats=["i4", "i4"] + ["f8"] * (1 + len(model.parameters)))
 
             if offset > 0:
                 table_hdu.data[-chain_length:] = sampled_chain
-                chain = np.vstack([table_hdu.data[dimension] for dimension in model.dimensions]).T.reshape((walkers, -1, len(model.dimensions)))
+                chain = np.vstack([table_hdu.data[parameter] for parameter in model.parameters]).T.reshape((walkers, -1, len(model.parameters)))
                 burn_offset = int(offset / walkers)
 
             else:
@@ -235,16 +235,16 @@ def resume(args):
                 fig.savefig(acceptance_plot_filename)
 
                 # Plot the chains
-                fig = sick.plot.chains(chain, labels=sick.utils.latexify(model.dimensions),
+                fig = sick.plot.chains(chain, labels=sick.utils.latexify(model.parameters),
                     burn_in=model.configuration["solver"]["burn"] + burn_offset, truth_color='r',
-                    truths=[posteriors[dimension][0] for dimension in model.dimensions])
+                    truths=[posteriors[parameter][0] for parameter in model.parameters])
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
-                indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
+                indices = np.array([model.parameters.index(parameter) for parameter in model.grid_points.dtype.names])
+                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[dimension][0] for dimension in model.grid_points.dtype.names])
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[parameter][0] for parameter in model.grid_points.dtype.names])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
@@ -375,17 +375,17 @@ def solve(args):
             
             # Update results with the posteriors
             logger.info("Posteriors:")
-            max_parameter_len = max(map(len, model.dimensions))
-            for dimension in model.dimensions:
-                posterior_value, pos_uncertainty, neg_uncertainty = posteriors[dimension]
-                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(dimension.rjust(max_parameter_len),
+            max_parameter_len = max(map(len, model.parameters))
+            for parameter in model.parameters:
+                posterior_value, pos_uncertainty, neg_uncertainty = posteriors[parameter]
+                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(parameter.rjust(max_parameter_len),
                     posterior_value, pos_uncertainty, neg_uncertainty))
 
                 metadata.update({
-                    dimension: posterior_value,
-                    "u_maxabs_{0}".format(dimension): np.abs([neg_uncertainty, pos_uncertainty]).max(),
-                    "u_pos_{0}".format(dimension): pos_uncertainty,
-                    "u_neg_{0}".format(dimension): neg_uncertainty,
+                    parameter: posterior_value,
+                    "u_maxabs_{0}".format(parameter): np.abs([neg_uncertainty, pos_uncertainty]).max(),
+                    "u_pos_{0}".format(parameter): pos_uncertainty,
+                    "u_neg_{0}".format(parameter): neg_uncertainty,
                 })
 
             # Save information related to the data
@@ -412,11 +412,11 @@ def solve(args):
                 np.vstack([
                     np.arange(1, 1 + chain_length),
                     np.arange(1, 1 + chain_length) % walkers,
-                    info["chain"].reshape(-1, len(model.dimensions)).T,
+                    info["chain"].reshape(-1, len(model.parameters)).T,
                     info["lnprobability"].reshape(-1, 1).T
                 ]),
-                names=["Iteration", "Sample"] + model.dimensions + ["ln_likelihood"],
-                formats=["i4", "i4"] + ["f8"] * (1 + len(model.dimensions)))
+                names=["Iteration", "Sample"] + model.parameters + ["ln_likelihood"],
+                formats=["i4", "i4"] + ["f8"] * (1 + len(model.parameters)))
 
             # Save the chain
             primary_hdu = pyfits.PrimaryHDU()
@@ -454,16 +454,16 @@ def solve(args):
                 fig.savefig(acceptance_plot_filename)
 
                 # Plot the chains
-                fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
+                fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.parameters),
                     burn_in=model.configuration["solver"]["burn"], truth_color='r',
-                    truths=[posteriors[dimension][0] for dimension in model.dimensions])
+                    truths=[posteriors[parameter][0] for parameter in model.parameters])
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
-                indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
-                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
+                indices = np.array([model.parameters.index(parameter) for parameter in model.grid_points.dtype.names])
+                fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[dimension][0] for dimension in model.grid_points.dtype.names])
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[parameter][0] for parameter in model.grid_points.dtype.names])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
@@ -512,19 +512,19 @@ def aggregate(args):
         sorted_columns.append("DEC")
 
     uppercase_columns = []
-    dimensional_columns = []
+    parameteral_columns = []
     for column in columns:
         if column.isupper() and column not in sorted_columns: uppercase_columns.append(column)
-        elif "u_pos_{0}".format(column) in columns: dimensional_columns.append(column)
+        elif "u_pos_{0}".format(column) in columns: parameteral_columns.append(column)
     
-    uppercase_columns, dimensional_columns = map(sorted, [uppercase_columns, dimensional_columns])
-    all_dimensional_columns = []
+    uppercase_columns, parameteral_columns = map(sorted, [uppercase_columns, parameteral_columns])
+    all_parameteral_columns = []
     variants = ("{0}", "u_pos_{0}", "u_neg_{0}", "u_maxabs_{0}")
-    for column in dimensional_columns:
-        all_dimensional_columns.extend([variant.format(column) for variant in variants])
+    for column in parameteral_columns:
+        all_parameteral_columns.extend([variant.format(column) for variant in variants])
 
     sorted_columns.extend(uppercase_columns)
-    sorted_columns.extend(all_dimensional_columns)
+    sorted_columns.extend(all_parameteral_columns)
 
     other_columns = sorted(set(columns).difference(sorted_columns))
     ignore_columns = ("model_configuration", )
