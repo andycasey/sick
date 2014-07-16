@@ -409,7 +409,7 @@ def sample_ball(point, observed_spectra, model):
             parameteral_std.append(0.1)
             jitter_indices.append(di)
             
-    walkers = model.configuration["solver"]["walkers"]
+    walkers = model.configuration["settings"]["walkers"]
     p0 = emcee.utils.sample_ball(ball_point, parameteral_std, size=walkers)
 
     # Write over jitter priors
@@ -492,21 +492,21 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
         model (sick.models.Model object): The model class.
         initial_thetas (list-type or None): The theta points to sample. If none are
             provided then the number of randomly drawn points is determined by the
-            model configuration `model.solver.initial_samples`
+            model configuration `model.settings.initial_samples`
     """
 
     logger.info("Performing random scattering...")
 
     # Random scattering
     ta = time()
-    samples = model.configuration["solver"]["initial_samples"]
+    samples = model.configuration["settings"]["initial_samples"]
 
     if initial_thetas is None:
    
         # Evaluate psi in serial, then map to parallel
         astrophysical_samples = (eval_prior(model) for _ in xrange(samples))
 
-        pool = multiprocessing.Pool(model.configuration["solver"].get("threads", 1))
+        pool = multiprocessing.Pool(model.configuration["settings"].get("threads", 1))
         try:
             scatter_func = utils.wrapper(initial_point, [model, observed_spectra])
             points = pool.map(scatter_func, astrophysical_samples)
@@ -608,18 +608,18 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
     model.map_channels(observed_spectra)
 
     # Set up MCMC settings and arrays
-    walkers = model.configuration["solver"]["walkers"]
+    walkers = model.configuration["settings"]["walkers"]
     if burn is None:
-        burn = model.configuration["solver"]["burn"]
+        burn = model.configuration["settings"]["burn"]
     if sample is None:
-        sample = model.configuration["solver"]["sample"]
+        sample = model.configuration["settings"]["sample"]
 
     mean_acceptance_fractions = np.zeros(burn + sample)
     autocorrelation_time = np.zeros((burn, len(model.parameters)))
 
     # Initialise the sampler
     sampler = emcee.EnsembleSampler(walkers, len(model.parameters), log_probability,
-        args=(model, observed_spectra), threads=model.configuration["solver"].get("threads", 1))
+        args=(model, observed_spectra), threads=model.configuration["settings"].get("threads", 1))
 
     # Start sampling
     try:
@@ -712,7 +712,7 @@ def solve(observed_spectra, model, initial_thetas=None, **kwargs):
     model.map_channels(observed_spectra)
     
     # Perform any optimisation and initialise priors
-    if model.configuration["solver"].get("optimise", True):
+    if model.configuration["settings"].get("optimise", True):
 
         most_probable_scattered_point = random_scattering(observed_spectra, model, initial_thetas)
 

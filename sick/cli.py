@@ -175,7 +175,7 @@ def resume(args):
             else:
                 offset = 0
 
-            walkers = model.configuration["solver"]["walkers"]
+            walkers = model.configuration["settings"]["walkers"]
             sampled_chain = np.core.records.fromarrays(
                 np.vstack([
                     np.arange(1 + offset, 1 + offset + chain_length),
@@ -205,7 +205,7 @@ def resume(args):
                 json.dump(metadata, fp)
 
             # Close sampler pool
-            if model.configuration["solver"].get("threads", 1) > 1:
+            if model.configuration["settings"].get("threads", 1) > 1:
                 sampler.pool.close()
                 sampler.pool.join()
 
@@ -225,14 +225,14 @@ def resume(args):
                 # Plot the mean acceptance fractions
                 fig, ax = plt.subplots()
                 ax.plot(info["mean_acceptance_fractions"], color="k", lw=2)
-                ax.axvline(model.configuration["solver"]["burn"], linestyle=":", color="k")
+                ax.axvline(model.configuration["settings"]["burn"], linestyle=":", color="k")
                 ax.set_xlabel("Step")
                 ax.set_ylabel("$\langle{}a_f\\rangle$")
                 fig.savefig(acceptance_plot_filename)
 
                 # Plot the chains
                 fig = sick.plot.chains(chain, labels=sick.utils.latexify(model.parameters),
-                    burn_in=model.configuration["solver"]["burn"] + burn_offset, truth_color='r',
+                    burn_in=model.configuration["settings"]["burn"] + burn_offset, truth_color='r',
                     truths=[posteriors[parameter][0] for parameter in model.parameters])
                 fig.savefig(chain_plot_filename)
 
@@ -426,7 +426,7 @@ def solve(args):
                 "model_configuration": model.configuration
             })
             
-            walkers = model.configuration["solver"]["walkers"]
+            walkers = model.configuration["settings"]["walkers"]
             chain_length = info["chain"].shape[0] * info["chain"].shape[1]
             chain = np.core.records.fromarrays(
                 np.vstack([
@@ -448,7 +448,7 @@ def solve(args):
                 json.dump(metadata, fp)
 
             # Close sampler pool
-            if model.configuration["solver"].get("threads", 1) > 1:
+            if model.configuration["settings"].get("threads", 1) > 1:
                 sampler.pool.close()
                 sampler.pool.join()
 
@@ -468,14 +468,14 @@ def solve(args):
                 # Plot the mean acceptance fractions
                 fig, ax = plt.subplots()
                 ax.plot(info["mean_acceptance_fractions"], color="k", lw=2)
-                ax.axvline(model.configuration["solver"]["burn"], linestyle=":", color="k")
+                ax.axvline(model.configuration["settings"]["burn"], linestyle=":", color="k")
                 ax.set_xlabel("Step")
                 ax.set_ylabel("$\langle{}a_f\\rangle$")
                 fig.savefig(acceptance_plot_filename)
 
                 # Plot the chains
                 fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.parameters),
-                    burn_in=model.configuration["solver"]["burn"], truth_color='r',
+                    burn_in=model.configuration["settings"]["burn"], truth_color='r',
                     truths=[posteriors[parameter][0] for parameter in model.parameters])
                 fig.savefig(chain_plot_filename)
 

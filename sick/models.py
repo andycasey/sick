@@ -360,7 +360,7 @@ class Model(object):
         """
 
         self._validate_channels()
-        self._validate_solver()
+        self._validate_settings()
         self._validate_normalisation()
         self._validate_doppler()
         self._validate_smoothing()
@@ -425,39 +425,39 @@ class Model(object):
         return True
 
 
-    def _validate_solver(self):
+    def _validate_settings(self):
         """
-        Validate that the solver settings in the model are specified correctly.
+        Validate that the settings in the model are specified correctly.
 
         Returns:
-            True if the solver settings for this model are specified correctly.
+            True if the settings for this model are specified correctly.
         Raises:
             KeyError: if a model channel does not have a normalisation settings specified.
             TypeError: if an incorrect data type is specified for a normalisation setting.
         """
 
-        solver = self.configuration.get("solver", {})
+        settings = self.configuration.get("settings", {})
         integer_keys_required = ("sample", "walkers", "burn")
         for key in integer_keys_required:
-            if key not in solver:
-                raise KeyError("configuration setting 'solver.{0}' not found".format(key))
+            if key not in settings:
+                raise KeyError("configuration setting 'settings.{0}' not found".format(key))
 
-            try: int(solver[key])
+            try: int(settings[key])
             except (ValueError, TypeError) as e:
-                raise TypeError("configuration setting 'solver.{0}' must be an integer-like type".format(key))
+                raise TypeError("configuration setting 'settings.{0}' must be an integer-like type".format(key))
 
-        if solver.get("optimise", True):
+        if settings.get("optimise", True):
 
             # If we are optimising, then we need initial_samples
-            if "initial_samples" not in solver:
-                raise KeyError("configuration setting 'solver.initial_samples' is required for optimisation and was not found")
+            if "initial_samples" not in settings:
+                raise KeyError("configuration setting 'settings.initial_samples' is required for optimisation and was not found")
 
-            try: int(solver["initial_samples"])
+            try: int(settings["initial_samples"])
             except (ValueError, TypeError) as e:
-                raise TypeError("configuration setting 'solver.initial_samples' must be an integer-like type")
+                raise TypeError("configuration setting 'settings.initial_samples' must be an integer-like type")
 
-        if "threads" in solver and not isinstance(solver["threads"], (float, int)):
-            raise TypeError("configuration setting 'solver.threads' must be an integer-like type")
+        if "threads" in settings and not isinstance(settings["threads"], (float, int)):
+            raise TypeError("configuration setting 'settings.threads' must be an integer-like type")
 
         return True
 
