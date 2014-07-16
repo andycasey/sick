@@ -62,8 +62,6 @@ class Model(object):
     A class to represent the approximate data-generating model for spectra.
     """
 
-    _logarithmic_parameter_indices = []
-
     def __init__(self, filename, validate=True):
         """
         Initialise a model class from a filename.
@@ -93,16 +91,14 @@ class Model(object):
         # Regardless of whether the model is cached or not, the dispersion is specified in
         # the same way: channels -> <channel_name> -> dispersion_filename
 
-        # Load the dispersions
-        self.dispersion = dict(zip(self.channels, \
-            [load_model_data(self.configuration["channels"][channel]["dispersion_filename"], dtype=np.double) \
-            for channel in self.channels]))
-
         # Is this a cached model?
-        if "points_filename" in self.configuration["channels"]:
+        if self.cached:
+            self.dispersion = dict(zip(self.channels, \
+                [load_model_data(self.configuration["cached_channels"][channel]["dispersion_filename"], dtype=np.double) \
+                for channel in self.channels]))
 
             # Grid points must be pickled data so that the parameter names are known
-            with open(self.configuration["channels"]["points_filename"], "rb") as fp:
+            with open(self.configuration["cached_channels"]["points_filename"], "rb") as fp:
                 self.grid_points = pickle.load(fp)
                 num_points = len(self.grid_points)
                 
@@ -113,20 +109,20 @@ class Model(object):
 
             # Do we have a single filename for all fluxes?
             missing_flux_filenames = []
-            if "flux_filename" in self.configuration["channels"]:
+            if "flux_filename" in self.configuration["cached_channels"]:
                 
-                fluxes = np.memmap(self.configuration["channels"]["flux_filename"], 
+                fluxes = np.memmap(self.configuration["cached_channels"]["flux_filename"], 
                     mode="r+", dtype=np.double).reshape((num_points, -1))
 
             else:
                 # We are expecting flux filenames in each channel (this is less efficient)
                 fluxes = []
                 for i, channel in enumerate(self.channels):
-                    if not "flux_filename" in self.configuration["channels"][channel]:
+                    if not "flux_filename" in self.configuration["cached_channels"][channel]:
                         missing_flux_filenames.append(channel)
                         continue
 
-                    fluxes.append(np.memmap(self.configuration["channels"][channel]["flux_filename"], 
+                    fluxes.append(np.memmap(self.configuration["cached_channels"][channel]["flux_filename"], 
                         mode="r+", dtype=np.double).reshape((num_points, -1)))
 
                 fluxes = fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes)
@@ -141,27 +137,15 @@ class Model(object):
                     total_flux_pixels, total_dispersion_pixels))
 
             points = self.grid_points.view(float).reshape((num_points, -1))
-    
-            # Are any points meant to be linearly on a logarithmic scale?
-            
-            if self.configuration.get("logarithmic_parameters", False):
-                self._logarithmic_parameter_indices = [self.grid_points.dtype.names.index(each) \
-                    for each in self.configuration["logarithmic_parameters"]]
-                
-                #for index in self._logarithmic_parameter_indices:
-                #    points[:, index] = 10**points[:, index]
-
-                #points = np.ascontiguousarray(points, dtype=points.dtype)
-            
-
             _sick_interpolator_ = interpolate.LinearNDInterpolator(points, fluxes)
             del fluxes
 
         else:
-            # We are expecting dispersion_filename and flux_filenames in each channel
+            # Model is not cached. Naughty!
+            self.dispersion = dict(zip(self.channels, \
+                [load_model_data(self.configuration["channels"][channel]["dispersion_filename"], dtype=np.double) \
+                for channel in self.channels]))
 
-            # Check that there aren't any additional things specified outside of the
-            # actual channel names
             assert len(self.configuration["channels"]) == len(self.channels)
             
             self.grid_points = None
@@ -228,12 +212,15 @@ class Model(object):
         num_models = len(self.grid_points) * num_channels
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return u"{module}.Model({num_models} models; {num_total_parameters} parameters: {num_nuisance_parameters} additional parameters,"\
-            " {num_grid_parameters} grid parameters: {parameters}; {num_channels} channels: {channels}; ~{num_pixels} pixels)".format(
-            module=self.__module__, num_models=num_models, num_channels=num_channels, channels=', '.join(self.channels),
-            num_pixels=human_readable_digit(num_pixels), num_total_parameters=len(self.parameters),
+        return u"{module}.Model({num_models} {is_cached} models; {num_total_parameters} parameters: "\
+            "{num_nuisance_parameters} additional parameters, {num_grid_parameters} grid parameters:"\
+            " {parameters}; {num_channels} channels: {channels}; ~{num_pixels} pixels)".format(
+            module=self.__module__, num_models=num_models, num_channels=num_channels,
+            channels=', '.join(self.channels), num_pixels=human_readable_digit(num_pixels),
+            num_total_parameters=len(self.parameters), is_cached=["", "cached"][self.cached],
             num_nuisance_parameters=len(self.parameters) - len(self.grid_points.dtype.names), 
-            num_grid_parameters=len(self.grid_points.dtype.names), parameters=', '.join(self.grid_points.dtype.names))
+            num_grid_parameters=len(self.grid_points.dtype.names),
+            parameters=', '.join(self.grid_points.dtype.names))
 
 
     def __repr__(self):
@@ -244,14 +231,22 @@ class Model(object):
     def hash(self):
         return md5(json.dumps(self.configuration).encode("utf-8")).hexdigest()
 
-    
+
+    @property
+    def cached(self):
+        return "cached_channels" in self.configuration.keys()
+
+
     @property
     def channels(self):
-        if hasattr(self, "_channels"):
+        try:
             return self._channels
 
-        protected_channel_names = ("points_filename", "flux_filename", "Pb", "Yb", "Vb")
-        return list(set(self.configuration["channels"].keys()).difference(protected_channel_names))
+        except AttributeError:
+            key = ["channels", "cached_channels"][self.cached]
+            protected_channel_names = ("points_filename", "flux_filename")
+            setattr(self, "_channels", list(set(self.configuration[key].keys()).difference(protected_channel_names)))
+            return self._channels
 
 
     @property
@@ -280,6 +275,24 @@ class Model(object):
 
             self._priors.update(self.configuration.get("priors", {}))
             return self._priors
+
+
+    def save(self, filename, clobber=False):
+        """
+        Save the model configuration to file.
+
+        Args:
+            filename (str): The filename to save the model configuration to.
+        """
+
+        if os.path.exists(filename) and not clobber:
+            raise IOError("model configuration filename exists and we have been asked not to clobber it")
+
+        dump = yaml.dump if filename.endswith(".yaml") else json.dump
+        with open(filename, "w+") as fp:
+            dump(self.configuration, fp)
+
+        return True
 
 
     def map_channels(self, observations):
@@ -457,13 +470,12 @@ class Model(object):
             True if the doppler settings for this model are specified correctly.
         """
 
-        if "doppler_shift" not in self.configuration.keys():
+        if "redshift" not in self.configuration.keys():
             return True 
 
         for channel in self.channels:
-            if not self.configuration["doppler_shift"].get(channel, None): continue
+            if not self.configuration["redshift"].get(channel, None): continue
 
-            # Perform any additional doppler shift checks here
         return True
 
 
@@ -494,7 +506,7 @@ class Model(object):
             ValueError: if an illegal character is present in any of the channel names.
         """
 
-        if "channels" not in self.configuration.keys():
+        if "channels" not in self.configuration.keys() and "cached_channels" not in self.configuration.keys():
             raise KeyError("no channels found in model file")
 
         for channel in self.channels:
@@ -563,7 +575,7 @@ class Model(object):
                         parameters.extend(["normalise.{0}.k{1}".format(channel, i) \
                             for i in range(knots)])
 
-            elif parameter == "doppler_shift":
+            elif parameter == "redshift":
                 # Check which channels have doppler shifts allowed and add them
                 parameters.extend(["z.{0}".format(each) \
                     for each in self.channels if self.configuration[parameter].get(each, False)])
@@ -586,7 +598,7 @@ class Model(object):
         return parameters
 
 
-    def cache(self, grid_points_filename, dispersion_filenames, flux_filename,
+    def cache(self, grid_points_filename, flux_filename, dispersion_filenames=None,
         wavelengths=None, smoothing_kernels=None, sampling_rate=None, clobber=False):
         """
         Cache the model for faster read access at runtime.
@@ -594,12 +606,12 @@ class Model(object):
         Args:
             grid_points_filename (str): filename for pickling the model grid points.
 
+            flux_filename (str): The flux points will be combined into a single array
+                and memory-mapped to the given filename.
+
             dispersion_filenames (dict): A dictionary containing channels as keys,
                 and filenames as values. The dispersion points will be memory-mapped
                 to the given filenames.
-
-            flux_filename (str): The flux points will be combined into a single array
-                and memory-mapped to the given filename.
 
             wavelengths (dict): A dictionary containing channels as keys and wavelength
                 regions as values. The wavelength regions specify the minimal and
@@ -628,7 +640,9 @@ class Model(object):
         """
 
         if not clobber:
-            filenames = [grid_points_filename, flux_filename] + dispersion_filenames.values()
+            filenames = [grid_points_filename, flux_filename]
+            if dispersion_filenames is not None:
+                filenames.extend(dispersion_filenames.values())
             filenames_exist = map(os.path.exists, filenames)
             if any(filenames_exist):
                 raise IOError("filename {0} exists and we've been asked not to clobber it".format(
@@ -640,6 +654,10 @@ class Model(object):
 
         if not isinstance(wavelengths, dict) and wavelengths is not None:
             raise TypeError("wavelengths must be a dictionary-type with channels as keys")
+
+        if (sampling_rate is not None or wavelengths is not None) and dispersion_filenames is None:
+            raise ValueError("dispersion filename must be provided when the sampling rate or "\
+                "wavelength range is restricted")
 
         if sampling_rate is None:
             sampling_rate = dict(zip(self.channels, np.ones(len(self.channels))))
@@ -691,28 +709,30 @@ class Model(object):
                 flux[i, sj:ej] = channel_flux[si:ei:sampling_rate[channel]]
 
         # Save the resampled dispersion arrays to disk
-        for channel, dispersion_filename in dispersion_filenames.iteritems():
-            si, ei = wavelength_indices[channel]
+        if dispersion_filenames is not None:
+            for channel, dispersion_filename in dispersion_filenames.iteritems():
+                si, ei = wavelength_indices[channel]
 
-            disp = np.memmap(dispersion_filename, dtype=np.double, mode="w+",
-                shape=self.dispersion[channel][si:ei:sampling_rate[channel]].shape)
-            disp[:] = np.ascontiguousarray(self.dispersion[channel][si:ei:sampling_rate[channel]],
-                dtype=np.double)
-            del disp
+                disp = np.memmap(dispersion_filename, dtype=np.double, mode="w+",
+                    shape=self.dispersion[channel][si:ei:sampling_rate[channel]].shape)
+                disp[:] = np.ascontiguousarray(self.dispersion[channel][si:ei:sampling_rate[channel]],
+                    dtype=np.double)
+                del disp
 
-        # Arrays must be contiguous
         flux[:] = np.ascontiguousarray(flux, dtype=np.double)
-
-        # Now we need to save the flux to disk
         del flux
 
         # Create the cached version 
         cached_model = self.configuration.copy()
-        cached_model["channels"] = {
+        cached_model["cached_channels"] = {
             "grid_points": grid_points_filename,
             "flux_filename": flux_filename,
         }
-        cached_model["channels"].update(dispersion_filenames)
+        if dispersion_filenames is not None:
+            cached_model["cached_channels"].update(dispersion_filenames)
+        else:
+            cached_model["cached_channels"].update(dict(zip(self.channels,
+                [cached_model["channels"][each] for each in self.channels])))
 
         return cached_model
 
@@ -782,43 +802,7 @@ class Model(object):
         global _sick_interpolator_
         if _sick_interpolator_ is not None:
        
-            transformed_point = np.array(point).copy() 
-            # Is there any logarithmic parameter rescaling that we should be doing?
-            if len(self._logarithmic_parameter_indices) > 0:
-
-                for index, parameter in zip(self._logarithmic_parameter_indices, self.configuration["logarithmic_parameters"]):
-                    value = transformed_point[index]
-
-                    # Get nearest neighbours from grid points
-                    point_range = np.sort(np.unique(self.grid_points[parameter]))
-                    right_neighbour = np.searchsorted(point_range, value)
-
-                    # Will fail at grid boundaries
-                    logarithmic_range = 10**point_range[right_neighbour] - 10**point_range[right_neighbour - 1]
-                    linear_range = point_range[right_neighbour] - point_range[right_neighbour - 1]
-
-                    #transformed_value = point_range[right_neighbour - 1] + (((value - point_range[right_neighbour - 1])/linear_range) * logarithmic_range)
-                    #tranformed_value = np.log10((10**value) * logarithmic_range/linear_range) + point_range[right_neighbour - 1]
-                    #transformed_value = np.log10((10**value - 10**point_range[right_neighbour-1])/logarithmic_range + 10**point_range[right_neighbour-1])
-
-                    # Range values are 4.0 to 4.5 --> 10^4 and 10^4.5
-                    # Requested value is 4.4 --> 10^4.4
-
-                    # We want 10^4.4, but it's going to give us 4.4
-                    # Scale the value
-                    #(10**4.4 - 10**4)/(10**4.5 - 10**4.0) * (4.5 - 4.0) + 4.0
-                    transformed_value = (10**value - 10**point_range[right_neighbour-1])/logarithmic_range * linear_range + point_range[right_neighbour-1]
-                    #transformed_value = (10**value - 10**point_range[0])/(10**point_range[-1] - 10**point_range[0]) * np.ptp(point_range) + point_range[0]
-
-                    if not np.isfinite(transformed_value):
-                        raise NotImplementedError
-
-                    transformed_point[index] = transformed_value
-            else:
-                transformed_point = point
-
-            interpolated_flux = _sick_interpolator_(*transformed_point)
-            
+            interpolated_flux = _sick_interpolator_(*np.array(point).copy())
             if np.all(~np.isfinite(interpolated_flux)):
                 raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")    
         
@@ -845,7 +829,7 @@ class Model(object):
                     channel_flux, [point], **kwargs).flatten()
 
             except:
-                raise ValueError("could not interpolate flux point -- it is likely outside the grid boundaries")
+                raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")
     
 
     def masks(self, dispersion_maps, **theta):
@@ -883,8 +867,6 @@ class Model(object):
                         
                 pixel_masks[channel] = mask
         return pixel_masks
-
-
 
 
     def _continuum(self, channel, obs, model_flux, **theta):

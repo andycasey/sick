@@ -257,7 +257,26 @@ def resume(args):
         # We can only resume the state from a single object
         break
     logger.info("Fin.")
-    
+
+
+def cache(args):
+    """
+    Cache a model.
+    """
+
+    if not os.path.exists(args.model):
+        raise IOError("model filename {0} does not exist".format(args.model))
+
+    model = sick.models.Model(args.model)
+    cached_configuration = model.cache(args.grid_points_filename, args.fluxes_filename,
+        clobber=args.clobber)
+
+    model.configuration = cached_configuration
+    model.save(args.model, True)
+
+    logging.info("Updated model filename {0} to include cached data.".format(args.model))
+    return True
+ 
 
 def download(args):
     """
@@ -649,6 +668,16 @@ def main():
         help="Format for output plots (default: %(default)s). Available formats are (case insensitive):"
         " PDF, JPG, PNG, EPS")
     resume_parser.set_defaults(func=resume)
+
+    cache_parser = subparsers.add_parser("cache", parents=[parent_parser],
+        help="Cache the provided model for fast access at run-time.")
+    cache_parser.add_argument("model", dtype=str,
+        help="The (YAML- or JSON-formatted) model filename.")
+    cache_parser.add_argument("grid_points_filename", dtype=str,
+        help="The filename to cache the grid point information to.")
+    cache_parser.add_argument("fluxes_filename", dtype=str,
+        help="The filename to cache the fluxes into.")
+    cache_parser.set_defaults(func=cache)
 
     # Parse arguments and specify logging level
     args = parser.parse_args()
