@@ -103,16 +103,20 @@ class InferenceTest(unittest.TestCase):
 
         # Make a corner plot with just the parameters of interest
         psi_len = len(model.grid_points.dtype.names)
-        fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, :psi_len],
+        fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, :psi_len],
             labels=sick.utils.latexify(model.grid_points.dtype.names), quantiles=[.16, .50, .84], verbose=False,
             truths=[truth[dimension] for dimension in model.dimensions[:psi_len]], extents=[0.95]*psi_len)
         fig.savefig("inference.pdf")
 
         # Make a corner plot with *all* of the model parameters
-        fig = triangle.corner(sampler.chain.reshape(-1, len(model.dimensions)),
+        fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions)),
             labels=sick.utils.latexify(model.dimensions), quantiles=[.16, .50, .84], verbose=False,
             truths=[truth[dimension] for dimension in model.dimensions])
         fig.savefig("inference-all.pdf")
+
+        # Make a projection plot
+        fig = sick.plot.projection(sampler, model, observations)
+        fig.savefig("projection.pdf")
 
         # Assert that we have at least some solution
         if acceptable_ci_multiple is not None:
@@ -128,7 +132,7 @@ class InferenceTest(unittest.TestCase):
         """
 
         # Remove the plots we produced
-        filenames = ["chains.pdf", "spectrum.pdf", "inference.pdf", "inference-all.pdf"]
+        filenames = ["chains.pdf", "spectrum.pdf", "inference.pdf", "inference-all.pdf", "projection.pdf"]
 
         # Remove the model filenames
         filenames.extend(["inference-model.yaml", "inference-dispersion.memmap", "inference-flux.memmap",
@@ -138,6 +142,10 @@ class InferenceTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
+
+    # Coveralls will run InferenceTest() properly, but sometimes the user might want to
+    # run this themselves. If that's the case, we will not do the cleanup so that they
+    # can look at the plots.
     dat_inference = InferenceTest()
     dat_inference.setUp()
     dat_inference.runTest()

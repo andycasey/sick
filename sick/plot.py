@@ -106,9 +106,29 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     return fig
 
 
-# Can do it from: data, model, sampler, n
 def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None):
+    """
+    Project the maximum likelihood values (and some sampled posterior points) as
+    model spectra.
 
+    Args:
+        sampler (emcee.EnsembleSampler) : The Ensemble Sampler
+
+        model (sick.models.Model) : The model class.
+
+        data (list of specutils.Spectrum1D objects) : The observed spectra.
+
+        extents (iterable (ndim, ), optional) : 
+
+        burn_in (int, optional) : A reference step to indicate on the plots.
+
+        fig (`matplotlib.Figure`, optional) : Overplot onto the provided figure object.
+
+        figsize (dimx, dimy, optional) : The figure size.
+    
+    Returns:
+        A `matplotlib.Figure` object.
+    """
     if not isinstance(data, (tuple, list)) or \
     any([not isinstance(each, specutils.Spectrum1D) for each in data]):
         raise TypeError("Data must be a list-type of Spectrum1D objects.")
