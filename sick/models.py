@@ -47,14 +47,11 @@ def load_model_data(filename, **kwargs):
             data = image[0].data
 
     elif filename.endswith(".memmap"):
-        # Set preferred keyword arguments
         kwargs.setdefault("mode", "c")
-        # TODO: Do we still need copy-on-read?
         kwargs.setdefault("dtype", np.double)
         data = np.memmap(filename, **kwargs)
 
     else:
-        # Try ASCII
         data = np.loadtxt(filename, **kwargs)
     
     return data
@@ -674,7 +671,7 @@ class Model(object):
 
         # Create empty memmap
         flux = np.memmap(flux_filename, dtype=np.double, mode="w+", shape=(n_points, np.sum(n_pixels)))
-        for i in xrange(n_points):
+        for i in range(n_points):
 
             logger.info("Caching point {0} of {1} ({2:.1f}%)".format(i+1, n_points, 100*(i+1.)/n_points))
             for j, channel in enumerate(self.channels):
@@ -903,25 +900,25 @@ class Model(object):
 
             return np.polyval(coefficients, obs.disp)
 
-        """ 
-        elif method == "spline" and observations is not None:
+            """ 
+            elif method == "spline" and observations is not None:
 
-            num_knots = self.configuration["normalise"][channel]["knots"]
-            observed_channel = observations[self.channels.index(channel)]
-                    
-            # Divide the observed spectrum by the model channel spectrum
-            continuum = observed_channel.flux/model_flux
+                num_knots = self.configuration["normalise"][channel]["knots"]
+                observed_channel = observations[self.channels.index(channel)]
+                        
+                # Divide the observed spectrum by the model channel spectrum
+                continuum = observed_channel.flux/model_flux
 
-            # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
-            # to all observed pixels (regardless of how much overlap there is)
-            finite = np.isfinite(continuum)
-            knots = [theta["normalise.{channel}.k{n}".format(channel=channel, n=n)] for n in xrange(num_knots)]
-            tck = interpolate.splrep(observed_channel.disp[finite], continuum[finite],
-                w=1./np.sqrt(observed_channel.variance[finite]), t=knots)
+                # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
+                # to all observed pixels (regardless of how much overlap there is)
+                finite = np.isfinite(continuum)
+                knots = [theta["normalise.{channel}.k{n}".format(channel=channel, n=n)] for n in xrange(num_knots)]
+                tck = interpolate.splrep(observed_channel.disp[finite], continuum[finite],
+                    w=1./np.sqrt(observed_channel.variance[finite]), t=knots)
 
-            # Scale the model by the continuum function
-            return lambda dispersion: interpolate.splev(dispersion, tck)
-        """
+                # Scale the model by the continuum function
+                return lambda dispersion: interpolate.splev(dispersion, tck)
+            """
 
         else:
             raise NotImplementedError("only polynomial continuums represented at the moment") 

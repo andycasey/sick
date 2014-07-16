@@ -16,7 +16,7 @@ import plot, specutils
 
 # Here we set the default logging level to WARN because -- unless explicitly told otherwise -- we
 # don't want the logger to display everything when the API is being used. When the command-line
-# interface is used we will over-ride this configuration and set the level to INFO or DEBUG,
+# interface is used we will overwrite this configuration and set the level to INFO or DEBUG,
 # depending on specified verbosity
 logging.basicConfig(level=logging.WARN, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("sick")

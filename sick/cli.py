@@ -63,8 +63,8 @@ def resume(args):
         # stars. Let's join them properly
         sorted_spectra = []
         num_stars, num_apertures = len(all_spectra[0]), len(all_spectra)
-        for i in xrange(num_stars):
-            sorted_spectra.append([all_spectra[j][i] for j in xrange(num_apertures)])
+        for i in range(num_stars):
+            sorted_spectra.append([all_spectra[j][i] for j in range(num_apertures)])
 
         all_spectra = sorted_spectra
     else:
@@ -296,8 +296,8 @@ def solve(args):
         # stars. Let's join them properly
         sorted_spectra = []
         num_stars, num_apertures = len(all_spectra[0]), len(all_spectra)
-        for i in xrange(num_stars):
-            sorted_spectra.append([all_spectra[j][i] for j in xrange(num_apertures)])
+        for i in range(num_stars):
+            sorted_spectra.append([all_spectra[j][i] for j in range(num_apertures)])
 
         all_spectra = sorted_spectra
     else:
