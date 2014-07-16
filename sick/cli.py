@@ -11,7 +11,6 @@ import argparse
 import logging
 
 # Necessary for some sub-parsers
-import acor
 import cPickle as pickle
 import json
 import multiprocessing
@@ -30,7 +29,6 @@ from matplotlib.ticker import MaxNLocator
 
 import sick
 
-# Initialise logging
 logger = logging.getLogger("sick")
 
 def resume(args):
@@ -94,7 +92,6 @@ def resume(args):
         "model": model.hash, 
         "input_filenames": ", ".join(args.spectra),
         "sick_version": sick.__version__,
-        "walkers": model.configuration["solver"]["walkers"],
     }
 
     for i, spectra in enumerate(all_spectra, start=1):
@@ -111,7 +108,6 @@ def resume(args):
             logger.info("Skipping object #{0}".format(i))
             continue
 
-        # Does a solution already exist for this star? If so are we authorised to clobber it?
         output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
 
         metadata = {}
@@ -244,7 +240,8 @@ def resume(args):
                 indices = np.array([model.parameters.index(parameter) for parameter in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[parameter][0] for parameter in model.grid_points.dtype.names])
+                    quantiles=[.16, .50, .84], verbose=False,
+                    truths=[posteriors[parameter][0] for parameter in model.grid_points.dtype.names])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
@@ -324,7 +321,6 @@ def solve(args):
         "model": model.hash, 
         "input_filenames": ", ".join(args.spectra),
         "sick_version": sick.__version__,
-        "walkers": model.configuration["solver"]["walkers"],
     }
 
     # For each source, solve
@@ -346,8 +342,13 @@ def solve(args):
             logger.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
             break
 
+        # If there are many spectra to analyse, include the run ID in the output filenames.
+        if len(all_spectra) > 1:
+            output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
+        else:
+            output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, x]))
+
         # Does a solution already exist for this star? If so are we authorised to clobber it?
-        output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
         if os.path.exists(output("result.json")) and not args.clobber:
             logger.info("Skipping object #{0} as a results file already exists ({1}) and we have been asked not to "
                 "clobber it".format(i, output("result.json")))
@@ -463,7 +464,8 @@ def solve(args):
                 indices = np.array([model.parameters.index(parameter) for parameter in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[parameter][0] for parameter in model.grid_points.dtype.names])
+                    quantiles=[.16, .50, .84], verbose=False,
+                    truths=[posteriors[parameter][0] for parameter in model.grid_points.dtype.names])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
@@ -481,7 +483,7 @@ def solve(args):
 
 def aggregate(args):
     """
-    Aggregate JSON-formatted results into a single tabular file.
+    Aggregate JSON-formatted results into a single tabular FITS file.
     """
 
     if os.path.exists(args.output_filename) and not args.clobber:
@@ -497,7 +499,10 @@ def aggregate(args):
             except:
                 logger.exception("Could not read results filename {0}".format(filename))
                 if args.debug: raise
-                
+            
+            else:
+                logging.debug("Successfully loaded results from {0}".format(filename))
+
     # Get header order and sort them
     columns = results[0].keys()
 

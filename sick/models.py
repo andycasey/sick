@@ -28,8 +28,8 @@ from scipy import interpolate, ndimage
 from utils import human_readable_digit 
 from specutils import Spectrum1D
 
+_sick_interpolator_ = None
 logger = logging.getLogger(__name__.split(".")[0])
-_sick_interpolator = None
 
 def load_model_data(filename, **kwargs):
     """
@@ -112,7 +112,7 @@ class Model(object):
             if len(self.grid_points.dtype.names) == 0:
                 raise TypeError("cached grid points filename has no column names")
 
-            global _sick_interpolator
+            global _sick_interpolator_
 
             # Do we have a single filename for all fluxes?
             missing_flux_filenames = []
@@ -157,7 +157,7 @@ class Model(object):
                 #points = np.ascontiguousarray(points, dtype=points.dtype)
             
 
-            _sick_interpolator = interpolate.LinearNDInterpolator(points, fluxes)
+            _sick_interpolator_ = interpolate.LinearNDInterpolator(points, fluxes)
             del fluxes
 
         else:
@@ -783,8 +783,8 @@ class Model(object):
             ValueError: when a flux point could not be interpolated (e.g., outside grid boundaries)
         """
 
-        global _sick_interpolator
-        if _sick_interpolator is not None:
+        global _sick_interpolator_
+        if _sick_interpolator_ is not None:
        
             transformed_point = np.array(point).copy() 
             # Is there any logarithmic parameter rescaling that we should be doing?
@@ -821,7 +821,7 @@ class Model(object):
             else:
                 transformed_point = point
 
-            interpolated_flux = _sick_interpolator(*transformed_point)
+            interpolated_flux = _sick_interpolator_(*transformed_point)
             
             if np.all(~np.isfinite(interpolated_flux)):
                 raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")    
