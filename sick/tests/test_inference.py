@@ -51,7 +51,7 @@ class InferenceTest(unittest.TestCase):
         os.system("tar -xzf test-inference-data.tar")
 
 
-    def runTest(self, acceptable_ci_multiple=1.5):
+    def runTest(self, acceptable_ci_multiple=None):
         """
         Create a faux spectrum then infer the model parameters given the faux data.
         """
@@ -123,7 +123,7 @@ class InferenceTest(unittest.TestCase):
             for parameter in model.parameters:
                 peak_posterior, pos_ci, neg_ci = posteriors[parameter]
                 assert (peak_posterior + acceptable_ci_multiple * pos_ci >= truth[parameter] >= peak_posterior - acceptable_ci_multiple * neg_ci), (
-                    "Inferences on the test case were not within {0}-sigma of the {1} truth values".format(acceptable_ci_multiple, parameter))
+                    "Inferences on the test case were not within {0}-'sigma' of the {1} truth values".format(acceptable_ci_multiple, parameter))
         
 
     def tearDown(self):
