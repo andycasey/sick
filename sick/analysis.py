@@ -131,11 +131,7 @@ def initial_point(evaluated_priors, model, observations):
                 # Get continuum knots/coefficients for each aperture
                 observed_channel = observations[model.channels.index(channel)]
 
-                fft_fitler = 1.
-                if "normalise.{0}.bandwidth".format(channel) in evaluated_priors:
-                    fft_fitler = observed_channel.fft(evaluated_priors["normalise.{0}.bandwidth".format(channel)])
-
-                continuum = (observed_channel.flux / fft_fitler)/np.interp(observed_channel.disp,
+                continuum = observed_channel.flux/np.interp(observed_channel.disp,
                     model.dispersion[channel], model_intensities[channel], left=np.nan,
                     right=np.nan)
 

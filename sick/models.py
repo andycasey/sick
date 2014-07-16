@@ -409,10 +409,6 @@ class Model(object):
                     raise TypeError("configuration setting 'normalise.{0}.order'"
                         " is expected to be an integer-like object".format(channel))
 
-            elif method == "fft_filter":
-                # No additional information required for FFT filter
-                continue
-
             else:
                 raise ValueError("configuration setting 'normalise.{0}.method' not recognised"
                     " -- must be spline or polynomial".format(channel))
@@ -559,18 +555,13 @@ class Model(object):
                     if not self.configuration[parameter].get(channel, False): continue
 
                     method = self.configuration[parameter][channel]["method"]
-                    assert method in ("polynomial", "fft_filter", "spline")
+                    assert method in ("polynomial", "spline")
 
                     if method == "polynomial":
                         order = self.configuration[parameter][channel]["order"]
                         parameters.extend(["normalise.{0}.c{1}".format(channel, i) \
                             for i in range(order + 1)])
                         
-                    elif method == "fft_filter":
-                        #parameters.append("normalise.{0}.bw".format(channel))
-                        #parameters.extend([each.format(channel) for each in ("normalise.{0}.s_scale", "normalise.{0}.bw")])
-                        continue
-
                     elif method == "spline":
                         knots = self.configuration[parameter][channel].get("knots", 0)
                         parameters.extend(["normalise.{0}.k{1}".format(channel, i) \
@@ -911,61 +902,7 @@ class Model(object):
             coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
                 for i in range(order + 1)]
 
-            fft_filter = 1.
-            if "normalise.{0}.bandwidth".format(channel) in theta:
-                fft_filter = obs.fft(theta["normalise.{0}.bandwidth".format(channel)])
-
-            return np.polyval(coefficients, obs.disp) * fft_filter
-
-        elif method == "fft_filter":
-
-             # TODOD
-            
-            #bw = theta["normalise.{0}.bw".format(channel)]
-            #s_scale = theta["normalise.{0}.s_scale".format(channel)]
-            bw = 100.
-            s_scale = 1.
-            
-            finite = np.isfinite(model_flux)
-            m_flux = model_flux.copy()
-            o_flux = obs.flux.copy()
-            m_flux[~finite] = 1.
-            o_flux[~finite] = 1.
-
-
-
-            # Do the filters
-            # We are already on the observed dispersion map
-            s = m_flux.size
-            flux_mirror = np.empty(3*s)
-            flux_mirror[:s] = m_flux[::-1].copy()
-            flux_mirror[s:2*s] = m_flux.copy()
-            flux_mirror[2*s:] = m_flux[::-1].copy()
-
-            fft = np.fft.rfft(flux_mirror)
-            x = np.arange(fft.size)*1.
-
-            model_rfft = np.fft.irfft(fft * x/(bw + x))[s:2*s]
-            model_cont = ndimage.gaussian_filter(m_flux - model_rfft, s_scale * s**0.5)
-
-            # Obs filter
-            # s remains the same as the model is on the observed dispersion map\
-            assert s == o_flux.size
-            flux_mirror = np.empty(3*s)
-            flux_mirror[:s] = o_flux[::-1].copy()
-            flux_mirror[s:2*s] = o_flux.copy()
-            flux_mirror[2*s:] = o_flux[::-1].copy()
-
-            fft = np.fft.rfft(flux_mirror)
-            x = np.arange(fft.size)*1.
-
-            obs_rfft = np.fft.irfft(fft * x/(bw + x))[s:2*s]
-            obs_cont = ndimage.gaussian_filter(o_flux - obs_rfft, s_scale * s**0.5)
-
-            return obs_cont/model_cont
-
-
-        else: raise NotImplementedError   
+            return np.polyval(coefficients, obs.disp)
 
         """ 
         elif method == "spline" and observations is not None:
@@ -986,6 +923,10 @@ class Model(object):
             # Scale the model by the continuum function
             return lambda dispersion: interpolate.splev(dispersion, tck)
         """
+
+        else:
+            raise NotImplementedError("only polynomial continuums represented at the moment") 
+
 
 
     def __call__(self, observations=None, full_output=False, **theta):

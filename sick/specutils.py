@@ -297,43 +297,7 @@ class Spectrum1D(object):
                 
                 hdu.writeto(filename, clobber=clobber)
 
-
-    def gaussian_smooth(self, fwhm, **kwargs):
-        """ Convolves the spectrum flux with a Gaussian kernel.
-
-        Inputs
-        ------
-        fwhm : float
-            The FWHM of the Gaussian kernel to smooth with (Angstroms).
-        """
-
-        profile_sigma = abs(fwhm) / (2 * (2*np.log(2))**0.5)
-        
-        # The requested FWHM is in Angstroms, but the dispersion between each
-        # pixel is likely less than an Angstrom, so we must calculate the true
-        # smoothing value
-        true_profile_sigma = profile_sigma / np.mean(np.diff(self.disp))
-        smoothed_flux = ndimage.gaussian_filter1d(self.flux, true_profile_sigma, **kwargs)
-        
-        return self.__class__(self.disp, smoothed_flux, variance=self.variance,
-            headers=self.headers)
     
-
-    def fft(self, bandwidth=10., scale=1.):
-
-        s = self.flux.size
-        flux_mirror = np.empty(3*s)
-        flux_mirror[:s] = self.flux[::-1].copy()
-        flux_mirror[s:2*s] = self.flux.copy()
-        flux_mirror[2*s:] = self.flux[::-1].copy()
-
-        fft = np.fft.rfft(flux_mirror)
-        x = np.arange(fft.size)*1.
-        rfft = np.fft.irfft(fft * x/(bandwidth + x))[s:2*s]
-
-        return ndimage.gaussian_filter(self.flux - rfft, scale * s**0.5)
-
-
 def load_aaomega_multispec(filename, fill_value=-1, clean=True):
     """
     Returns a list of Spectrum1D objects with headers from the main image
