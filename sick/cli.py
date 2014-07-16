@@ -469,8 +469,7 @@ def solve(args):
                 # Plot some spectra
                 fig = sick.plot.projection(sampler, model, spectra)
                 fig.savefig(pp_spectra_plot_filename)
-                raise a
-
+                
                 # Closing the figures isn't enough; matplotlib leaks memory
                 plt.close("all")
 
