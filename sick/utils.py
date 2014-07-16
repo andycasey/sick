@@ -18,11 +18,8 @@ class wrapper(object):
     def __init__(self, func, args, ignore_x=False):
         self.func = func
         self.args = args
-        self.ignore_x = ignore_x
-
+        
     def __call__(self, x):
-        if self.ignore_x:
-            return self.func(*self.args)
         return self.func(x, *self.args)
 
 
