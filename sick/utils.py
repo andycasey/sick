@@ -15,7 +15,7 @@ class wrapper(object):
     A general wrapper to pickle functions.
     """
 
-    def __init__(self, func, args, ignore_x=False):
+    def __init__(self, func, args):
         self.func = func
         self.args = args
         
