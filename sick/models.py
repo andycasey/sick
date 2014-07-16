@@ -219,7 +219,6 @@ class Model(object):
 
         # Initialise the parameters property to avoid nasty fringe cases
         _ = self.parameters
-
         return None
 
 

@@ -28,9 +28,9 @@ truth = {
     "logg": 4.124,
     "feh": -0.514,
     "alpha": 0.02,
-    "convolve.blue": 0.34,
-    "z.blue": -56.12/299792458e-3,
-    "jitter.blue": np.log(0.10), # ~10% underestimated
+    "convolve.blue": 0.581,
+    "z.blue": +13.0/299792458e-3,
+    "f.blue": np.log(0.10), # ~10% underestimated
     "normalise.blue.c0": 0.00123,
     "normalise.blue.c1": -0.5934,
     "normalise.blue.c2": -423.18,
@@ -51,7 +51,7 @@ class InferenceTest(unittest.TestCase):
         os.system("tar -xzf test-inference-data.tar")
 
 
-    def runTest(self, acceptable_ci_multiple=None):
+    def runTest(self, acceptable_ci_multiple=1.5):
         """
         Create a faux spectrum then infer the model parameters given the faux data.
         """
@@ -72,7 +72,7 @@ class InferenceTest(unittest.TestCase):
 
             N = len(disp)
             flux_err = 0.1 + 0.5 * np.random.randn(N)
-            jitter_true = np.exp(truth["jitter.{0}".format(channel)])
+            jitter_true = np.exp(truth["f.{0}".format(channel)])
 
             flux += np.abs(jitter_true*flux) * np.random.randn(N)
             flux += flux_err * np.random.randn(N)

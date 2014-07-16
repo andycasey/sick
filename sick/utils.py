@@ -99,10 +99,10 @@ def human_readable_digit(number):
     """
     Return a more human-readable (English) digit.
     """
+
     if 0 >= number:
         return "{0:.1f} ".format(number)
 
     millnames = ["", "thousand", "million", "billion", "trillion"]
     millidx = max(0, min(len(millnames)-1, int(np.floor(np.log10(abs(number))/3.0))))
     return "{0:.1f} {1}".format(number/10**(3*millidx), millnames[millidx])
-

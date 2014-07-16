@@ -21,10 +21,12 @@ from scipy import ndimage, stats
 logger = logging.getLogger(__name__.split(".")[0])
 
 class Spectrum(object):
-    """A class to deal with loading lots of different types of spectra"""
+    """
+    A class to deal with loading lots of different types of spectra.
+    """
 
     @classmethod
-    def load(cls, filename, **kwargs):
+    def load(cls, filename, assumed_snr=50, **kwargs):
 
         # Try as a Spectrum1D class first
         methods = (Spectrum1D.load, load_aaomega_multispec)
@@ -37,8 +39,6 @@ class Spectrum(object):
 
             else:
                 if isinstance(spectra, Spectrum1D) and spectra.variance is None:
-                    # Assume some S/N of ~50
-                    assumed_snr = 50
                     logging.warn("Assuming S/N ratio of {0}".format(assumed_snr))
                     spectra.variance = (stats.poisson.rvs([assumed_snr**2], size=len(spectra.disp))/float(assumed_snr**2) - 1.)**2
 
@@ -51,9 +51,6 @@ class Spectrum1D(object):
     """This is a temporary class holder for a Spectrum1D object until the
     astropy.specutils.Spectrum1D module has advanced sufficiently to replace it."""
     
-    headers = {}
-    variance = None
-
     def __init__(self, disp, flux, variance=None, headers=None):
         """Initializes a `Spectrum1D` object with the given dispersion and flux
         arrays.
@@ -81,8 +78,10 @@ class Spectrum1D(object):
         self.variance = variance
         if headers is not None:
             self.headers = headers
-
+        else:
+            self.headers = {}
         return None
+
 
     def copy(self):
         """ Creates a copy of the object """
@@ -90,6 +89,7 @@ class Spectrum1D(object):
         return self.__class__(self.disp.copy(), self.flux.copy(),
             variance=self.variance, headers=self.headers)
     
+
     @classmethod
     def load(cls, filename, **kwargs):
         """Load a Spectrum1D from a given filename.
@@ -174,8 +174,6 @@ class Spectrum1D(object):
             for key, value in headers.iteritems():
                 if isinstance(value, list):
                     headers[key] = "\n".join(map(str, value))
-
-            
 
         else:
             headers = {}

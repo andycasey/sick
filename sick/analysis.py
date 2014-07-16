@@ -63,10 +63,7 @@ def initial_point(evaluated_priors, model, observations):
     all_fluxes = np.array(list(chain(*[each.flux for each in observations])))
     all_fluxes = all_fluxes[np.isfinite(all_fluxes)]
 
-    initial_distributions.update({
-        "Yb": "normal({0}, 0.5 * {0})".format(np.median(all_fluxes)),
-        "Vb": "normal({0}, 0.5 * {0})".format(np.std(all_fluxes)**2)
-        })
+    initial_distributions.update({"Vb": "normal({0}, 0.5 * {0})".format(np.std(all_fluxes)**2)})
 
     # Environment variables for explicit priors
     # The channel names will be passed to contain all the information required
@@ -157,8 +154,6 @@ def initial_point(evaluated_priors, model, observations):
 
                 if method == "polynomial":
                     # Fit polynomial coefficients
-
-
                     order = model.configuration["normalise"][channel]["order"]
                     continuum_parameters[channel] = np.polyfit(observed_channel.disp[finite_continuum], continuum[finite_continuum], order)
 
