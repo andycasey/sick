@@ -237,14 +237,14 @@ def resume(args):
                 # Plot the chains
                 fig = sick.plot.chains(chain, labels=sick.utils.latexify(model.dimensions),
                     burn_in=model.configuration["solver"]["burn"] + burn_offset, truth_color='r',
-                    truths=[posteriors[model.dimensions.index(dimension)][0] for dimension in model.dimensions])
+                    truths=[posteriors[dimension][0] for dimension in model.dimensions])
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[index][0] for index in indices])
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[dimension][0] for dimension in model.grid_points.dtype.names])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
@@ -456,14 +456,14 @@ def solve(args):
                 # Plot the chains
                 fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.dimensions),
                     burn_in=model.configuration["solver"]["burn"], truth_color='r',
-                    truths=[posteriors[model.dimensions.index(dimension)][0] for dimension in model.dimensions])
+                    truths=[posteriors[dimension][0] for dimension in model.dimensions])
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
                 indices = np.array([model.dimensions.index(dimension) for dimension in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.dimensions))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[index][0] for index in indices])
+                    quantiles=[.16, .50, .84], verbose=False, truths=[posteriors[dimension][0] for dimension in model.grid_points.dtype.names])
                 fig.savefig(corner_plot_filename)
 
                 # Plot some spectra
