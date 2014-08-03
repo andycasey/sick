@@ -40,9 +40,24 @@ def initial_point(evaluated_priors, model, observations):
     """
     Return an initial theta point for the model, given the data.
 
-    Args:
-        model (sick.models.Model object): The model class.
-        observations (list of specutils.Spectrum1D objects): The observed spectra.
+    :param evaluated_priors:
+        A dictionary containing the priors (values) to employ for the scattering
+        process for each parameter (key)
+
+    :type evaluated_priors:
+        dict
+
+    :param model:
+        The model class.
+
+    :type model:
+        :class:`sick.models.Model`
+
+    :param observations:
+        The observed spectra.
+
+    :type observations:
+        iterable of :class:`sick.specutils.Spectrum1D` objects
     """
 
     # Set the default priors:
