@@ -32,9 +32,7 @@ import sick
 logger = logging.getLogger("sick")
 
 def resume(args):
-    """
-    Resume a MCMC simulation from a previous state.
-    """
+    """ Resume a MCMC simulation from a previous state. """
 
     if not os.path.exists(args.model):
         raise IOError("model filename {0} does not exist".format(args.model))
@@ -260,9 +258,7 @@ def resume(args):
 
 
 def cache(args):
-    """
-    Cache a model.
-    """
+    """ Cache a model. """
 
     if not os.path.exists(args.model):
         raise IOError("model filename {0} does not exist".format(args.model))
@@ -279,17 +275,13 @@ def cache(args):
  
 
 def download(args):
-    """
-    Download requested files.
-    """
+    """ Download requested files. """
 
     raise NotImplementedError
 
 
 def solve(args):
-    """
-    Calculate posterior probability distributions for model parameters given the data.
-    """
+    """ Calculate posterior probability distributions for model parameters given the data. """
 
     if not os.path.exists(args.model):
         raise IOError("model filename {0} does not exist".format(args.model))
@@ -501,13 +493,11 @@ def solve(args):
 
 
 def aggregate(args):
-    """
-    Aggregate JSON-formatted results into a single tabular FITS file.
-    """
+    """ Aggregate JSON-formatted results into a single tabular FITS file. """
 
     if os.path.exists(args.output_filename) and not args.clobber:
-        raise IOError("output filename {0} already exists and we have been asked not to clobber it".format(
-            args.output_filename))
+        raise IOError("output filename {0} already exists and we have been asked not"
+            " to clobber it".format(args.output_filename))
     
     # Let's just assume it all aggregates from JSON to a FITS filename
     results = []
@@ -527,7 +517,8 @@ def aggregate(args):
 
     sorted_columns = []
     # Logic: RA, DEC then all other uppercase fields in alphabetical order
-    # Then any other fields that have associated u_* headers in alphabetical order, as well as their u_* columns
+    # Then any other fields that have associated u_* headers in alphabetical order, as
+    # well as their u_* columns
     # Then all the others in alphabetical order
     if "RA" in columns:
         sorted_columns.append("RA")
@@ -574,9 +565,7 @@ def aggregate(args):
 
 
 def main():
-    """ 
-    Parse arguments and execute a particular subparser.
-    """
+    """ Parse arguments and execute a particular subparser. """
 
     parser = argparse.ArgumentParser(description="sick, the spectroscopic inference crank",
         epilog="See 'sick COMMAND -h' for more information on a specific command. Documentation"

@@ -11,9 +11,7 @@ __all__ = ["human_readable_digit", "latexify", "unique_preserved_list", "wrapper
 import numpy as np
 
 class wrapper(object):
-    """
-    A general wrapper to pickle functions.
-    """
+    """ A general wrapper to pickle functions. """
 
     def __init__(self, func, args):
         self.func = func
@@ -27,12 +25,23 @@ def latexify(labels, default_latex_labels=None):
     """
     Return a LaTeX-ified label.
 
-    Args:
-        labels (str or list-type of str objects): The label(s) to latexify. 
-        default_latex_labels (dict): Dictionary of common labels to use.
+    :param labels:
+        The label(s) to latexify. 
 
-    Returns:
+    :type labels:
+        str or iterable of str objects
+
+    :param default_latex_labels: [optional]
+        Dictionary of default labels to use.
+
+    :type default_latex_labels:
+        dict
+
+    :returns:
         LaTeX-ified label.
+
+    :rtype:
+        str or iterable of str objects
     """
 
     common_labels = {
@@ -86,9 +95,7 @@ def latexify(labels, default_latex_labels=None):
 
 
 def unique_preserved_list(original_list):
-    """
-    Return the unique items of a list in their original order.
-    """
+    """ Return the unique items of a list in their original order. """
     
     seen = set()
     seen_add = seen.add
@@ -96,9 +103,7 @@ def unique_preserved_list(original_list):
 
 
 def human_readable_digit(number):
-    """
-    Return a more human-readable (English) digit.
-    """
+    """ Return a digit in a human-readable string form. """
 
     if 0 >= number:
         return "{0:.1f} ".format(number)

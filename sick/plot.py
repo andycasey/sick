@@ -21,32 +21,179 @@ from triangle import corner
 
 import specutils
 
+# Update the triangle.corner docstring to be sphinxy
+corner.__doc__ = """
+    [This function was written by Dan Foreman-Mackey as part of ``triangle.py``]
+
+    Make a *sick* corner plot showing the projections of a data set in a
+    multi-dimensional space. kwargs are passed to hist2d() or used for
+    ``matplotlib`` styling.
+
+    :param xs:
+        The samples. This should be a 1- or 2-dimensional array. For a 1-D
+        array this results in a simple histogram. For a 2-D array, the zeroth
+        axis is the list of samples and the next axis are the dimensions of
+        the space.
+
+    :type xs:
+        array_like ``(nsamples, ndim)``
+
+    :param weights: [optional]
+        The weight of each sample. If ``None`` (default), samples are given
+        equal weight.
+
+    :type weights:
+        array_like ``(nsamples,)``
+
+    :param labels: [optional]
+        A list of names for the dimensions.
+
+    :type labels:
+        iterable ``(ndim,)``
+
+    :param show_titles: [optional]
+        Displays a title above each 1-D histogram showing the 0.5 quantile
+        with the upper and lower errors supplied by the quantiles argument.
+
+    :type show_titles:
+        bool
+
+    :param title_fmt: [optional]
+        The format string for the quantiles given in titles.
+        (default: ``.2f``)
+
+    :type title_fmt:
+        str
+
+    :param title_args: [optional]
+        Any extra keyword arguments to send to the ``add_title`` command.
+
+    :type title_args:
+        dict
+
+    :param extents: [optional]
+        A list where each element is either a length 2 tuple containing
+        lower and upper bounds (extents) or a float in range (0., 1.)
+        giving the fraction of samples to include in bounds, e.g.,
+        [(0.,10.), (1.,5), 0.999, etc.].
+        If a fraction, the bounds are chosen to be equal-tailed.
+
+    :type extents:
+        iterable ``(ndim,)``
+
+    :param truths: [optional]
+        A list of reference values to indicate on the plots.
+
+    :type truths:
+        iterable ``(ndim,)``
+
+    :param truth_color: [optional]
+        A ``matplotlib`` style color for the ``truths`` makers.
+
+    :type truth_color:
+        str
+
+    :param scale_hist: [optional]
+        Should the 1-D histograms be scaled in such a way that the zero line
+        is visible?
+
+    :type scale_hist:
+        bool
+
+    :param quantiles: [optional]
+        A list of fractional quantiles to show on the 1-D histograms as
+        vertical dashed lines.
+
+    :type quantiles:
+        iterable
+
+    :param verbose: [optional]
+        If true, print the values of the computed quantiles.
+
+    :type verbose:
+        bool
+
+    :param plot_contours: [optional]
+        Draw contours for dense regions of the plot.
+
+    :type verbose:
+        bool
+
+    :param plot_datapoints: [optional]
+        Draw the individual data points.
+
+    :type plot_datapoints:
+        bool
+
+    :param fig: [optional]
+        Overplot onto the provided figure object.
+
+    :type fig:
+        ``matplotlib.Figure``
+
+    :raises ValueError:
+        If a ``fig`` is provided with the incorrect number of axes.
+
+    :returns:
+        The triangle figure.
+
+    :rtype:
+        :class:`matplotlib.Figure`
+"""
+
 def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     alpha=0.5, fig=None):
     """
     Create a plot showing the walker values for each parameter at every step.
 
-    Args:
-        xs (array_like) : The samples. This should be a 3D array of size 
-            (n_walkers, n_steps, n_parameters)
+    :param xs:
+        The samples. This should be a 3D :class:`numpy.ndarray` of size (``n_walkers``,
+        ``n_steps``, ``n_parameters``).
 
-        labels (iterable, optional) : A list of names for the parameters.
+    :type xs:
+        :class:`numpy.ndarray`
 
-        truths (iterable, optional) : A list of reference values to indicate on
-            the plots.
+    :param labels: [optional]
+        Labels for all the parameters.
 
-        truth_color (str, optional) : A `matplotlib` style color for the `truths`
-            markers.
+    :type labels:
+        iterable of strings or None
 
-        burn_in (int, optional) : A reference step to indicate on the plots.
+    :param truths: [optional]
+        Reference values to indicate on the plots.
 
-        alpha (float between [0, 1], optional) : Transparency of individual walker
-            lines.
+    :type truths:
+        iterable of floats or None
 
-        fig (`matplotlib.Figure`, optional) : Overplot onto the provided figure object.
+    :param truth_color: [optional]
+        A ``matplotlib`` style color for the ``truths`` markers.
+
+    :param burn_in: [optional]
+        Reference step to indicate on the plots.
+
+    :type burn_in:
+        integer or None
+
+    :param alpha: [optional]
+        Transparency of individual walker lines between zero and one.
+
+    :type alpha:
+        float
+
+    :param fig: [optional]
+        Overplot onto the provided figure object.
+
+    :type fig:
+        :class:`matplotlib.Figure` or None
     
-    Returns:
-        A `matplotlib.Figure` object.
+    :raises ValueError:
+        If a ``fig`` is provided with the incorrect number of axes.
+
+    :returns:
+        The chain figure.
+
+    :rtype:
+        :class:`matplotlib.Figure`
     """
 
     n_walkers, n_steps, K = xs.shape
@@ -110,26 +257,56 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
 
 def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None):
     """
-    Project the maximum likelihood values (and some sampled posterior points) as
-    model spectra.
+    Project the maximum likelihood values and sampled posterior points as spectra.
 
-    Args:
-        sampler (emcee.EnsembleSampler) : The Ensemble Sampler
+    :param sampler:
+        The sampler employed.
 
-        model (sick.models.Model) : The model class.
+    :type sampler:
+        :class:`emcee.EnsembleSampler`
 
-        data (list of specutils.Spectrum1D objects) : The observed spectra.
+    :param model:
+        The model employed.
 
-        extents (iterable (ndim, ), optional) : 
+    :type model:
+        :class:`sick.models.Model`
 
-        burn_in (int, optional) : A reference step to indicate on the plots.
+    :param data:
+        The observed spectra.
 
-        fig (`matplotlib.Figure`, optional) : Overplot onto the provided figure object.
+    :type data:
+        iterable of :class:`sick.specutils.Spectrum1D` objects
 
-        figsize (dimx, dimy, optional) : The figure size.
+    :param extents: [optional]
+        The wavelength extents to plot for each channel in the form of [(min_chan_1,
+        max_chan_1), ..., (min_chan_N, max_chan_N)]
     
-    Returns:
-        A `matplotlib.Figure` object.
+    :type extents:
+        tuple or None
+
+    :param fig: [optional]
+        Overplot onto the provided figure object.
+
+    :type fig:
+        :class:`matplotlib.Figure` or None
+    
+    :param figsize: [optional]
+        The figure size (x-dimension, y-dimension) in inches.
+
+    :type figsize:
+        tuple or None
+
+    :raises ValueError:
+        If a ``fig`` is provided with the incorrect number of axes.
+
+    :raise TypeError:
+        If the ``data`` are not provided in the correct type.
+
+    :returns:
+        The projection figure.
+
+    :rtype:
+        :class:`maplotlib.Figure`
     """
     if not isinstance(data, (tuple, list)) or \
     any([not isinstance(each, specutils.Spectrum1D) for each in data]):

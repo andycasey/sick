@@ -35,10 +35,21 @@ def load_model_data(filename, **kwargs):
     """
     Load dispersion or flux data from a filename. 
 
-    Args:
-        filename (str): the filename (FITS, memmap, ASCII) to load from. 
-    Returns:
+    :param filename:
+        The filename (formatted as FITS, memmap, or ASCII) to load from.
+
+    :type filename:
+        str
+
+    :param kwargs: [optional]
+        Keyword arguments that are passed to the loader function (e.g. 
+        :class:`pyfits.open`, :class:`numpy.memmap`, or :class:`numpy.loadtxt`
+        for FITS, memmap or ASCII formats respectively)
+
+    :returns:
         An array of data values.
+
+    :type numpy.ndarray:
     """
 
     # Load by the filename extension
@@ -60,21 +71,30 @@ def load_model_data(filename, **kwargs):
 class Model(object):
     """
     A class to represent the approximate data-generating model for spectra.
+
+    :param filename:
+        A YAML- or JSON-formatted model filename.
+
+    :type filename:
+        str
+
+    :param validate: [optional]
+        Validate that the model is specified correctly.
+
+    :type validate:
+        bool
+    
+    :raises:
+        IOError if the ``filename`` does not exist.
+
+        ValueError if the number of model dispersion and flux points are mis-matched.
+
+        TypeError if the model is cached and the grid points filename has no column
+        (parameter) names.
     """
 
     def __init__(self, filename, validate=True):
-        """
-        Initialise a model class from a filename.
-
-        Args:
-            filename (str): a YAML or JSON-style formatted filename.
-            validate (bool): validate that the model is specified correctly.
-        Raises:
-            IOError: if `filename` does not exist.
-            ValueError: if there is a mis-match in dispersion and flux points.
-            TypeError: if the grid points do not contain column information.
-        """
-
+        
         if not os.path.exists(filename):
             raise IOError("no model filename {0} exists".format(filename))
 
@@ -229,16 +249,20 @@ class Model(object):
 
     @property
     def hash(self):
+        """ Return a MD5 hash of the JSON-dumped model configuration. """ 
         return md5(json.dumps(self.configuration).encode("utf-8")).hexdigest()
 
 
     @property
     def cached(self):
+        """ Return whether the model has been cached. """
         return "cached_channels" in self.configuration.keys()
 
 
     @property
     def channels(self):
+        """ Return the model channels. """
+
         try:
             return self._channels
 
@@ -252,7 +276,10 @@ class Model(object):
     @property
     def priors(self):
         """
-        Return readable priors for the model parameters.
+        Return the prior distributions employed for the model.
+
+        :returns:
+            Dictionary of parameters (keys) and prior distributions (values)
         """
 
         try:
@@ -279,10 +306,25 @@ class Model(object):
 
     def save(self, filename, clobber=False):
         """
-        Save the model configuration to file.
+        Save the model configuration.
 
-        Args:
-            filename (str): The filename to save the model configuration to.
+        :param filename:
+            The filename to save the model configuration to.
+
+        :type filename:
+            str
+
+        :param clobber: [optional]
+            Clobber the filename if it already exists.
+
+        :type clobber:
+            bool
+
+        :returns:
+            True
+
+        :raises:
+            IOError
         """
 
         if os.path.exists(filename) and not clobber:
@@ -299,10 +341,14 @@ class Model(object):
         """
         Reference model channels to observed spectra based on their dispersions.
 
-        Args:
-            observations (list of Spectrum1D objects): The observed spectra.
-        Returns:
-            mapped_channels (list of str): A list of model channels mapped to each observed channel.
+        :param observations:
+            The observed spectra.
+
+        :type observations:
+            list of :class:`sick.specutils.Spectrum1D` objects
+
+        :returns:
+            A list of model channels mapped to each observed channel.
         """
 
         mapped_channels = []
@@ -345,7 +391,7 @@ class Model(object):
             mean_observed_pixel_size = np.mean(np.diff(spectrum.disp))
             mean_model_pixel_size = np.mean(np.diff(self.dispersion[channel]))
             if mean_model_pixel_size > mean_observed_pixel_size:
-                raise ValueError("the mean model pixel size in the {channel} channel is larger than the mean" \
+                logging.warn("The mean model pixel size in the {channel} channel is larger than the mean" \
                     " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}".format(
                         channel=channel, wl_start=np.min(spectrum.disp), wl_end=np.max(spectrum.disp)))
 
@@ -357,6 +403,9 @@ class Model(object):
     def validate(self):
         """
         Validate that the model has been specified properly.
+
+        :returns:
+            True
         """
 
         self._validate_channels()
@@ -373,19 +422,20 @@ class Model(object):
         """
         Validate that the normalisation settings in the model are specified correctly.
 
-        Returns:
+        :returns:
             True if the normalisation settings for this model are specified correctly.
-        Raises:
-            KeyError: if a model channel does not have a normalisation settings specified.
-            TypeError: if an incorrect data type is specified for a normalisation setting.
-            ValueError: if an incompatible data value is specified for a normalisation setting.
+
+        :raises:
+            KeyError if a model channel does not have a normalisation settings specified.
+            TypeError if an incorrect data type is specified for a normalisation setting.
+            ValueError if an incompatible data value is specified for a normalisation setting.
         """
 
         if "normalise" not in self.configuration.keys():
             return True
 
         # Verify the settings for each channel.
-        for channel in self.channels:
+        for channel in set(self.channels):
 
             # Are there any normalisation settings specified for this channel?
             if not self.configuration["normalise"].get(channel, None): continue
@@ -429,11 +479,12 @@ class Model(object):
         """
         Validate that the settings in the model are specified correctly.
 
-        Returns:
+        :returns:
             True if the settings for this model are specified correctly.
-        Raises:
-            KeyError: if a model channel does not have a normalisation settings specified.
-            TypeError: if an incorrect data type is specified for a normalisation setting.
+
+        :raises:
+            KeyError if a model channel does not have a normalisation settings specified.
+            TypeError if an incorrect data type is specified for a normalisation setting.
         """
 
         settings = self.configuration.get("settings", {})
@@ -466,14 +517,14 @@ class Model(object):
         """
         Validate that the doppler shift settings in the model are specified correctly.
 
-        Returns:
+        :returns:
             True if the doppler settings for this model are specified correctly.
         """
 
         if "redshift" not in self.configuration.keys():
             return True 
 
-        for channel in self.channels:
+        for channel in set(self.channels):
             if not self.configuration["redshift"].get(channel, None): continue
 
         return True
@@ -483,14 +534,14 @@ class Model(object):
         """
         Validate that the smoothing settings in the model are specified correctly.
 
-        Returns:
+        :returns:
             True if the smoothing settings for this model are specified correctly.
         """ 
 
         if "convolve" not in self.configuration.keys():
             return True 
 
-        for channel in self.channels:
+        for channel in set(self.channels):
             if not self.configuration["convolve"].get(channel, None): continue
         return True
 
@@ -499,17 +550,18 @@ class Model(object):
         """
         Validate that the channels in the model are specified correctly.
 
-        Returns:
+        :returns:
             True if the channels in the model are specified correctly.
-        Raises:
-            KeyError: if no channels are specified.
-            ValueError: if an illegal character is present in any of the channel names.
+
+        :raises:
+            KeyError if no channels are specified.
+            ValueError if an illegal character is present in any of the channel names.
         """
 
         if "channels" not in self.configuration.keys() and "cached_channels" not in self.configuration.keys():
             raise KeyError("no channels found in model file")
 
-        for channel in self.channels:
+        for channel in set(self.channels):
             if "." in channel:
                 raise ValueError("channel name '{0}' cannot contain a full-stop character".format(channel))
         return True
@@ -519,17 +571,18 @@ class Model(object):
         """
         Validate that the masks in the model are specified correctly.
 
-        Returns:
+        :returns:
             True if the masks in the model are specified correctly.
-        Raises:
-            TypeError: if the masks are not specified correctly.
+
+        :raises:
+            TypeError if the masks are not specified correctly.
         """
 
         # Masks are optional
         if "masks" not in self.configuration.keys():
             return True
 
-        for channel in self.channels: 
+        for channel in set(self.channels):
             if not self.configuration["masks"].get(channel, None): continue
 
             if not isinstance(self.configuration["masks"][channel], (tuple, list)):
@@ -547,9 +600,7 @@ class Model(object):
 
     @property
     def parameters(self):
-        """
-        Return the parameters for the model.
-        """
+        """ Return the model parameters. """
 
         if hasattr(self, "_parameters"):
             return self._parameters
@@ -603,40 +654,63 @@ class Model(object):
         """
         Cache the model for faster read access at runtime.
 
-        Args:
-            grid_points_filename (str): filename for pickling the model grid points.
+        :param grid_points_filename:
+            Filename for pickling the model grid points.
 
-            flux_filename (str): The flux points will be combined into a single array
-                and memory-mapped to the given filename.
+        :type grid_points_filename:
+            str
 
-            dispersion_filenames (dict): A dictionary containing channels as keys,
-                and filenames as values. The dispersion points will be memory-mapped
-                to the given filenames.
+        :param flux_filename:
+            The filename to save all the memory-mapped flux points to.
 
-            wavelengths (dict): A dictionary containing channels as keys and wavelength
-                regions as values. The wavelength regions specify the minimal and
-                maximal regions to cache in each channel. By default, the full channel
-                will be cached.
+        :type flux_filename:
+            str
 
-            smoothing_kernels (dict): A dictionary containing channels as keys and
-                smoothing kernels as values. By default no smoothing is performed.
+        :param dispersion_filenames: [optional]
+            A dictionary containing channels as keys, and filenames as values. The
+            dispersion points will be memory-mapped to the given filenames.
 
-            sampling_rate (dict): A dictionary containing channels as keys and
-                sampling rate (integers) as values.
+        :type dispersion_filenames:
+            dict
 
-            clobber (bool): Clobber existing grid point, dispersion and flux filenames
-                if they already exist.
+        :param wavelengths:
+            A dictionary containing channels as keys and wavelength regions as values.
+            The wavelength regions specify the minimal and maximal regions to cache in
+            each channel. By default, the full channel will be cached.
 
-        Returns:
-            Dictionary containing the current model configuration with the newly
+        :type wavelengths:
+            dict
+
+        :param smoothing_kernels:
+            A dictionary containing channels as keys and smoothing kernels as values.
+            By default no smoothing is performed.
+
+        :type smoothing_kernels:
+            dict
+
+        :param sampling_rate:
+            A dictionary containing channels as keys and sampling rate (integers) as
+            values.
+
+        :type sampling_rate:
+            dict
+
+        :param clobber: [optional]
+            Clobber existing grid point, dispersion and flux filenames if they exist.
+
+        :type clobber:
+            bool
+
+        :returns:
+            A dictionary containing the current model configuration with the newly
             cached channel parameters. This dictionary can be directly written to a
             new model filename.
 
-        Raises:
-            IOError: if clobber is set as False, and any of the grid_points, dispersion,
-                or flux filenames already exist.
+        :raises:
+            IOError if clobber is set as False, and any of the grid_points, dispersion,
+            or flux filenames already exist.
 
-            TypeError: if invalid smoothing kernels or wavelengths are supplied
+            TypeError if invalid smoothing kernels or wavelengths are supplied.
         """
 
         if not clobber:
@@ -662,9 +736,7 @@ class Model(object):
         if sampling_rate is None:
             sampling_rate = dict(zip(self.channels, np.ones(len(self.channels))))
 
-        # We need to know how big our arrays will be
         n_points = len(self.grid_points)
-
         if wavelengths is None:
             n_pixels = []
             wavelength_indices = {}
@@ -741,14 +813,24 @@ class Model(object):
         """
         Return the indices of the nearest `n` neighbours to `point`.
 
-        Args:
-            point (list): The point to find neighbours around.
-            n (int): The number of neighbours to find on each side, in each parameter.
-        Returns:
-            indices (np.array): The indices of the nearest neighbours.
-        Raises:
-            ValueError: if the point is incompatible with the grid shape, or if it is
-                outside of the grid boundaries.
+        :param point:
+            The point to find neighbours around.
+
+        :type point:
+            list
+
+        :param n: [optional]
+            The number of neighbours to find on each side, in each parameter.
+
+        :type n:
+            int
+
+        :returns:
+            The indices of the nearest neighbours as a :class:`numpy.array`.
+
+        :raises:
+            ValueError if the point is incompatible with the grid shape, or if it is
+            outside of the grid boundaries.
         """
 
         if len(point) != len(self.grid_points.dtype.names):
@@ -775,10 +857,14 @@ class Model(object):
         """
         Return whether the provided point exists in the model grid.
 
-        Args:
-            point (list): The point to find in the model grid.
-        Returns:
-            index (int): The index of the point in the model grid, if it exists. Otherwise False.
+        :param point:
+            The point to find in the model grid.
+
+        :type point:
+            list
+
+        :returns:
+            The index of the point in the model grid if it exists, otherwise False.
         """
 
         num_parameters = len(self.grid_points.dtype.names)
@@ -791,12 +877,23 @@ class Model(object):
         """
         Return interpolated model flux at a given point.
 
-        Args:
-            point (list): The point to interpolate a model flux at.
-        Returns:
-            fluxes (dict): Dictionary of channels (keys) and arrays of interpolated fluxes (values).
-        Raises:
-            ValueError: when a flux point could not be interpolated (e.g., outside grid boundaries)
+        :param point:
+            The point to interpolate a model flux at.
+
+        :type point:
+            list
+
+        :param kwargs: [optional]
+            Other parameters that are directly passed to :class:`scipy.interpolate.griddata`
+            if the model has not been cached. Otherwise the kwargs are not used.
+
+        :returns:
+            A dictionary of channels (keys) and :class:`numpy.array`s of interpolated
+            fluxes (values).
+
+        :raises:
+            ValueError when a flux point could not be interpolated (e.g., outside grid
+            boundaries).
         """
 
         global _sick_interpolator_
@@ -836,9 +933,19 @@ class Model(object):
         """
         Return pixel masks for the model spectra, given theta.
 
-        Args:
-            dispersion_maps (list of array objects): The dispersion maps for each channel (keys).
-        Returns:
+        :param dispersion_maps:
+            The dispersion maps for each channel.
+
+        :type dispersion_maps:
+            List of :class:`numpy.array` objects.
+
+        :param theta:
+            The model parameters :math:`\\Theta`.
+
+        :type theta:
+            dict
+
+        :returns:
             None if no masks are specified by the model. If pixel masks are specified,
             a pixel mask dictionary with channels as keys, and arrays as values is returned.
             Zero in arrays indicates pixel was masked, one indicates it was used.
@@ -911,10 +1018,27 @@ class Model(object):
         """
         Return normalised, doppler-shifted, convolved and transformed model fluxes.
 
-        Args:
-            observations (list of Spectrum1D objects): The observed data.
-        Returns:
-            model_spectra (list of Spectrum1D objects): Model spectra for the given theta.
+        :param observations: [optional]
+            The observed data.
+
+        :type observations:
+            list of :class:`sick.specutils.Spectrum1D` objects.
+
+        :param full_output: [optional]
+            Return the model fluxes and the model continuum for each channel.
+
+        :type full_output:
+            bool
+
+        :param theta:
+            The model parameters :math:`\\Theta`.
+
+        :type theta:
+            dict
+
+        :returns:
+            Model spectra for the given theta as a list of :class:`sick.specutils.Spectrum1D`
+            objects.
         """
 
         # Get the grid point and interpolate

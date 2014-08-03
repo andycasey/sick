@@ -21,9 +21,7 @@ from scipy import ndimage, stats
 logger = logging.getLogger(__name__.split(".")[0])
 
 class Spectrum(object):
-    """
-    A class to deal with loading lots of different types of spectra.
-    """
+    """ A general spectrum class. """
 
     @classmethod
     def load(cls, filename, assumed_snr=50, **kwargs):
@@ -48,8 +46,10 @@ class Spectrum(object):
 
 
 class Spectrum1D(object):
-    """This is a temporary class holder for a Spectrum1D object until the
-    astropy.specutils.Spectrum1D module has advanced sufficiently to replace it."""
+    """
+    This is a temporary class holder for a Spectrum1D object until the
+    :class:`astropy.specutils.Spectrum1D` module has advanced sufficiently to replace it.
+    """
     
     def __init__(self, disp, flux, variance=None, headers=None):
         """Initializes a `Spectrum1D` object with the given dispersion and flux
