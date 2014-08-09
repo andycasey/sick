@@ -58,6 +58,15 @@ def initial_point(evaluated_priors, model, observations):
 
     :type observations:
         iterable of :class:`sick.specutils.Spectrum1D` objects
+
+    :raises ValueError:
+        If the scattering distribution for a parameter is uninterpretable.
+
+    :returns:
+        An initial starting point for :math:`\\Theta`.
+
+    :rtype:
+        :class:`numpy.array`
     """
 
     # Set the default priors:
@@ -238,7 +247,7 @@ def initial_point(evaluated_priors, model, observations):
                 current_point.append(random.normal(coefficient_value, knot_sigma))
 
         else:
-            raise KeyError("Cannot interpret initial scattering distribution for {0}".format(parameter))
+            raise ValueError("Cannot interpret initial scattering distribution for {0}".format(parameter))
 
     # Check that we have the full number of walker values
     if len(current_point) == len(model.parameters):
@@ -252,12 +261,20 @@ def log_prior(theta, model):
     """
     Return the prior for a set of theta given the model.
 
-    Args:
-        theta (list): The theta parameters that correspond with model.parameters
-        model (sick.models.Model object): The model class.
-    
-    Returns:
+    :param theta:
+        The model parameter values.
+
+    :type theta: list
+
+    :param model:
+        The model class.
+
+    :type model: :class:`sick.models.Model`
+
+    :returns:
         The logarithmic prior for the parameters theta.
+
+    :rtype: float
     """
 
     log_prior = 0
@@ -285,10 +302,26 @@ def log_likelihood(theta, model, observations):
     """
     Return the logarithmic likelihood for a set of theta given the model.
 
-    Args:
-        theta (list): The theta parameters that correspond with model.parameters
-        model (sick.models.Model object): The model class.
-        observations (list of specutils.Spectrum1D objects): The data.
+    :param theta:
+        The model parameter values.
+
+    :type theta: list
+
+    :param model:
+        The model class.
+
+    :type model: :class:`sick.models.Model`
+
+    :param observations:
+        The observed spectra.
+
+    :type observations:
+        A list of :class:`sick.specutils.Spectrum1D` objects.
+
+    :returns:
+        The logarithmic likelihood for the parameters theta.
+
+    :rtype: float
     """
 
     theta_dict = dict(zip(model.parameters, theta))
@@ -335,10 +368,26 @@ def log_probability(theta, model, observations):
     """
     Return the logarithmic probability (prior + likelihood) for theta given the data.
 
-    Args:
-        theta (list): The theta parameters that correspond with model.parameters
-        model (sick.models.Model object): The model class.
-        observations (list of specutils.Spectrum1D objects): The data.
+    :param theta:
+        The model parameter values.
+
+    :type theta: list
+
+    :param model:
+        The model class.
+
+    :type model: :class:`sick.models.Model`
+
+    :param observations:
+        The observed spectra.
+
+    :type observations:
+        A list of :class:`sick.specutils.Spectrum1D` objects.
+
+    :returns:
+        The logarithmic probability for the parameters theta.
+
+    :rtype: float
     """
 
     prior = log_prior(theta, model)
@@ -352,7 +401,6 @@ def log_probability(theta, model, observations):
 def sample_ball(point, observed_spectra, model):
     """
     Return a multi-parameteral Gaussian around a ball point.
-
     """ 
     
     # Create a sample ball around the result point
