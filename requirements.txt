@@ -5,4 +5,5 @@ pyfits
 pyyaml
 emcee>=1.1.0
 acor
+requests
 triangle_plot

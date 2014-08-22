@@ -15,7 +15,11 @@ import cPickle as pickle
 import json
 import multiprocessing
 import os
+import requests
+import sys
+import tarfile
 import yaml
+from textwrap import wrap
 from time import time
 
 import numpy as np
@@ -29,7 +33,28 @@ from matplotlib.ticker import MaxNLocator
 
 import sick
 
+CACHED_MODEL_GRID_URL = "https://raw.githubusercontent.com/andycasey/sick/master/.cached-models.json"
+
 logger = logging.getLogger("sick")
+
+def download_file(url):
+    """ Download a file to the current working directory. """
+    local_filename = url.split('/')[-1]
+    r = requests.get(url, stream=True)
+    with open(local_filename, 'wb') as f:
+        progress, total = 0, int(r.headers.get("content-length"))
+        for chunk in r.iter_content(chunk_size=1024):
+            if chunk:
+                progress += len(chunk)
+                complete = int(50 * progress / total)
+                sys.stdout.write("\r[{0}{1}] {2:3.0f}%".format('=' * complete,
+                    ' ' * (50-complete), 2*complete))
+                sys.stdout.flush()
+                f.write(chunk)
+                f.flush()
+    sys.stdout.flush()
+    sys.stdout.write("\nDownload of {0} complete.\n".format(local_filename))
+    return local_filename
 
 def resume(args):
     """ Resume a MCMC simulation from a previous state. """
@@ -277,7 +302,82 @@ def cache(args):
 def download(args):
     """ Download requested files. """
 
-    raise NotImplementedError
+    # Get the current list of model grids
+    cached_model_list = requests.get(CACHED_MODEL_GRID_URL).json()
+    message = \
+        "{0}: {1}\n"\
+        "\t{2}\n"\
+        "\tReference: {3}\n\n"
+
+    def exit_without_download():
+        sys.stdout.write("No model downloaded.\n")
+        sys.exit(-1)
+
+    if args.model_grid_name == "list":
+        # Just print out all of the available ones. Follow pip-style.
+        sys.stdout.write("Found {0} cached sick models online:\n".format(
+            len(cached_model_list)))
+        for model in cached_model_list:
+            sys.stdout.write(message.format(model["short_name"],
+                model["long_name"], "\n\t".join(wrap(model["description"])),
+                model["ads_reference"]))
+
+    else:
+        # Look for the specific model.
+        cached_model_names = [model["short_name"].lower() \
+            for model in cached_model_list]
+
+        requested_model_name = args.model_grid_name.lower()
+        if requested_model_name not in cached_model_names:
+            sys.stdout.write("No cached model matching name '{0}' found. Use " \
+                "'sick get list' to retrieve the current list of cached models"\
+                " available online.\n".format(requested_model_name))
+            sys.exit(-1)
+
+        else:
+            # Confirm the selection
+            model = cached_model_list[cached_model_names.index(requested_model_name)]
+            sys.stdout.write("Found {0} model:\n".format(model["short_name"]))
+            sys.stdout.write(message.format(model["short_name"],
+                model["long_name"], "\n\t".join(wrap(model["description"])),
+                model["ads_reference"]))
+            sys.stdout.write("Download {0} model? [y/N]".format(model["short_name"]))
+            confirm = raw_input().lower().strip()
+            if len(confirm) > 0 and confirm[0] == "y":
+
+                # Check that we won't overwrite anything.
+                filename = model["download_link"].split("/")[-1]
+                if os.path.exists(filename):
+                    sys.stdout.write("Clobber existing file {0}? [y/N]".format(
+                        filename))
+                    confirm = raw_input().lower().strip()
+                    if 1 > len(confirm) or confirm[0] != "y":
+                        exit_without_download()
+
+                # Once downloaded, it could overwrite files in a directory:
+                if os.path.exists(model["short_name"]):
+                    sys.stdout.write("This may overwrite files in pre-existing"\
+                        " folder {0}/ -- is that OK? [y/N]".format(model["short_name"]))
+                    confirm = raw_input().lower().strip()
+                    if 1 > len(confirm) or confirm[0] != "y":
+                        exit_without_download()
+
+                # OK, download it.
+                sys.stdout.write("Downloading {0} model...\n".format(
+                    model["short_name"]))
+                filename = download_file(model["download_link"])
+
+                # Now untar it to a new directory.
+                with tarfile.open(filename, "r") as tarball:
+                    tarball.extractall(path=model["short_name"])
+                sys.stdout.write("Extracted files to {0}/\n".format(model["short_name"]))
+
+                # Remove the tarball
+                os.remove(filename)
+
+            else:
+                exit_without_download()
+
 
 
 def solve(args):
@@ -593,10 +693,13 @@ def main():
         help="The JSON result filenames to combine.")
     aggregate_parser.set_defaults(func=aggregate)
 
-    # Create parser for the get command
-    get_parser = subparsers.add_parser("get", parents=[parent_parser],
-        help="Retrieve specific model or data files (e.g., example files) from online repository.")
-    get_parser.set_defaults(func=download)
+    # Create parser for the download command
+    download_parser = subparsers.add_parser("download", parents=[parent_parser],
+        help="Download a pre-cached model from an online repository.")
+    download_parser.add_argument("model_grid_name", nargs="?",
+        help="The name of the pre-cached model grid to download, or 'list' (de"\
+            "fault) to see what pre-cached models are available.", default="list")
+    download_parser.set_defaults(func=download)
 
     # Create parser for the solve command
     solve_parser = subparsers.add_parser("solve", parents=[parent_parser],
@@ -660,11 +763,11 @@ def main():
 
     cache_parser = subparsers.add_parser("cache", parents=[parent_parser],
         help="Cache the provided model for fast access at run-time.")
-    cache_parser.add_argument("model", dtype=str,
+    cache_parser.add_argument("model", type=str,
         help="The (YAML- or JSON-formatted) model filename.")
-    cache_parser.add_argument("grid_points_filename", dtype=str,
+    cache_parser.add_argument("grid_points_filename", type=str,
         help="The filename to cache the grid point information to.")
-    cache_parser.add_argument("fluxes_filename", dtype=str,
+    cache_parser.add_argument("fluxes_filename", type=str,
         help="The filename to cache the fluxes into.")
     cache_parser.set_defaults(func=cache)
 
