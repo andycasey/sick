@@ -1,6 +1,7 @@
 dist/
 build/
 docs/_build/
+docs/README
 document/*.aux
 document/*.blg
 document/*.bbl

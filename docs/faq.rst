@@ -16,4 +16,4 @@ Yes. The multi-dimensional interpolation would be (at least) an order of magnitu
 .. rubric:: **What if I have a question that's not on this page?**
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
-First see if you can find the answer in the documentation (use the search bar!) or in the `paper describing sick <arxiv.org>`_. If that doesn't help then please `open an issue <github.com/andycasey/sick/issues/new>`_ or `drop me a line <mailto:andy@astrowizici.st>`_.
+First see if you can find the answer in the documentation (use the search bar!) or in the `paper describing sick <arxiv.org>`_. If that doesn't help then please `open an issue <https://github.com/andycasey/sick/issues/new>`_ or `drop me a line <mailto:andy@astrowizici.st>`_.

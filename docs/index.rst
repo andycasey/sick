@@ -28,8 +28,10 @@ User's Guide
 
    install
    getting-started
-   model-configuration-reference
-   examples/
+   model-configuration
+   examples/self-consistent
+   examples/solar
+   examples/segue
    api
    contributing
    attribution
