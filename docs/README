@@ -1,0 +1,3 @@
+scp -r _build/html/* root@astrowizici.st:~/web/sick/
+
+k81!
