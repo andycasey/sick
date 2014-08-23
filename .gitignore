@@ -1,5 +1,10 @@
 dist/
 build/
 docs/_build/
+document/*.aux
+document/*.blg
+document/*.bbl
+document/*.log
+document/*.synctex.gz
 *egg-info/
 *.pyc
