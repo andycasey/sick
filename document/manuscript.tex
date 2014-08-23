@@ -1,7 +1,7 @@
-\documentclass{aastex}
+\documentclass[iop]{emulateapj}
 \usepackage[utf8]{inputenc}
 
-\newcommand{\sick}{\textit{sick}}
+\newcommand{\sick}{\texttt{sick}}
 \newcommand{\article}{\textit{Article}}
 
 \usepackage{amsmath}
@@ -103,10 +103,12 @@ astrophysical parameters.
 In this \article{} I present \sick{}: a well-tested, MIT-licensed probabilistic 
 software package for inference from spectroscopic data. \sick{} employs an 
 approximation to data-generating models. Instead of attempting to model all 
-kinds of expensive astrophysical processes (e.g., supernova explosions, stars, 
+kinds of expensive astrophysical processes (e.g., stars, supernova, 
 and any other interesting astrophysical processes) at run-time, it performs 
 efficient multi-dimensional interpolation of model spectra from pre-computed 
-grids. This approach is suitable for a plethora of different astrophysical 
+grids and includes contributory phenomena (e.g., continuum, redshift) as free
+parameters within an objective scalar-justified model. This approach is suitable 
+for a plethora of different astrophysical 
 processes, allowing any user to easily specify a model using existing published 
 spectral grids, and infer astrophysical properties from their data. Aspects of 
 the probabilistic model are described in Section \ref{sec:model}. A number of 
@@ -130,7 +132,8 @@ models are fully-\sick{} compatible. However given the research background of
 the author, I will introduce the probabilistic model by focussing on stellar 
 photospheric inferences.
 
-The first step of the (approximate) generative model is to interpolate a model 
+The first step of the (approximate\footnote{The term approximate is used because 
+model spectra are interpolated.}) generative model is to interpolate a model 
 spectrum. \sick{} employs the Quickhull algorithm \citep{quickhull} to linearly 
 interpolate in multiple dimensions. Irregularly-spaced grids are perfectly 
 acceptable; Quickhull does not require the grid to be rectangular or 
@@ -230,7 +233,7 @@ s_{i}^2 = \sigma_{i}^2 + f^{2}E_{i}^2
 
 We now have a \textit{generative model} for the data. The frequency (or 
 probability) distribution ${p\left(F_i|\lambda_i,\sigma_i,\bm{\psi},z,\sigma_s,\{c\}_{0}^{m}\right)}$ 
-for $F_i$ is given by
+for the observed data $F_i$ is given by
 
 \begin{equation}
 p\left(F_i|\lambda_i,\sigma_{i},\bm{\psi},z,\sigma_{s},\{c\}_{0}^{m},f\right) = 
@@ -265,11 +268,11 @@ be adjusted to include or ignore any combination of phenomena.
 Finally, I consider the handling of outliers in the data. These may be in the form 
 of cosmic ray spikes, improper calibration of the data, telluric features, or simply 
 poorly modelled spectral regions. Treatment of these artefacts is achieved using a 
-Gaussian mixture model: a combination of two models. In the mixture model, the data 
+Gaussian mixture model: a combination of two models. In a mixture model, the data 
 are fit by the sum of amplitudes ($1 - P_o$ and $P_o$, respectively) of two 
 distributions: the expected fluxes $E_i$, and a normal distribution centered along 
 the continuum function $C_i$ with variance $s_{i}^2 + V_{o}$. This requires the 
-inclusion of two (final) additional parameters: $P_o$ and $V_o$. The prior 
+inclusion of two  additional parameters: $P_o$ and $V_o$. The prior 
 distribution function $p\left(V_o\right)$ requires $V_{o}$ to always be positive 
 (Equation \ref{eq:default_priors}), and as such the outlier distribution will 
 \textit{always} have a larger variance. Distributions of smaller variance are more 
@@ -316,7 +319,7 @@ probability distribution. Priors are discussed in more detail in Section \ref{se
 
 With all of the combined effects there are 16 free parameters including $\bm{\psi}$, 
 the astrophysical quantities of interest. For the examples presented in Section 
-\ref{sec:examples}, this requires interpolation between 92 billion pixels in four 
+\ref{sec:examples}, this requires interpolation between $9.2 \times 10^{10}$ pixels in four 
 dimensions. While the description might appear daunting, the problem is tractable, 
 numerically efficient, and easy to configure. By default \sick{} numerically solves 
 this problem in three sequential steps, which are described in the following 
@@ -360,14 +363,13 @@ is \textit{only} employed for the initial random scattering stage: it is
 After the random scattering step, the most probable $\bm{\theta}$ point is used 
 as an initial guess for numerical optimisation. A number of suitable minimisation 
 algorithms are available in \sick{} through the SciPy \citep{scipy} optimization 
-module. The Nelder-Mead algorithm \citep{nelder-mead} is employed by default, and 
-the full suite of optimisation algorithms available is listed in the online 
-documentation. Unlike other optimisation techniques, the Nelder-Mead algorithm 
+module. The \citet{nelder-mead} algorithm is employed by default.
+Unlike other optimisation techniques, the Nelder-Mead algorithm 
 does not approximate first- or second-order derivatives, and can consequently be 
 less efficient than other approaches. However it is robust in high-dimensional 
 space, even in the presence of substantial noise, and has been successfully 
 employed in a wide range of engineering and scientific problems. The reader is 
-encouraged to experiment with other optimisation algorithms if the Nelder-Mead 
+encouraged to experiment with other optimisation approaches if the Nelder-Mead 
 algorithm proves unsuitable or takes an untenable amount of time. Since these 
 optimisation algorithms are minimisation techniques and I seek to maximise the 
 log-probability $\log{\left(\mathcal{P}\right)}$, I numerically optimise the 
@@ -378,7 +380,7 @@ $-\log{\left(\mathcal{P}\right)}$.
 \label{sec:mcmc}
 
 The random scattering and numerical optimisation steps efficiently provide an 
-accurate estimate of the optimal parameters $\bm{\theta}$. Once the optimisation
+accurate estimate of the optimal parameters $\bm{\theta_{opt}}$. Once the optimisation
  step is complete, \sick{} employs the affine-invariant ensemble sampler proposed 
  by \citet{goodman;weare}, and implemented by \citet{emcee}. The Metropolis-Hastings 
  MCMC algorithm is employed by default. \sick{} allows for the model settings to 
@@ -422,7 +424,7 @@ auto-correlation times, and values of the parameter chains themselves all
 provide reasonable proxy indicators of convergence. The user is encouraged to 
 inspect these metrics and devise some heuristic for when convergence has 
 unambiguously been achieved. The final state of every MCMC analysis is 
-automatically saved by \sick{}. This allows users to resume their analysis from 
+automatically saved by \sick{}, allowing users to resume their analysis from 
 the most recent state if they believe the system has not converged.
 
 
@@ -431,59 +433,40 @@ the most recent state if they believe the system has not converged.
 
 As an initial test of the probabilistic framework I have interpolated a 
 noise-free synthetic spectrum which will act as a faux observation. A single 
-channel from the AMBRE synthetic library \citep{ambre} has been employed. The 
-spectra were calculated for the Gaia-ESO Survey \citep{gaia-eso} and range from 
-475\,nm to 685\,nm. I have applied a number of transformations to the 
+channel from the AMBRE synthetic library \citep{ambre} has been employed. These 
+spectral channels range from 475\,nm to 685\,nm and were specifically calculated 
+by the AMBRE group for the Gaia-ESO Survey \citep{gaia-eso}. I have applied a number of transformations to the 
 interpolated spectrum: a second-order polynomial enters multiplicatively to 
 represent the continuum, the spectrum is redshifted, and fluxes are convolved 
 to a spectral resolution of $\mathcal{R} \sim 10000$. The faux data are resampled 
-to a uniform spacing of $\sim{}0.8$\,\AA{}, effectively discarding $99.5\%$ of 
+to a uniform spacing of $\sim{}0.08$\,nm, effectively discarding $99.5\%$ of 
 the original pixels, which were sampled at $\sim4\times10^{-4}$\,nm. White noise  
 has been added to replicate a S/N ratio of $\sim 7$ pixel$^{-1}$. I also assumed 
 that the observed variance is systematically underestimated by 10 per cent: 
 conceptually the faux data is $\sim{}$10 per cent noisier than what an observer 
 would estimate from the flux counts. 
 
-Default priors and configurations were employed. 200 walkers were used to explore 
-the parameter space for 1250 steps as burn-in, and another 250 steps were used to 
-sample the posterior. The chains for each parameter are shown in Figure 
-\ref{fig:chains}. At least by eye, the simulation appears to have converged after 
-just 300 steps. The marginalised posterior distributions are shown in Figure 
-\ref{fig:corner-inference}, with the accepted truth values marked. The true and 
-inferred values for all parameters are tabulated in Table \ref{tab:inference-test}. 
 
-This test demonstrates that accurate and precise inference of stellar parameters 
-can be made even in the presence of substantial noise. The true values of all 
-parameters are recovered within the uncertainties, and the largest (relative) 
-uncertainties are observed for continuum coefficients $b_1$ and $b_2$. Figure 
-\ref{fig:corner-inference} shows there are strong covariances between these 
-parameters. This is unsurprising given the shape of the spectrum (Figure 
-\ref{fig:spectrum-inference}), which could reasonably be fit with a linear 
-continuum, even though the continuum was truly modelled as a third order 
-polynomial. The logarithm of additional fractional variance $\ln{f_{blue}}$ is 
-precisely constrained, suggesting the noise model is excellently matched by the 
-data. Given the simplicity of the noise model, the precision of inference on 
-$\ln{f_{blue}}$ is unlikely to be recovered for real data.
-
-\begin{figure}
+\begin{figure*}
 \label{fig:chains}
 \includegraphics[height=\textheight]{chains.pdf}
 \caption{Points sampled by the 200 walkers at each step during the self-consistent 
 inference test. The true values are marked in blue. The first 1250 steps are 
 discarded as the burn-in period.}
-\end{figure}
+\end{figure*}
 
-\begin{figure}
+\begin{figure*}
 \label{fig:corner-inference}
-\includegraphics[width=\textwidth]{corner.pdf}
+\includegraphics[width=\textwidth,height=\textwidth]{corner.pdf}
 \caption{Marginalised posterior distributions for all parameters $\bm{\theta}$ 
 from a faux observation with spectral resolution $\mathcal{R} \sim 10,000$ and 
 S/N ratio $\sim{}7$\,pixel$^{-1}$. True values are marked in blue. This figure 
 demonstrates that precise inference of stellar parameters can be made with 
 high-resolution spectra, even in the presence of substantial noise.}
-\end{figure}
+\end{figure*}
 
-\begin{table}
+\begin{table*}
+\center
 \caption{True and inferred model parameters for the self-consistent inference test}
 \label{tab:inference-test}
 \begin{tabular}{llrr}
@@ -503,15 +486,38 @@ $b_{1}$ & Continuum polynomial coefficient & $-0.593$ & $-1.001_{-3.634}^{+3.681
 $b_{2}$ & Continuum polynomial coefficient & $-0.569$ & $894_{-10335}^{+10367}$ \\
 \hline
 \end{tabular}
-\end{table}
+\end{table*}
 
-\begin{figure}
+\begin{figure*}
 \label{fig:spectrum-inference}
 \includegraphics[width=\textwidth]{spectrum.pdf}
 \caption{A faux observed spectrum (black) of $\mathcal{R} \sim 10000$ and S/N 
-ratio of $\sim7$ with an underestimated variance by $\sim$10\%. The maximum 
-likelihood model spectrum is shown in red. }
-\end{figure}
+ratio of $\sim7$ with an underestimated variance by $\sim$10\% which was used for 
+the self-consistent inference test. The recovered maximum likelihood model spectrum 
+is shown in red. }
+\end{figure*}
+
+
+Default priors and configurations were employed. 200 walkers were used to explore 
+the parameter space for 1250 steps as burn-in, and another 250 steps were used to 
+sample the posterior. The chains for each parameter are shown in Figure 
+\ref{fig:chains}. At least by eye, the chains appears to have converged after 
+just 300 steps. The marginalised posterior distributions are shown in Figure 
+\ref{fig:corner-inference}, with the accepted truth values marked. The true and 
+inferred values for all parameters are tabulated in Table \ref{tab:inference-test}. 
+
+This test demonstrates that accurate and precise inference of stellar parameters 
+can be made even in the presence of substantial noise. The true values of all 
+parameters are recovered within the uncertainties, and the largest (relative) 
+uncertainties are observed for continuum coefficients $b_1$ and $b_2$. Figure 
+\ref{fig:corner-inference} shows there are strong covariances between these 
+parameters. This is unsurprising given the shape of the spectrum (Figure 
+\ref{fig:spectrum-inference}), which could reasonably be fit with a linear 
+continuum, even though the continuum was truly represented by a third order 
+polynomial. The logarithm of additional fractional variance $\ln{f_{blue}}$ is 
+precisely constrained, suggesting the noise model is excellently matched by the 
+data. Given the simplicity of the noise model, the precision of inference on 
+$\ln{f_{blue}}$ is unlikely to be recovered for real data.
 
 \section{Utility}
 \label{sec:examples}
@@ -521,8 +527,8 @@ ease-of-use of the software.
 \subsection{Sol}
 \label{sec:sun}
 A high-resolution ($\mathcal{R} \sim$ 20000), high S/N ($\sim{}$150 pixel$^{-1}$) 
-twilight spectrum was obtained from the GIRAFFE/FLAMES archive
-\footnote{https://www.eso.org/observing/dfo/quality/GIRAFFE/pipeline/solar.html}. 
+twilight spectrum was obtained from the GIRAFFE/FLAMES 
+archive\footnote{eso.org/observing/dfo/quality/GIRAFFE/pipeline/solar.html}. 
 The H875.7 setup was chosen for this example, yielding spectra from 848.2\,nm to 
 899.2\,nm. Data points redder than 874\,nm have been discarded to more closely 
 match the Gaia RVS wavelength coverage, and demonstrate the recoverability of 
@@ -532,15 +538,15 @@ The AMBRE \citep{ambre} synthetic grid was also employed for this example. The
 continuum was represented with a third order polynomial, and no redshift or 
 outlier modelling was included. The central $\pm$0.1 nm cores of the Ca II 
 near-infrared triplet lines were masked (specifically rest wavelengths 
-849.7-849.9 nm, 854.1-854.3, and 866.1-866.3 nm), as the cores are strongly 
-affected by non-LTE effects that are not treated in the 1D LTE model atmospheres 
+849.7-849.9\,nm, 854.1-854.3\,nm, and 866.1-866.3\,nm), as the cores are strongly 
+affected by non-LTE effects that are not accounted for in the 1D LTE model atmospheres 
 used to generate the AMBRE spectra. Pixels between rest wavelengths 850.10\,nm 
 to 850.37\,nm were also masked as the models did not seem to accurately reproduce 
 the data in this region. 
 
-\begin{figure}
+\begin{figure*}
 \label{fig:solar}
-\includegraphics[width=\textwidth]{solar.pdf}
+\includegraphics[width=\textwidth,height=\textwidth]{solar.pdf}
 \caption{Stellar parameter ($\bm{\psi}$: $T_{\rm eff}$, $\log{g}$, [Fe/H], 
 [$\alpha$/Fe])  posterior distributions for the GIRAFFE/FLAMES twilight spectrum. 
 Nuisance parameters are not shown. Maximum likelihood values for each parameter 
@@ -550,7 +556,7 @@ shown) of $T_{\rm eff} = 5777$\,K, $\log{g} = 4.445$, slightly discrepant from
 [$\alpha$/Fe] = 0, and significantly deviant from [Fe/H] = 0. This test 
 illustrates the precision achievable using \sick, but highlights the need for 
 accurate models.}
-\end{figure}
+\end{figure*}
 
 For this example 1000 draws were made during the random scattering stage, and 
 optimisation was performed using the default options. One hundred walkers 
@@ -561,28 +567,29 @@ the Sun are $T_{\rm eff} = 5777$\,K, $\log{g} = 4.445$, [Fe/H] = 0, and
 [$\alpha$/Fe] = 0. The inferred parameters agree excellently with the accepted 
 values for effective temperature and surface gravity: 
 $T_{{\rm eff},inferred} = 5770^{+20}_{-14}$, and $\log{g}_{inferred} = 4.40^{+0.06}_{-0.05}$. 
-The agreement is less pleasing for $\alpha$-element enhancement, but less so for 
+The agreement is less pleasing for $\alpha$-element enhancement, and worse for 
 mean metallicity: [$\alpha$/Fe]$_{inferred} = -0.03^{+0.01}_{-0.01}$, and 
 [Fe/H]$_{inferred} = -0.07^{+0.01}_{-0.01}$. 
 
 While our inferences are precise, the offset in mean metallicity suggest the 
-models may be slightly inaccurate in this wavelength regime or that there are 
+models may be slightly inaccurate in this wavelength regime, or the solar abundances
+employed are slightly discrepant, or perhaps there are 
 unaccounted telluric features in the data. This test highlights the need to 
 verify the accuracy of the input models. A useful extension of this project 
 would be to simultaneously include telluric spectra, as well as pre-computed 
 astereoseismic models, such that spectroscopy and time-series photometry could 
 simultaneously constrain stellar parameters. Asteroseismology can accurately and 
 precisely constrain surface gravity, but requires an input effective temperature. 
-Conversely, surface gravity is the least constrained parameter by spectroscopy, 
-but can precisely constrain effective temperature is the only method available 
+Conversely surface gravity is the least constrained stellar parameter by spectroscopy, 
+but can precisely constrain effective temperature, and is the only method available 
 to measure chemical abundances. Since \sick{} allows for any dispersion unit 
-equivalency (e.g., frequency, wavelength, etc), spectroscopic and astereoseismic 
+equivalency (e.g., frequency, wavelength, et cetera), spectroscopic and astereoseismic 
 models can be trivially coupled into a generative framework for unprecedented 
 accuracy and precision in stellar spectroscopy.
 
 \subsection{Globular Clusters}
 Globular cluster stars are excellent candidates for testing \sick{} over a large 
-range of stellar parameters. Here I consider a realistic scenario of 
+range of model parameters. Here I consider a realistic scenario of 
 low-resolution, noisy spectra of red giant and asymptotic branch cluster 
 candidates observed using the AAOmega spectrograph on the Anglo-Australian 
 Telescope in Coonabarabran, Australia. The 580V and 1700D gratings were employed, 
@@ -607,21 +614,21 @@ Radial velocities were used to identify and discard non-cluster members. The
 metallicity distribution of the remaining cluster stars are shown in Figure 
 \ref{fig:clusters}, where a comparison to the literature is made. The 
 \citet{harris} catalogue (accessed June 2014) has been used as a literature 
-reference for all globular clusters. Note that while there are measurable 
-intrinsic metallicity spreads for these clusters, I have not adopted these as 
-x-axis uncertainties.
+reference for all globular clusters. Note that although there are measurable 
+intrinsic metallicity spreads and active debates on the mean abundances 
+of these clusters, I have not adopted abscissa uncertainties.
 
-\begin{figure}
+\begin{figure}[h!]
 \label{fig:clusters}
-\includegraphics[width=\textwidth]{clusters.pdf}
+\includegraphics[width=0.5\textwidth]{clusters.pdf}
 \caption{Metallicities of cluster stars inferred from noisy, low-resolution 
 spectra obtained with the AAOmega spectrograph. The agreement with the 
 literature values (see text) is very reasonable.}
 \end{figure}
 
-Even ignoring uncertainties in literature values, the agreement between is 
+Even ignoring uncertainties in the literature values, the agreement between is 
 exceptional for noisy, low-resolution spectra. No systematic trend is present 
-and a negligible mean metallicity difference of $-0.001$ dex (accuracy of 0.2\%) 
+and a negligible mean metallicity difference of $-0.001$ dex (an accuracy of $<$0.2\%) 
 is observed over three orders of magnitude. The agreement would be remarkable 
 for high-resolution spectra with exquisite S/N ratios. I emphasise that these 
 results were obtained without performing any `calibration' or ad-hoc posterior 
@@ -630,10 +637,10 @@ astrophysical understanding.
 
 Individual uncertainties in stellar parameters are also extremely reasonable, 
 particularly given the low spectral resolution and S/N of the data. Uncertainties 
-of $\sim$75 K in $T_{\rm eff}$, $\sim0.2$ in $\log{g}$, $\sim$0.1 dex in [Fe/H] 
-and $\sim0.05$ dex in [$\alpha$/Fe] are obtained in the presence of substantial 
+of $\sim$75 K in $T_{\rm eff}$, $\sim$0.2 in $\log{g}$, $\sim$0.1 dex in [Fe/H] 
+and $\sim$0.05 dex in [$\alpha$/Fe] are obtained in the presence of substantial 
 noise (e.g., $S/N \sim 15$). The most uncertain results were obtained for 
-NGC 7089, where the lowest S/N ratios exist and only 6 cluster members were 
+{NGC\,7089}, where the lowest S/N ratios were achieved and only six cluster members were 
 observed.
 
 \section{Conclusion}
@@ -656,16 +663,17 @@ remarkable improvements in both accuracy and precision. While the examples
 presented here have focussed on stellar spectra, the code is ambivalent about 
 \textit{what} the astrophysical parameters describe: the framework can be easily 
 used for any kind of quantifiable astrophysical process. The code is MIT-licensed 
-(freely distributable, open source) and has an extensive automatic testing suite. 
-Complete documentation is available online\footnote{github.com/andycasey/sick/wiki}, 
+(freely distributable, open source) and has an extensive automatic testing suite, 
+which includes regular reproduction of the examples presented in this \article{}. 
+Complete documentation is available online\footnote{astrowizici.st/sick}, 
 which includes a number of additional examples and tutorials. In the spirit of 
 full scientific reproducibility, the online documentation is complemented with the 
 files necessary to reproduce all of the examples presented in this \article{}. 
-The source code is distributed using \textsc{git}\footnote{git-scm.com/downloads}, 
-and hosted online at GitHub\footnote{github.com/andycasey/sick}. 
+The source code is distributed using \textsc{git}, and hosted online at 
+GitHub\footnote{github.com/andycasey/sick}. 
 
 Great care has been spent to ensure the code is easy to use, and allow users to 
-obtain precise inference with little effort. I strongly encourage the use of this 
+obtain precise inferences with little effort. I strongly encourage the use of this 
 software for existing and future spectral datasets. With the sheer volume and 
 high-quality of spectral data available, astronomers must begin to adopt objective, 
 generative models for their data. Subtle astrophysical processes can only be 
@@ -675,13 +683,12 @@ afforded by generative models.
 \acknowledgements
 I am pleased to thank Louise Howes for extensive testing of this code, Martin 
 Asplund for providing commentary, as well as Sergey Koposov and Jarryd Page for 
-constructive discussions on this work. This research has been funded by European 
-Research Council grant 320360: The Gaia-ESO Milky Way Survey. 
+constructive discussions on this work. This research has made extensive use of NASA's 
+Astrophysics Data System Bibliographic Services, the Coveralls continuous 
+integration service, GitHub, and the \textsc{triangle.py} code \citep{triangle.py}.
+This research has been funded by European Research Council grant 320360: 
+The Gaia-ESO Milky Way Survey. 
 
-% ADS?
-% Coveralls?
-% GitHub?
-% Triangle.py?
 
 \bibliographystyle{apj}
 \bibliography{biblio}
