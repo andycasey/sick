@@ -68,6 +68,30 @@ def load_model_data(filename, **kwargs):
     return data
 
 
+def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
+    smoothing_kernels, sampling_rate, mean_dispersion_diffs):
+
+    flux = np.zeros(np.sum(num_pixels))
+    for i, (channel, flux_filename) in enumerate(filenames.iteritems()):
+
+        sj, ej = map(int, map(sum, [num_pixels[:j], num_pixels[:j+1]]))
+
+        # Get the flux
+        si, ei = wavelength_indices[channel]
+        channel_flux = load_model_data(flux_filename)
+
+        # Do we need to convolve it first?
+        if smoothing_kernels.has_key(channel):
+            sigma = (smoothing_kernels[channel]/(2 * (2*np.log(2))**0.5))\
+                /mean_dispersion_diffs[channel]
+            channel_flux = ndimage.gaussian_filter1d(channel_flux, sigma)
+
+        # Do we need to resample?
+        flux[sj:ej] = channel_flux[si:ei:sampling_rate[channel]]
+
+    return (index, flux)
+
+
 class Model(object):
     """
     A class to represent the approximate data-generating model for spectra.
@@ -650,7 +674,8 @@ class Model(object):
 
 
     def cache(self, grid_points_filename, flux_filename, dispersion_filenames=None,
-        wavelengths=None, smoothing_kernels=None, sampling_rate=None, clobber=False):
+        wavelengths=None, smoothing_kernels=None, sampling_rate=None, clobber=False,
+        threads=1):
         """
         Cache the model for faster read access at runtime.
 
@@ -701,16 +726,23 @@ class Model(object):
         :type clobber:
             bool
 
+        :param threads: [optional]
+            The maximum number of threads to use when caching the model.
+
+        :type threads:
+            int
+
         :returns:
             A dictionary containing the current model configuration with the newly
             cached channel parameters. This dictionary can be directly written to a
             new model filename.
 
-        :raises:
-            IOError if clobber is set as False, and any of the grid_points, dispersion,
-            or flux filenames already exist.
+        :raises IOError:
+            If ``clobber`` is set as ``False``, and any of the ``grid_points``,
+            ``dispersion``, or ``flux_filename``s already exist.
 
-            TypeError if invalid smoothing kernels or wavelengths are supplied.
+        :raises TypeError:
+            If an invalid smoothing kernel or wavelength region is supplied.
         """
 
         if not clobber:
@@ -719,19 +751,20 @@ class Model(object):
                 filenames.extend(dispersion_filenames.values())
             filenames_exist = map(os.path.exists, filenames)
             if any(filenames_exist):
-                raise IOError("filename {0} exists and we've been asked not to clobber it".format(
-                    filenames[filenames_exist.index(True)]))
+                raise IOError("filename {0} exists and we've been asked not to"\
+                    " clobber it".format(filenames[filenames_exist.index(True)]))
 
         if not isinstance(smoothing_kernels, dict) and smoothing_kernels is not None:
-            raise TypeError("smoothing kernels must be a dictionary-type with channels as keys"\
-                " and kernels as values")
+            raise TypeError("smoothing kernels must be a dictionary-type with "\
+                "channels as keys and kernels as values")
 
         if not isinstance(wavelengths, dict) and wavelengths is not None:
-            raise TypeError("wavelengths must be a dictionary-type with channels as keys")
+            raise TypeError("wavelengths must be a dictionary-type with channels"\
+                " as keys")
 
         if (sampling_rate is not None or wavelengths is not None) and dispersion_filenames is None:
-            raise ValueError("dispersion filename must be provided when the sampling rate or "\
-                "wavelength range is restricted")
+            raise ValueError("dispersion filename must be provided when the "\
+                "sampling rate or wavelength range is restricted")
 
         if sampling_rate is None:
             sampling_rate = dict(zip(self.channels, np.ones(len(self.channels))))
@@ -760,25 +793,34 @@ class Model(object):
             pickle.dump(self.grid_points, fp)
 
         # Create empty memmap
-        flux = np.memmap(flux_filename, dtype=np.double, mode="w+", shape=(n_points, np.sum(n_pixels)))
+        flux = np.memmap(flux_filename, dtype=np.double, mode="w+",
+            shape=(n_points, np.sum(n_pixels)))
+
+        processes = []
+        pool = multiprocessing.Pool(threads)
+        mean_dispersion_diffs = dict(zip(self.channels,
+            [np.mean(np.diff(self.dispersion[each])) for each in self.channels]))
+
+        # Run the caching
         for i in range(n_points):
 
-            logger.info("Caching point {0} of {1} ({2:.1f}%)".format(i+1, n_points, 100*(i+1.)/n_points))
-            for j, channel in enumerate(self.channels):
+            logger.info("Caching point {0} of {1} ({2:.1f}%)".format(i+1, 
+                n_points, 100*(i+1.)/n_points))
 
-                sj, ej = map(int, map(sum, [n_pixels[:j], n_pixels[:j+1]]))
+            filenames = dict(zip(self.channels,
+                [self.flux_filenames[channel][i] for channel in self.channels]))
+            processes.append(pool.apply_async(_cache_model_point,
+                args=(i, filenames, n_pixels, wavelength_indices, smoothing_kernels,
+                    sampling_rate, mean_dispersion_diffs)))
 
-                # Get the flux
-                si, ei = wavelength_indices[channel]
-                channel_flux = load_model_data(self.flux_filenames[channel][i])
+        # Update the array.
+        for process in processes:
+            index, flux = process.get()
+            flux[index, :] = flux
 
-                # Do we need to convolve it first?
-                if smoothing_kernels is not None and smoothing_kernels.has_key(channel):
-                    sigma = (smoothing_kernels[channel]/(2 * (2*np.log(2))**0.5))/np.mean(np.diff(self.dispersion[channel]))
-                    channel_flux = ndimage.gaussian_filter1d(channel_flux, sigma)
-
-                # Do we need to resample?
-                flux[i, sj:ej] = channel_flux[si:ei:sampling_rate[channel]]
+        # Winter is coming; close the pool
+        pool.close()
+        pool.join()
 
         # Save the resampled dispersion arrays to disk
         if dispersion_filenames is not None:

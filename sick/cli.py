@@ -307,7 +307,7 @@ def download(args):
     message = \
         "{0}: {1}\n"\
         "\t{2}\n"\
-        "\tReference: {3}\n\n"
+        "\tADS Reference: {3}\n\n"
 
     def exit_without_download():
         sys.stdout.write("No model downloaded.\n")
@@ -315,7 +315,7 @@ def download(args):
 
     if args.model_grid_name == "list":
         # Just print out all of the available ones. Follow pip-style.
-        sys.stdout.write("Found {0} cached sick models online:\n".format(
+        sys.stdout.write("Found {0} cached sick models online:\n\n".format(
             len(cached_model_list)))
         for model in cached_model_list:
             sys.stdout.write(message.format(model["short_name"],
@@ -337,7 +337,7 @@ def download(args):
         else:
             # Confirm the selection
             model = cached_model_list[cached_model_names.index(requested_model_name)]
-            sys.stdout.write("Found {0} model:\n".format(model["short_name"]))
+            sys.stdout.write("Found {0} model:\n\n".format(model["short_name"]))
             sys.stdout.write(message.format(model["short_name"],
                 model["long_name"], "\n\t".join(wrap(model["description"])),
                 model["ads_reference"]))
