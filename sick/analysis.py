@@ -293,8 +293,9 @@ def log_prior(theta, model):
         or parameter == "Vb" and 0 > value:
             return -np.inf
 
-    logging.debug("Returning log-prior of {0:.2e} for parameters: {1}".format(log_prior,
-        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in zip(model.parameters, theta)])))
+    logging.debug("Returning log-prior of {0:.2e} for parameters: {1}".format(
+        log_prior, ", ".join(["{0} = {1:.2e}".format(name, value) \
+            for name, value in zip(model.parameters, theta)])))
     return log_prior
 
 
@@ -327,31 +328,34 @@ def log_likelihood(theta, model, observations):
     theta_dict = dict(zip(model.parameters, theta))
 
     try:
-        model_fluxes, model_continua = model(observations=observations, full_output=True, **theta_dict)
+        model_fluxes, model_continua = model(observations=observations,
+            full_output=True, **theta_dict)
     except:
         return -np.inf
 
     likelihood = 0
-    for (channel, model_flux, model_continuum, observed_spectrum) in zip(model.channels, model_fluxes, model_continua, observations):
+    for (channel, model_flux, model_continuum, observed_spectrum) \
+    in zip(model.channels, model_fluxes, model_continua, observations):
 
         signal_inverse_variance = 1.0/(observed_spectrum.variance \
             + model_flux**2 * np.exp(2. * theta_dict["f.{0}".format(channel)]))
 
-        signal_likelihood = -0.5 * ((observed_spectrum.flux - model_flux)**2 * signal_inverse_variance \
-            - np.log(signal_inverse_variance))
+        signal_likelihood = -0.5 * ((observed_spectrum.flux - model_flux)**2 \
+            * signal_inverse_variance - np.log(signal_inverse_variance))
 
         # Are we modelling the outliers as well?
         if "Pb" in theta_dict.keys():
             outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_spectrum.variance \
                 + model_flux**2 * np.exp(2. * theta_dict["f.{0}".format(channel)]))
 
-            #continuum = model._continuum(channel, observed_spectrum, model_flux, **theta_dict)
-            outlier_likelihood = -0.5 * ((observed_spectrum.flux - model_continuum)**2 * outlier_inverse_variance \
-                - np.log(outlier_inverse_variance))
+            outlier_likelihood = -0.5 * ((observed_spectrum.flux - model_continuum)**2 \
+                * outlier_inverse_variance - np.log(outlier_inverse_variance))
 
             Pb = theta_dict["Pb"]
             finite = np.isfinite(outlier_likelihood * signal_likelihood)
-            likelihood += np.sum(np.logaddexp(np.log(1. - Pb) + signal_likelihood[finite], np.log(Pb) + outlier_likelihood[finite]))
+            likelihood += np.sum(np.logaddexp(
+                np.log(1. - Pb) + signal_likelihood[finite],
+                np.log(Pb) + outlier_likelihood[finite]))
 
         else:
             finite = np.isfinite(signal_likelihood)
@@ -359,8 +363,9 @@ def log_likelihood(theta, model, observations):
     if likelihood == 0:
         return -np.inf
 
-    logger.debug("Returning log-likelihood of {0:.2e} for parameters: {1}".format(likelihood,
-        ", ".join(["{0} = {1:.2e}".format(name, value) for name, value in theta_dict.iteritems()])))  
+    logger.debug("Returning log-likelihood of {0:.2e} for parameters: {1}".format(
+        likelihood, ", ".join(["{0} = {1:.2e}".format(name, value) \
+            for name, value in theta_dict.iteritems()])))  
     return likelihood
 
 
@@ -401,6 +406,21 @@ def log_probability(theta, model, observations):
 def sample_ball(point, observed_spectra, model):
     """
     Return a multi-parameteral Gaussian around a ball point.
+
+    :param point:
+        The point to create the ball around.
+
+    :type point:
+        dict
+
+    :param observed_spectra:
+        The observed spectra.
+
+    :type observed_spectra:
+        A list of :class:`sick.specutils.Spectrum1D` objects.
+
+    :returns:
+        An array of starting values for the walkers.
     """ 
     
     # Create a sample ball around the result point
@@ -546,16 +566,24 @@ def eval_prior(model):
     return dict(zip(parameters, [eval(model.priors[parameter], env) for parameter in parameters]))
 
 
-def random_scattering(observed_spectra, model, initial_thetas=None):
+def random_scattering(observed_spectra, model):
     """
     Calculate likelihoods for randomly drawn theta points across the parameter space.
 
-    Args:
-        observed_spectra (list of Spectrum1D objects): The observed data.
-        model (sick.models.Model object): The model class.
-        initial_thetas (list-type or None): The theta points to sample. If none are
-            provided then the number of randomly drawn points is determined by the
-            model configuration `model.settings.initial_samples`
+    :param observed_spectra:
+        The observed spectra.
+
+    :type observed_spectra:
+        A list of :class:`sick.specutils.Spectrum1D` objects.
+
+    :param model:
+        The model class.
+
+    :type model:
+        :class:`sick.models.Model`
+
+    :returns:
+        The most probable starting point :math:`\Theta` for optimisation.
     """
 
     logger.info("Performing random scattering...")
@@ -564,42 +592,28 @@ def random_scattering(observed_spectra, model, initial_thetas=None):
     ta = time()
     samples = model.configuration["settings"]["initial_samples"]
 
-    if initial_thetas is None:
-   
-        # Evaluate psi in serial, then map to parallel
-        astrophysical_samples = (eval_prior(model) for _ in xrange(samples))
+    # Evaluate some initial thetas psi in serial, then map to parallel
+    astrophysical_samples = (eval_prior(model) for _ in xrange(samples))
 
-        pool = multiprocessing.Pool(model.configuration["settings"].get("threads", 1))
-        try:
-            scatter_func = utils.wrapper(initial_point, [model, observed_spectra])
-            points = pool.map(scatter_func, astrophysical_samples)
+    pool = multiprocessing.Pool(model.configuration["settings"].get("threads", 1))
+    try:
+        scatter_func = utils.wrapper(initial_point, [model, observed_spectra])
+        points = pool.map(scatter_func, astrophysical_samples)
 
-            lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
-            probabilities = pool.map(lnprob_func, points)
+        lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
+        probabilities = pool.map(lnprob_func, points)
 
-        except:
-            logging.exception("Exception raised while doing random random_scattering")
-            raise
-
-        else:
-            index = np.argmax(probabilities)
-            p0 = points[index]
-
-        finally:
-            pool.close()
-            pool.join()
+    except:
+        logging.exception("Exception raised while doing random random_scattering")
+        raise
 
     else:
+        index = np.argmax(probabilities)
+        p0 = points[index]
 
-        raise NotImplementedError
-        if not isinstance(initial_thetas[0], (list, tuple, np.ndarray)):
-            initial_thetas = [initial_thetas]
-
-        [pool.apply_async(__safe_log_probability, args=(theta, model, observed_spectra), callback=callback) \
-            for theta in initial_thetas]
-
-        index = np.argmax([result[1] for result in results])
-        p0 = results[index][0]
+    finally:
+        pool.close()
+        pool.join()
 
     logger.info("Calculating log probabilities of {0:.0f} prior points took {1:.2f} seconds".format(
         samples, time() - ta))
@@ -611,13 +625,26 @@ def optimise(p0, observed_spectra, model, **kwargs):
     """
     Numerically optimise the likelihood from a provided point p0.
 
-    Args:
-        p0 (list-type): The theta point to optimise from.
-        observed_spectra (list of Spectrum1D objects): The observed data.
-        model (sick.models.Model object): The model class.
+    :param p0:
+        The initial starting point :math:`\Theta` to optimise from.
 
-    Returns:
-        opt_theta (list-type) the numerically optimised point.
+    :type p0:
+        :class:`numpy.array`
+
+    :param observed_spectra:
+        The observed spectra.
+
+    :type observed_spectra:
+        A list of :class:`sick.specutils.Spectrum1D` objects.
+
+    :param kwargs:
+        Keyword arguments to pass directly to the optimisation call.
+
+    :type kwargs:
+        dict
+
+    :returns:
+        The numerically optimised point :math:`\Theta_{opt}`.
     """
 
     logger.info("Optimising from point:")
@@ -659,9 +686,55 @@ def optimise(p0, observed_spectra, model, **kwargs):
     return opt_theta
 
 
-def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=None, sample=None):
+def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=None,
+    sample=None):
     """
     Set up an EnsembleSampler and sample the parameters given the model and data.
+
+    :param observed_spectra:
+        The observed spectra.
+
+    :type observed_spectra:
+        A list of :class:`sick.specutils.Spectrum1D` objects.
+
+    :param model:
+        The model class.
+
+    :type model:
+        :class:`sick.models.Model`
+
+    :param p0:
+        The starting point for all the walkers.
+
+    :type p0:
+        :class:`numpy.ndarray`
+
+    :param lnprob0: [optional]
+        The log posterior probabilities for the walkers at positions given by
+        ``p0``. If ``lnprob0`` is None, the initial values are calculated.
+
+    :type lnprob0:
+        :class:`numpy.ndarray`
+
+    :param rstate0: [optional]
+        The state of the random number generator.
+
+    :param burn: [optional]
+        The number of samples to burn. Defaults to the ``burn`` value in
+        ``settings`` of ``model.configuration``.
+
+    :type burn:
+        int
+
+    :param sample: [optional]
+        The number of samples to make from the posterior. Defaults to the 
+        ``sample`` value in ``settings`` of ``model.configuration``.
+
+    :type sample:
+        int
+
+    :returns:
+        A tuple containing the posteriors, sampler, and general information.
     """
 
     t_init = time()
@@ -681,8 +754,9 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
     autocorrelation_time = np.zeros((burn, len(model.parameters)))
 
     # Initialise the sampler
-    sampler = emcee.EnsembleSampler(walkers, len(model.parameters), log_probability,
-        args=(model, observed_spectra), threads=model.configuration["settings"].get("threads", 1))
+    sampler = emcee.EnsembleSampler(walkers, len(model.parameters),
+        log_probability, args=(model, observed_spectra),
+        threads=model.configuration["settings"].get("threads", 1))
 
     # Start sampling
     try:
@@ -692,12 +766,13 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
             mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
             
             # Announce progress
-            logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f}, maximum log probability"\
-                " in last step was {2:.3e}".format(i + 1, mean_acceptance_fractions[i],
-                    np.max(sampler.lnprobability[:, i])))
+            logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f},"\
+                " maximum log probability in last step was {2:.3e}".format(i + 1,
+                mean_acceptance_fractions[i], np.max(sampler.lnprobability[:, i])))
 
             if mean_acceptance_fractions[i] in (0, 1):
-                raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(mean_acceptance_fractions[i]))
+                raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(
+                    mean_acceptance_fractions[i]))
 
     except KeyboardInterrupt as e:
         # Convergence achieved.
@@ -754,13 +829,24 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
     return posteriors, sampler, additional_info
 
 
-def solve(observed_spectra, model, initial_thetas=None, **kwargs):
+def solve(observed_spectra, model, **kwargs):
     """
     Solve for the model parameters theta given the observed spectra.
 
-    Args:
-        observed_spectra (list of specutils.Spectrum1D objects): The observed spectra.
-        model (sick.models.Model object): The model class.
+    :param observed_spectra:
+        The observed spectra.
+
+    :type observed_spectra:
+        A list of :class:`sick.specutils.Spectrum1D` objects.
+
+    :param model:
+        The model class.
+
+    :type model:
+        :class:`sick.models.Model`
+
+    :returns:
+        A 3-length tuple containing the posteriors, sampler, and general information.
     """
 
     t_init = time()
@@ -777,17 +863,16 @@ def solve(observed_spectra, model, initial_thetas=None, **kwargs):
     # Perform any optimisation and initialise priors
     if model.configuration["settings"].get("optimise", True):
 
-        most_probable_scattered_point = random_scattering(observed_spectra, model, initial_thetas)
+        most_probable_scattered_point = random_scattering(observed_spectra, model)
 
         kwargs_copy = kwargs.copy()
         kwargs_copy.update({"full_output": True})
-        opt_theta, fopt, niter, funcalls, warnflag = optimise(most_probable_scattered_point, observed_spectra,
-            model, **kwargs_copy)
+        opt_theta, fopt, niter, funcalls, warnflag = optimise(
+            most_probable_scattered_point, observed_spectra, model, **kwargs_copy)
 
         # Sample around opt_theta using some sensible things
         p0 = sample_ball(dict(zip(model.parameters, opt_theta)), observed_spectra, model)
-        #p0 = np.array([opt_theta + 1e-4 * random.randn(len(model.parameters)) for each in range(walkers)])
-
+        
     else:
         warnflag, p0 = 0, priors.explicit(model, observed_spectra)
 
