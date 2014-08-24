@@ -4,14 +4,12 @@
 Example: Self-consistent inference test
 =======================================
 
-(This page will guide you through the example presented in Section 2.4 of the *sick* paper)
-
 In this example we will download a cached subset of the `AMBRE stellar spectral library <http://adsabs.harvard.edu/abs/2012A%26A...544A.126D>`_,
 interpolate a spectrum and turn it into a fake observation by introducing a continuum shape, smoothing it, redshifting it, and adding noise. 
 Then we'll infer the model parameters for the fake spectrum and examine how well our inferences are. 
 
 .. note::
-   This example is part of the automatic testing suite in ``sick``, and is executed every time a change is commited to the `GitHub repository <https://github.com/andycasey/sick>`_. If you want to run this test and skip the explanatory text below, you can do so with::
+   This example was presented in Section 2.4 of the ``sick`` paper. This example is also part of the automatic testing suite in ``sick``, and is executed every time a change is commited to the `GitHub repository <https://github.com/andycasey/sick>`_. If you want to run this test and skip the explanatory text below, you can do so with::
 
        cd /wherever/sick/is/kept
        nosetests -v
