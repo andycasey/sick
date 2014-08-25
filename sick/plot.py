@@ -23,7 +23,9 @@ import specutils
 
 # Update the triangle.corner docstring to be sphinxy
 corner.__doc__ = """
-    [This function was written by Dan Foreman-Mackey as part of ``triangle.py``]
+    [This function was written by Dan Foreman-Mackey as part of ``triangle.py``.
+    Please see the associated ``LICENSE`` file for ``triangle.py``, which is 
+    also available from https://github.com/dfm/triangle.py/blob/master/LICENSE]
 
     Make a *sick* corner plot showing the projections of a data set in a
     multi-dimensional space. kwargs are passed to hist2d() or used for
