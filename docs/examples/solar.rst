@@ -102,7 +102,9 @@ Post-processing
 If all has gone to plan, the ``sick solve`` command line tool has produced a number of publication ready figures for
 you. Let's look at ``solar-acceptance.pdf`` and ``solar-chain.pdf``:
 
-% Figures
+.. figure:: acceptance.png
+
+.. figure:: solar-chain.png
 
 Looks pretty good! The acceptance fractions look reasonable, and the chain values seem to have converged from about 300 steps.
 This means we wasted CPU cycles burning to 1000 steps, but at least we're confident everything has converged.
@@ -110,7 +112,7 @@ This means we wasted CPU cycles burning to 1000 steps, but at least we're confid
 Now let's see ``solar-corner.pdf``, which shows us the posterior samples for *just* the astrophysical parameters of
 interest:
 
-% Figures
+.. figure:: corner.png
 
 Our inferred stellar parameters for the Sun are:
 

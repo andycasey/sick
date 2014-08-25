@@ -142,10 +142,6 @@ Let's see what our fake spectrum looks like::
     fig.savefig("spectrum.pdf")
    
      
-% Figure 
-
-
-
 Inference
 ---------
 
@@ -173,13 +169,9 @@ Continuing in Python::
         truths=[truth[parameter] for parameter in model.parameters], burn_in=1000)
     fig.savefig("chains.pdf")
 
-    # Make a corner plot with just the astrophysical parameters
-    psi_len = len(model.grid_points.dtype.names)
-    fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, :psi_len],
-        labels=sick.utils.latexify(model.grid_points.dtype.names),
-        truths=[truth[parameter] for parameter in model.parameters[:psi_len]],
-        quantiles=[.16, .50, .84], verbose=False)
-    fig.savefig("inference-psi.pdf")
+.. figure:: chains.png
+
+Now let's make a corner plot::
 
     # Make a corner plot with *all* of the model parameters
     fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters)),
@@ -188,10 +180,18 @@ Continuing in Python::
         quantiles=[.16, .50, .84], verbose=False)
     fig.savefig("inference-all.pdf")
 
+.. figure:: corner.png
+
+
+And finally, you should actually **look** at your data::
+
     # Make a projection plot
     fig = sick.plot.projection(sampler, model, [observed_data])
     fig.savefig("projection.pdf")
 
-% Figures
+.. figure:: spectrum.png
 
+The shape of the spectrum explains our imprecise inference on :math:`b_0`, :math:`b_1`, and :math:`b_2`: even though the continuum
+was represented by a third order polynomial, by eye we can see that it would be very well approximated by a linear polynomial. That's
+why there is such a strong covariance between these parameters!
  
