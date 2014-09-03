@@ -71,17 +71,20 @@ def load_model_data(filename, **kwargs):
 def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
     smoothing_kernels, sampling_rate, mean_dispersion_diffs):
 
+    logger.debug("Caching point {0}: {1}".format(index, 
+        ", ".join(map(os.path.basename, filenames.values()))))
+
     flux = np.zeros(np.sum(num_pixels))
     for i, (channel, flux_filename) in enumerate(filenames.iteritems()):
 
-        sj, ej = map(int, map(sum, [num_pixels[:j], num_pixels[:j+1]]))
+        sj, ej = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
 
         # Get the flux
         si, ei = wavelength_indices[channel]
         channel_flux = load_model_data(flux_filename)
 
         # Do we need to convolve it first?
-        if smoothing_kernels.has_key(channel):
+        if channel in smoothing_kernels:
             sigma = (smoothing_kernels[channel]/(2 * (2*np.log(2))**0.5))\
                 /mean_dispersion_diffs[channel]
             channel_flux = ndimage.gaussian_filter1d(channel_flux, sigma)
@@ -256,12 +259,12 @@ class Model(object):
         num_models = len(self.grid_points) * num_channels
         num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
         
-        return u"{module}.Model({num_models} {is_cached} models; {num_total_parameters} parameters: "\
+        return u"{module}.Model({num_models} {is_cached}models; {num_total_parameters} parameters: "\
             "{num_nuisance_parameters} additional parameters, {num_grid_parameters} grid parameters:"\
             " {parameters}; {num_channels} channels: {channels}; ~{num_pixels} pixels)".format(
             module=self.__module__, num_models=num_models, num_channels=num_channels,
             channels=', '.join(self.channels), num_pixels=human_readable_digit(num_pixels),
-            num_total_parameters=len(self.parameters), is_cached=["", "cached"][self.cached],
+            num_total_parameters=len(self.parameters), is_cached=["", "cached "][self.cached],
             num_nuisance_parameters=len(self.parameters) - len(self.grid_points.dtype.names), 
             num_grid_parameters=len(self.grid_points.dtype.names),
             parameters=', '.join(self.grid_points.dtype.names))
@@ -675,7 +678,7 @@ class Model(object):
 
     def cache(self, grid_points_filename, flux_filename, dispersion_filenames=None,
         wavelengths=None, smoothing_kernels=None, sampling_rate=None, clobber=False,
-        threads=1):
+        threads=1, verbose=False):
         """
         Cache the model for faster read access at runtime.
 
@@ -732,6 +735,13 @@ class Model(object):
         :type threads:
             int
 
+        :param verbose: [optional]
+            Momentarily change the logging level to INFO so that the progress of
+            the caching is announced.
+
+        :type verbose:
+            bool
+
         :returns:
             A dictionary containing the current model configuration with the newly
             cached channel parameters. This dictionary can be directly written to a
@@ -745,6 +755,13 @@ class Model(object):
             If an invalid smoothing kernel or wavelength region is supplied.
         """
 
+        assert grid_points_filename != flux_filename, "Grid points and flux "\
+            "filename must be different"
+
+        if dispersion_filenames is not None:
+            assert grid_points_filename not in dispersion_filenames.values()
+            assert flux_filename not in dispersion_filenames.values()
+            
         if not clobber:
             filenames = [grid_points_filename, flux_filename]
             if dispersion_filenames is not None:
@@ -768,6 +785,15 @@ class Model(object):
 
         if sampling_rate is None:
             sampling_rate = dict(zip(self.channels, np.ones(len(self.channels))))
+
+        if smoothing_kernels is None:
+            smoothing_kernels = {}
+
+        if verbose:
+            current_level = logger.getEffectiveLevel()
+            logger.setLevel(logging.DEBUG)
+            logger.info("Logging verbosity temporarily changed to {0} (from {1})".format(
+                logging.DEBUG, current_level))
 
         n_points = len(self.grid_points)
         if wavelengths is None:
@@ -793,14 +819,16 @@ class Model(object):
             pickle.dump(self.grid_points, fp)
 
         # Create empty memmap
-        flux = np.memmap(flux_filename, dtype=np.double, mode="w+",
+        fluxes = np.memmap(flux_filename, dtype=np.double, mode="w+",
             shape=(n_points, np.sum(n_pixels)))
 
         processes = []
-        pool = multiprocessing.Pool(threads)
         mean_dispersion_diffs = dict(zip(self.channels,
             [np.mean(np.diff(self.dispersion[each])) for each in self.channels]))
 
+        if threads > 1:
+            pool = multiprocessing.Pool(threads)
+        
         # Run the caching
         for i in range(n_points):
 
@@ -809,18 +837,28 @@ class Model(object):
 
             filenames = dict(zip(self.channels,
                 [self.flux_filenames[channel][i] for channel in self.channels]))
-            processes.append(pool.apply_async(_cache_model_point,
-                args=(i, filenames, n_pixels, wavelength_indices, smoothing_kernels,
-                    sampling_rate, mean_dispersion_diffs)))
 
-        # Update the array.
-        for process in processes:
-            index, flux = process.get()
-            flux[index, :] = flux
+            if threads > 1:
+                processes.append(pool.apply_async(_cache_model_point,
+                    args=(i, filenames, n_pixels, wavelength_indices, smoothing_kernels,
+                        sampling_rate, mean_dispersion_diffs)))
 
-        # Winter is coming; close the pool
-        pool.close()
-        pool.join()
+            else:
+                index, flux = _cache_model_point(i, filenames, n_pixels,
+                    wavelength_indices, smoothing_kernels, sampling_rate,
+                    mean_dispersion_diffs)
+                fluxes[index, :] = flux
+
+        if threads > 1:
+            # Update the array.
+            for process in processes:
+                index, flux = process.get()
+                logger.info("Completed caching point {0}".format(index))
+                fluxes[index, :] = flux
+
+            # Winter is coming; close the pool
+            pool.close()
+            pool.join()
 
         # Save the resampled dispersion arrays to disk
         if dispersion_filenames is not None:
@@ -833,20 +871,26 @@ class Model(object):
                     dtype=np.double)
                 del disp
 
-        flux[:] = np.ascontiguousarray(flux, dtype=np.double)
-        del flux
+        fluxes[:] = np.ascontiguousarray(fluxes, dtype=np.double)
+        del fluxes
 
         # Create the cached version 
         cached_model = self.configuration.copy()
         cached_model["cached_channels"] = {
-            "grid_points": grid_points_filename,
+            "points_filename": grid_points_filename,
             "flux_filename": flux_filename,
         }
         if dispersion_filenames is not None:
             cached_model["cached_channels"].update(dispersion_filenames)
+
         else:
             cached_model["cached_channels"].update(dict(zip(self.channels,
                 [cached_model["channels"][each] for each in self.channels])))
+
+        # Return logger back to original levele
+        if verbose:
+            logger.info("Resetting logging level back to {0}".format(current_level))
+            logger.setLevel(current_level)
 
         return cached_model
 
