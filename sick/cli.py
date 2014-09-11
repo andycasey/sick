@@ -160,7 +160,7 @@ def resume(args):
             sorted_parameters = sick.utils.unique_preserved_list([] + model.parameters + posteriors.keys())
             for parameter in sorted_parameters:
                 posterior_value, pos_uncertainty, neg_uncertainty = posteriors[parameter]
-                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(parameter.rjust(max_parameter_len),
+                logger.info("    {0}: {1:.2e} (+{2:.2e}, {3:.2e})".format(parameter.rjust(max_parameter_len),
                     posterior_value, pos_uncertainty, neg_uncertainty))
 
                 metadata.update({

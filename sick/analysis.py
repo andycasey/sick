@@ -23,7 +23,7 @@ import acor
 import emcee
 import numpy as np
 import numpy.random as random
-from scipy import optimize, stats, ndimage
+from scipy import optimize as op, stats, ndimage
 
 # Module
 import models, utils, specutils
@@ -657,10 +657,11 @@ def optimise(p0, observed_spectra, model, **kwargs):
 
     # Set some keyword defaults
     default_kwargs = {
-        "maxfun": 10000,
-        "maxiter": 10000,
-        "xtol": 100,
-        "ftol": 0.1
+        "maxfun": model.configuration["settings"].get("op_maxfun", 10000),
+        "maxiter": model.configuration["settings"].get("op_maxiter", 10000),
+        "xtol": model.configuration["settings"].get("op_xtol", 1e-4),
+        "ftol": model.configuration["settings"].get("op_ftol", 1e-4),
+        "disp": False
     }
     [kwargs.setdefault(k, v) for k, v in default_kwargs.iteritems()]
     
@@ -668,16 +669,16 @@ def optimise(p0, observed_spectra, model, **kwargs):
     kwargs.update({"full_output": True})
 
     # Optimisation
-    opt_theta, fopt, niter, funcalls, warnflag = optimize.fmin(
-        lambda theta, model, obs: -log_probability(theta, model, obs), p0,
+    nlp = lambda t, m, o: -log_probability(t, m, o)
+    opt_theta, fopt, niter, funcalls, warnflag = op.fmin(nlp, p0,
         args=(model, observed_spectra), **kwargs)
 
     if warnflag > 0:
         messages = [
-            "Maximum number of function evaluations made. Optimised solution may be inaccurate.",
-            "Maximum number of iterations reached. Optimised solution may be inaccurate."
+            "Maximum number of function evaluations made.",
+            "Maximum number of iterations reached."
         ]
-        logger.warn(messages[warnflag - 1])
+        logger.warn("{0} Optimised solution may be inaccurate.".format(messages[warnflag - 1]))
     logger.info("Optimisation took {0:.2f} seconds".format(time() - ta))
 
     if full_output:
@@ -798,20 +799,22 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
 
     # AGAINST MY BETTER JUDGEMENT:
     # Calculate a reduced chi-sq value for the most likely theta.
-    ml_model_fluxes = model(observations=observed_spectra, **dict(zip(model.parameters, ml_values)))
+    ml_model_fluxes = model(
+        observations=observed_spectra, **dict(zip(model.parameters, ml_values)))
     r_chi_sq, num_pixels = 0, 0
     for observed_spectrum, model_flux in zip(observed_spectra, ml_model_fluxes):
         chi_sq = (observed_spectrum.flux - model_flux)**2/observed_spectrum.variance
-        r_chi_sq += np.nansum(chi_sq)
-        num_pixels += np.sum(np.isfinite(chi_sq))
+        finite = np.isfinite(chi_sq)
+        r_chi_sq += chi_sq[finite].sum()
+        num_pixels += finite.sum()
     r_chi_sq /= (num_pixels - len(model.parameters) - 1)
 
     # Get the quantiles
     posteriors = {}
-    for parameter_name, ml_value, (quantile_16, quantile_84) in zip(model.parameters, ml_values, 
-        map(lambda v: (v[2]-v[1], v[1]-v[0]),
+    for parameter_name, ml_value, (map_value, quantile_84, quantile_16) in zip(model.parameters, ml_values, 
+        map(lambda v: (v[2], v[2]-v[1], v[0]-v[1]),
             zip(*np.percentile(sampler.chain.reshape(-1, len(model.parameters)), [16, 50, 84], axis=0)))):
-        posteriors[parameter_name] = (ml_value, quantile_16, quantile_84)
+        posteriors[parameter_name] = (ml_value, quantile_84, quantile_16)
 
         # Transform redshift posteriors to velocity posteriors
         if parameter_name.startswith("z."):
