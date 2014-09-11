@@ -320,7 +320,7 @@ def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None
     lbdim = 0.5 * factor
     trdim = 0.2 * factor
     whspace = 0.10
-    width = 8.
+    width = np.max([len(each.disp) for each in data])/150.
     height = factor*K + factor * (K - 1.) * whspace
     dimy = lbdim + height + trdim
     dimx = lbdim + width + trdim
@@ -364,13 +364,17 @@ def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None
         # Draw the random samples from the chain
         if n > 0:
             for sampled_flux in sampled_fluxes:
-                ax.plot(observed_spectrum.disp, sampled_flux[k], color="#666666")
+                ax.plot(observed_spectrum.disp, sampled_flux[k], color="r", alpha=0.1)
 
         # Draw the ML spectra
         ax.plot(observed_spectrum.disp, max_lnprob_flux, color="r", lw=2)
 
         # Plot the data
-        ax.plot(observed_spectrum.disp, observed_spectrum.flux, color="k")
+        ax.fill_between(observed_spectrum.disp,
+            observed_spectrum.flux - observed_spectrum.variance**0.5,
+            observed_spectrum.flux + observed_spectrum.variance**0.5,
+            facecolor="#cccccc", edgecolor="#666666", zorder=-1)
+        ax.plot(observed_spectrum.disp, observed_spectrum.flux, color="k", zorder=10)
 
         # By default only show common overlap between the model and spectral data
         if extents is None:
