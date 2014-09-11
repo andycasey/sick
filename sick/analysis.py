@@ -122,7 +122,7 @@ def initial_point(evaluated_priors, model, observations):
 
             # Interpolate intensities at this point
             try:
-                model_intensities.update(model.interpolate_flux(current_point))
+                model_intensities.update(model.interpolate_flux(tuple(current_point)))
             except (IndexError, ValueError) as e:
                 break
 

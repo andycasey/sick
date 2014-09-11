@@ -421,7 +421,7 @@ def solve(args):
         # [TODO]
         common_output_prefix = "multiplex"
 
-    elif args.multiple_channels:
+    elif args.multiple_sources:
         # Possibility (2): Single spectrum for many stars. Each spectrum is a
         # different source.
         sources = [[each] for each in all_spectra]

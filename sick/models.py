@@ -25,11 +25,16 @@ import yaml
 from scipy import interpolate, ndimage
 
 # Module-specific
-from utils import human_readable_digit 
+import utils
 from specutils import Spectrum1D
 
-_sick_interpolator_ = None
 logger = logging.getLogger(__name__.split(".")[0])
+
+_sick_interpolator_ = None
+@utils.lru_cache(maxsize=1000, typed=False)
+def _interpolator_(*args):
+    global _sick_interpolator_
+    return _sick_interpolator_(*args)
 
 def load_model_data(filename, **kwargs):
     """
@@ -260,7 +265,7 @@ class Model(object):
             "{num_nuisance_parameters} additional parameters, {num_grid_parameters} grid parameters:"\
             " {parameters}; {num_channels} channels: {channels}; ~{num_pixels} pixels)".format(
             module=self.__module__, num_models=num_models, num_channels=num_channels,
-            channels=', '.join(self.channels), num_pixels=human_readable_digit(num_pixels),
+            channels=', '.join(self.channels), num_pixels=utils.human_readable_digit(num_pixels),
             num_total_parameters=len(self.parameters), is_cached=["", "cached"][self.cached],
             num_nuisance_parameters=len(self.parameters) - len(self.grid_points.dtype.names), 
             num_grid_parameters=len(self.grid_points.dtype.names),
@@ -938,10 +943,10 @@ class Model(object):
             boundaries).
         """
 
-        global _sick_interpolator_
-        if _sick_interpolator_ is not None:
+        global _interpolator_
+        if _interpolator_ is not None:
        
-            interpolated_flux = _sick_interpolator_(*np.array(point).copy())
+            interpolated_flux = _interpolator_(*np.array(point).copy())
             if np.all(~np.isfinite(interpolated_flux)):
                 raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")    
         
@@ -1083,10 +1088,19 @@ class Model(object):
             objects.
         """
 
-        # Get the grid point and interpolate
-        interpolated_flux = self.interpolate_flux(
-            [theta[parameter] for parameter in self.grid_points.dtype.names]
-        )
+        # Any judicious rounding to do of the requested parameters?
+        astrophysical_point = []
+        rounding_precision = self.configuration.get("rounding_precision", {})
+        for parameter in self.grid_points.dtype.names:
+
+            decimal = rounding_precision.get(parameter, None)
+            if decimal is None:
+                astrophysical_point.append(theta[parameter])
+            else:
+                astrophysical_point.append(np.round(theta[parameter], decimal))
+
+        # Interpolate the flux
+        interpolated_flux = self.interpolate_flux(tuple(astrophysical_point))
 
         model_fluxes = []
         model_continua = []
