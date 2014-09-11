@@ -244,8 +244,9 @@ class Model(object):
                     self.flux_filenames[channel] = [matched_filenames[index] for index in sort_indices]
 
         # Pre-compute the grid boundaries
-        self.grid_boundaries = dict(zip(self.grid_points.dtype.names, [(np.min(self.grid_points[_]), np.max(self.grid_points[_])) \
-            for _ in self.grid_points.dtype.names]))
+        self.grid_boundaries = dict(zip(self.grid_points.dtype.names, 
+            [(np.min(self.grid_points[_]), np.max(self.grid_points[_])) \
+                for _ in self.grid_points.dtype.names]))
 
         # Initialise the parameters property to avoid nasty fringe cases
         _ = self.parameters
@@ -259,21 +260,25 @@ class Model(object):
     def __unicode__(self):
         num_channels = len(self.channels)
         num_models = len(self.grid_points) * num_channels
-        num_pixels = sum([len(dispersion) * num_models for dispersion in self.dispersion.values()])
+        num_pixels = sum([len(d) * num_models for d in self.dispersion.values()])
         
-        return u"{module}.Model({num_models} {is_cached} models; {num_total_parameters} parameters: "\
-            "{num_nuisance_parameters} additional parameters, {num_grid_parameters} grid parameters:"\
-            " {parameters}; {num_channels} channels: {channels}; ~{num_pixels} pixels)".format(
-            module=self.__module__, num_models=num_models, num_channels=num_channels,
-            channels=', '.join(self.channels), num_pixels=utils.human_readable_digit(num_pixels),
-            num_total_parameters=len(self.parameters), is_cached=["", "cached"][self.cached],
+        return u"{module}.Model({num_models} {is_cached} models; "\
+            "{num_total_parameters} parameters: {num_nuisance_parameters} "\
+            "additional parameters, {num_grid_parameters} grid parameters: "\
+            "{parameters}; {num_channels} channels: {channels}; ~{num_pixels} "\
+            "pixels)".format(module=self.__module__, num_models=num_models, 
+            num_channels=num_channels, channels=', '.join(self.channels), 
+            num_pixels=utils.human_readable_digit(num_pixels),
+            num_total_parameters=len(self.parameters), 
+            is_cached=["", "cached"][self.cached],
             num_nuisance_parameters=len(self.parameters) - len(self.grid_points.dtype.names), 
             num_grid_parameters=len(self.grid_points.dtype.names),
             parameters=', '.join(self.grid_points.dtype.names))
 
 
     def __repr__(self):
-        return u"<{0}.Model object with hash {1} at {2}>".format(self.__module__, self.hash[:10], hex(id(self)))
+        return u"<{0}.Model object with hash {1} at {2}>".format(
+            self.__module__, self.hash[:10], hex(id(self)))
 
 
     @property
@@ -294,11 +299,11 @@ class Model(object):
 
         try:
             return self._channels
-
         except AttributeError:
             key = ["channels", "cached_channels"][self.cached]
-            protected_channel_names = ("points_filename", "flux_filename")
-            setattr(self, "_channels", list(set(self.configuration[key].keys()).difference(protected_channel_names)))
+            protected = ("points_filename", "flux_filename")
+            setattr(self, "_channels", 
+                list(set(self.configuration[key].keys()).difference(protected)))
             return self._channels
 
 
@@ -326,7 +331,8 @@ class Model(object):
                 ["uniform(-10, 1)"] * len(self.channels)
             )))
             self._priors.update(dict(zip(self.grid_points.dtype.names,
-                ["uniform({0}, {1})".format(*self.grid_boundaries[parameter]) for parameter in self.grid_points.dtype.names]
+                ["uniform({0}, {1})".format(*self.grid_boundaries[parameter]) \
+                    for parameter in self.grid_points.dtype.names]
             )))
 
             self._priors.update(self.configuration.get("priors", {}))
@@ -357,7 +363,8 @@ class Model(object):
         """
 
         if os.path.exists(filename) and not clobber:
-            raise IOError("model configuration filename exists and we have been asked not to clobber it")
+            raise IOError("model configuration filename exists and we have been"\
+            " asked not to clobber it")
 
         dump = yaml.dump if filename.endswith(".yaml") else json.dump
         with open(filename, "w+") as fp:
@@ -402,15 +409,19 @@ class Model(object):
                     channels_found.append(model_channel)
 
             if len(channels_found) == 0:
-                raise ValueError("no model channels found for observed dispersion map from {wl_start:.1f} to {wl_end:.1f}".format(
-                    wl_start=observed_wlmin, wl_end=observed_wlmax))
+                raise ValueError("no model channels found for observed dispersion"\
+                    " map from {wl_start:.1f} to {wl_end:.1f}".format(
+                        wl_start=observed_wlmin, wl_end=observed_wlmax))
 
             elif len(channels_found) > 1:
-                index = np.argmin(np.abs(np.mean(spectrum.disp) - map(np.mean, [self.dispersion[channel] for channel in channels_found])))
+                index = np.argmin(np.abs(np.mean(spectrum.disp) \
+                    - map(np.mean, [self.dispersion[c] for c in channels_found])))
                 channels_found = [channels_found[index]]
 
-                logging.warn("Multiple model channels found for observed channel {0} ({1:.0f} to {2:.0f}). Using '{0}'"
-                    " because it's closest by mean dispersion.".format(i, observed_wlmin, observed_wlmax, channels_found[0]))
+                logging.warn("Multiple model channels found for observed channel"\
+                    " {0} ({1:.0f} to {2:.0f}). Using '{0}' because it's closest"\
+                    " by mean dispersion.".format(
+                        i, observed_wlmin, observed_wlmax, channels_found[0]))
 
             mapped_channels.append(channels_found[0])
 
@@ -420,9 +431,18 @@ class Model(object):
             mean_observed_pixel_size = np.mean(np.diff(spectrum.disp))
             mean_model_pixel_size = np.mean(np.diff(self.dispersion[channel]))
             if mean_model_pixel_size > mean_observed_pixel_size:
-                logging.warn("The mean model pixel size in the {channel} channel is larger than the mean" \
-                    " pixel size in the observed dispersion map from {wl_start:.1f} to {wl_end:.1f}".format(
-                        channel=channel, wl_start=np.min(spectrum.disp), wl_end=np.max(spectrum.disp)))
+                logging.warn("The mean model pixel size in the {channel} channel"\
+                    " is larger than the mean pixel size in the observed "\
+                    "dispersion map from {wl_start:.1f} to {wl_end:.1f}".format(
+                        channel=channel, wl_start=np.min(spectrum.disp), 
+                        wl_end=np.max(spectrum.disp)))
+
+            elif mean_observed_pixel_size > 10 * mean_model_pixel_size:
+                logging.warn("The mean model pixel in the {channel} channel is"\
+                    " much higher than the mean observed pixel in the dispersion"\
+                    " map from {wl_start:.1f} to {wl_end:.1f}".format(
+                        channel=channel, wl_start=np.min(spectrum.disp),
+                        wl_end=np.max(spectrum.disp)))
 
         # Keep an internal reference of the channel mapping
         self._channels = mapped_channels
