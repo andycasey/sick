@@ -25,20 +25,19 @@ from time import time
 import numpy as np
 import pyfits
 
-import matplotlib as mpl
-mpl.use("Agg")
-
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
 import sick
 
-CACHED_MODEL_GRID_URL = "https://raw.githubusercontent.com/andycasey/sick/master/.cached-models.json"
+CACHED_MODEL_GRID_URL = \
+    "https://raw.githubusercontent.com/andycasey/sick/master/.cached-models.json"
 
 logger = logging.getLogger("sick")
 
 def download_file(url):
     """ Download a file to the current working directory. """
+
     local_filename = url.split('/')[-1]
     r = requests.get(url, stream=True)
     with open(local_filename, 'wb') as f:
@@ -55,6 +54,7 @@ def download_file(url):
     sys.stdout.flush()
     sys.stdout.write("\nDownload of {0} complete.\n".format(local_filename))
     return local_filename
+
 
 def resume(args):
     """ Resume a MCMC simulation from a previous state. """
@@ -74,7 +74,7 @@ def resume(args):
             raise ValueError("plotting format '{0}' not available: Options are: {1}".format(
                 args.plot_format.lower(), ", ".join(available)))
 
-    all_spectra = [sick.specutils.Spectrum.load(filename) for filename in args.spectra]
+    all_spectra = [sick.specutils.Spectrum.load(filename) for filename in args.spectrum_filenames]
 
     # Are there multiple spectra for each source?
     if args.multiple_channels:
@@ -113,7 +113,7 @@ def resume(args):
         "MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE", "UTEND", "UTSTART", )
     default_metadata = {
         "model": model.hash, 
-        "input_filenames": ", ".join(args.spectra),
+        "input_filenames": ", ".join(args.spectrum_filenames),
         "sick_version": sick.__version__,
     }
 
@@ -381,7 +381,10 @@ def download(args):
 
 
 def solve(args):
-    """ Calculate posterior probability distributions for model parameters given the data. """
+    """
+    Calculate posterior probability distributions for model parameters given 
+    the data.
+    """
 
     if not os.path.exists(args.model):
         raise IOError("model filename {0} does not exist".format(args.model))
@@ -392,27 +395,41 @@ def solve(args):
         plt.close(fig)
 
         if args.plot_format.lower() not in available:
-            raise ValueError("plotting format '{0}' not available: Options are: {1}".format(
-                args.plot_format.lower(), ", ".join(available)))
+            raise ValueError("plotting format {0} not available: Options are: "\
+                "{1}".format(args.plot_format.lower(), ", ".join(available)))
 
-    all_spectra = [sick.specutils.Spectrum.load(filename) for filename in args.spectra]
+    all_spectra = map(sick.specutils.Spectrum.load, args.spectrum_filenames)
 
-    # Are there multiple spectra for each source?
-    if args.multiple_channels:
-        # If so, they should all have the same length (e.g. same number of objects)
+    # Possibilities:
+    # (1) Many spectra for single star [default behaviour]
+    # (2) Single spectrum for many stars [indicated by --multi-sources]
+    # (3) Many spectra for many stars [indicated by --multi-plexing]
+
+    # Possibility (3): Are the input FITS files multiplexed spectra?
+    if args.multiplexing:
+
+        # This implies multiple sources.
         if len(set(map(len, all_spectra))) > 1:
-            raise IOError("filenames contain different number of spectra")
+            raise IOError("input filenames contain different number of spectra")
 
-        # OK, they have the same length. They are probably apertures of the same
-        # stars. Let's join them properly
-        sorted_spectra = []
-        num_stars, num_apertures = len(all_spectra[0]), len(all_spectra)
-        for i in range(num_stars):
-            sorted_spectra.append([all_spectra[j][i] for j in range(num_apertures)])
+        sources = []
+        num_channels, num_sources = len(all_spectra), len(all_spectra[0])
+        for i in xrange(num_sources):
+            sources.append([all_spectra[j][i] for j in xrange(num_channels)])
+        
+        # Get filename commonality
+        # [TODO]
+        common_output_prefix = "multiplex"
 
-        all_spectra = sorted_spectra
+    elif args.multiple_channels:
+        # Possibility (2): Single spectrum for many stars. Each spectrum is a
+        # different source.
+        sources = [[each] for each in all_spectra]
+
     else:
-        all_spectra = [all_spectra]
+        # Possibility (1): Many spectra for single star
+        sources = [all_spectra]
+        common_output_prefix = "single"
 
     # Load the model
     model = sick.models.Model(args.model)
@@ -426,45 +443,60 @@ def solve(args):
         logger.info("  {0}".format(line))
 
     # Define headers that we want in the results filename 
-    default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS", "LONG_OBS",
-        "MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE", "UTEND", "UTSTART", )
+    default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS",
+        "LONG_OBS", "MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTDATE",
+        "UTEND", "UTSTART", )
     default_metadata = {
         "model": model.hash, 
-        "input_filenames": ", ".join(args.spectra),
+        # [TODO] input_filenames may be char-limited for possibility #2
+        "input_filenames": ", ".join(args.spectrum_filenames),
         "sick_version": sick.__version__,
     }
 
     # For each source, solve
-    for i, spectra in enumerate(all_spectra, start=1):
+    for i, spectra in enumerate(sources, start=1):
 
-        # Force spectra as a list
-        if not isinstance(spectra, (list, tuple)):
-            spectra = [spectra]
-
-        logger.info("Starting on object #{0} (RA {1}, DEC {2} -- {3})".format(i, spectra[0].headers.get("RA", "None"),
-            spectra[0].headers.get("DEC", "None"), spectra[0].headers.get("OBJECT", "Unknown")))
+        logger.info("Starting on object #{0} (RA {1}, DEC {2} -- {3})".format(i,
+            spectra[0].headers.get("RA", "None"),
+            spectra[0].headers.get("DEC", "None"),
+            spectra[0].headers.get("OBJECT", "Unknown")))
 
         # Create metadata and put header information in
         if args.skip > i - 1:
             logger.info("Skipping object #{0}".format(i))
             continue
 
-        if args.number_to_solve != "all" and i > (int(args.number_to_solve) + args.skip):
-            logger.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
+        # Check to see whether we should skip this source entirely
+        if  args.number_to_solve != "all" \
+        and i > (int(args.number_to_solve) + args.skip):
+            logger.info("We have analysed {0} spectra. Exiting..".format(
+                args.number_to_solve))
             break
 
-        # If there are many spectra to analyse, include the run ID in the output filenames.
-        if len(all_spectra) > 1:
-            output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, str(i), x]))
-        else:
-            output = lambda x: os.path.join(args.output_dir, "-".join([args.filename_prefix, x]))
+        # Create reasonable output filename prefixes
+        if args.multiplexing:
+            # COMMON_MULTIPLEX_FILENAME-NUM-DESC.EXT
+            output = lambda x: os.path.join(args.output_dir, "-".join([
+                common_output_prefix, str(i), x]))
 
-        # Does a solution already exist for this star? If so are we authorised to clobber it?
+        elif args.multiple_sources:
+            # INPUT_FILENAME_WITHOUT_EXT-DESC.EXT
+            output = lambda x: os.path.join(args.output_dir, 
+                "-".join([os.path.splitext(args.spectrum_filenames[i])[0], x]))
+
+        else:
+            # COMMON_FILENAME-DESC.EXT
+            output = lambda x: os.path.join(args.output_dir, "-".join([
+                common_output_prefix, x]))
+
+        # Does a solution already exist for this star? Can we clobber it?
         if os.path.exists(output("result.json")) and not args.clobber:
-            logger.info("Skipping object #{0} as a results file already exists ({1}) and we have been asked not to "
-                "clobber it".format(i, output("result.json")))
+            logger.info("Skipping object #{0} as a results file already exists"\
+                " ({1}) and we have been asked not to clobber it".format(
+                    i, output("result.json")))
             continue
 
+        # Create the metadata
         metadata = {}
         header_columns = []
         for header in default_headers:
@@ -472,7 +504,6 @@ def solve(args):
             header_columns.append(header)
             metadata[header] = spectra[0].headers[header]
 
-        # Set defaults for metadata
         metadata.update({"run_id": i})
         metadata.update(default_metadata)
         
@@ -490,19 +521,24 @@ def solve(args):
             max_parameter_len = max(map(len, model.parameters))
             for parameter in model.parameters:
                 posterior_value, pos_uncertainty, neg_uncertainty = posteriors[parameter]
-                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(parameter.rjust(max_parameter_len),
-                    posterior_value, pos_uncertainty, neg_uncertainty))
+                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(
+                    parameter.rjust(max_parameter_len), posterior_value, 
+                    pos_uncertainty, neg_uncertainty))
 
                 metadata.update({
                     parameter: posterior_value,
-                    "u_maxabs_{0}".format(parameter): np.abs([neg_uncertainty, pos_uncertainty]).max(),
+                    "u_maxabs_{0}".format(parameter): np.abs([
+                            neg_uncertainty,
+                            pos_uncertainty
+                        ]).max(),
                     "u_pos_{0}".format(parameter): pos_uncertainty,
                     "u_neg_{0}".format(parameter): neg_uncertainty,
                 })
 
             # Save information related to the data
             metadata.update(dict(
-                [("mean_flux_channel_{0}".format(k), np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
+                [("mean_flux_channel_{0}".format(k), \
+                    np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
                     for k, spectrum in enumerate(spectra)]
             ))
 
@@ -546,7 +582,8 @@ def solve(args):
 
             # Save sampler state
             with open(output("model.state"), "wb+") as fp:
-                pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], sampler.random_state], fp, -1)
+                pickle.dump([sampler.chain[:, -1, :], sampler.lnprobability[:, -1], 
+                    sampler.random_state], fp, -1)
 
             # Plot results
             if args.plotting:
@@ -572,7 +609,8 @@ def solve(args):
                 fig.savefig(chain_plot_filename)
 
                 # Make a corner plot with just the astrophysical parameters
-                indices = np.array([model.parameters.index(parameter) for parameter in model.grid_points.dtype.names])
+                indices = np.array([model.parameters.index(parameter) \
+                    for parameter in model.grid_points.dtype.names])
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, indices],
                     labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
                     quantiles=[.16, .50, .84], verbose=False,
@@ -667,22 +705,25 @@ def aggregate(args):
 def main():
     """ Parse arguments and execute a particular subparser. """
 
-    parser = argparse.ArgumentParser(description="sick, the spectroscopic inference crank",
-        epilog="See 'sick COMMAND -h' for more information on a specific command. Documentation"
-        " and examples available online at https://github.com/andycasey/sick/wiki")
-    
+    parser = argparse.ArgumentParser(
+        description="sick, the spectroscopic inference crank",
+        epilog="See 'sick COMMAND -h' for more information on a specific command."\
+        " Documentation and examples available at https://github.com/andycasey/sick")
+
     # Create subparsers
     subparsers = parser.add_subparsers(title="command", dest="command",
         description="Specify the action to perform.")
 
     # Create a parent subparser
     parent_parser = argparse.ArgumentParser(add_help=False)
-    parent_parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False,
-        help="Vebose mode. Logger will print debugging messages.")
-    parent_parser.add_argument("--clobber", dest="clobber", action="store_true", default=False,
-        help="Overwrite existing files if they already exist.")
-    parent_parser.add_argument("--debug", dest="debug", action="store_true", default=False,
-        help="Debug mode. Any suppressed exception during runtime will be re-raised.")
+    parent_parser.add_argument("-v", "--verbose", dest="verbose",
+        action="store_true", default=False, help="Vebose mode. Logger will print"\
+        " debugging messages.")
+    parent_parser.add_argument("--clobber", dest="clobber", action="store_true",
+        default=False, help="Overwrite existing files if they already exist.")
+    parent_parser.add_argument("--debug", dest="debug", action="store_true", 
+        default=False, help="Enable debug mode. Any suppressed exception during "\
+        "runtime will be re-raised.")
 
     # Create parser for the aggregate command
     aggregate_parser = subparsers.add_parser("aggregate", parents=[parent_parser],
@@ -703,29 +744,35 @@ def main():
 
     # Create parser for the solve command
     solve_parser = subparsers.add_parser("solve", parents=[parent_parser],
-        help="Compute posterior probability distributions for the model parameters, given the data.")
+        help="Compute posterior probability distributions for the model "\
+        "parameters, given the data.")
     solve_parser.add_argument("model", type=str,
         help="The model filename in YAML- or JSON-style formatting.")
-    solve_parser.add_argument("spectra", nargs="+",
+    solve_parser.add_argument("spectrum_filenames", nargs="+",
         help="Filenames of (observed) spectroscopic data.")
-    solve_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", type=str,
-        default=os.getcwd(),
-        help="Directory where to save output files to.")
-    solve_parser.add_argument("--filename-prefix", "-p", dest="filename_prefix", default="sick",
-        help="The filename prefix to use for all output files.")
-    solve_parser.add_argument("--multi-channel", "-mc", dest="multiple_channels",
-        action="store_true", default=False,
-        help="Use if each source has multiple spectral channels. Default is false, implying that "
-        "any additional spectra refers to a different source.")
-    solve_parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all",
-        help="Specify the number of sources to solve. Default is to solve for %(default)s sources.")
-    solve_parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0,
-        help="Number of sources to skip (default: %(default)s)")
-    solve_parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True,
-        help="Disable plotting.")
-    solve_parser.add_argument("--plot-format", "-pf", dest="plot_format", action="store", type=str,
-        default="jpg",
-        help="Format for output plots (default: %(default)s). Available formats are (case insensitive):"
+    solve_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?",
+        type=str, default=os.getcwd(), help="Directory for output files.")
+
+    solve_parser.add_argument("--multi-sources", dest="multiple_sources",
+        action="store_true", default=False, help="Each spectrum is considered "\
+        "a different source.")
+    solve_parser.add_argument("--multi-plexing", dest="multiplexing",
+        action="store_true", default=False, help="Specify that each FITS file "\
+        "contains a single channel of spectrum for many stars. Multiplexing "\
+        "implies --multi-sources to be true.")
+    solve_parser.add_argument("-n", "--number-to-solve", dest="number_to_solve",
+        default="all", help="Specify the number of sources to solve. This is "\
+        "only applicable when --multi-sources or --multi-plexing is used. The "\
+        "default is to solve for %(default)s sources.")
+    solve_parser.add_argument("-s", "--skip", dest="skip", action="store", 
+        type=int, default=0, help="Number of sources to skip. This is only "\
+        "applicable when --multi-sources or --multi-plexing is used. Default: "\
+        "%(default)s)")
+    solve_parser.add_argument("--no-plots", dest="plotting", action="store_false",
+        default=True, help="Disable plotting.")
+    solve_parser.add_argument("--plot-format", "-pf", dest="plot_format", 
+        action="store", type=str, default="jpg", help="Format for output plots"\
+        " (default: %(default)s). Available formats are (case insensitive):" \
         " PDF, JPG, PNG, EPS")
     solve_parser.set_defaults(func=solve)
 
@@ -740,13 +787,11 @@ def main():
         help="The number of MCMC steps to burn.")
     resume_parser.add_argument("sample", type=int,
         help="The number of MCMC steps to sample after burn-in.")
-    resume_parser.add_argument("spectra", nargs="+",
+    resume_parser.add_argument("spectrum_filenames", nargs="+",
         help="Filenames of (observed) spectroscopic data.")
     resume_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", type=str,
         default=os.getcwd(),
         help="Directory where to save output files to.")
-    resume_parser.add_argument("--filename-prefix", "-p", dest="filename_prefix", default="sick",
-        help="The filename prefix to use for the output files.")
     resume_parser.add_argument("--multi-channel", "-mc", dest="multiple_channels",
         action="store_true", default=False,
         help="Use if each source has multiple spectral channels. Default is false, implying that "
