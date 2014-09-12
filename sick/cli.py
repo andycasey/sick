@@ -416,10 +416,6 @@ def solve(args):
         num_channels, num_sources = len(all_spectra), len(all_spectra[0])
         for i in xrange(num_sources):
             sources.append([all_spectra[j][i] for j in xrange(num_channels)])
-        
-        # Get filename commonality
-        # [TODO]
-        common_output_prefix = "multiplex"
 
     elif args.multiple_sources:
         # Possibility (2): Single spectrum for many stars. Each spectrum is a
@@ -429,7 +425,6 @@ def solve(args):
     else:
         # Possibility (1): Many spectra for single star
         sources = [all_spectra]
-        common_output_prefix = "single"
 
     # Load the model
     model = sick.models.Model(args.model)
@@ -477,7 +472,8 @@ def solve(args):
         if args.multiplexing:
             # COMMON_MULTIPLEX_FILENAME-NUM-DESC.EXT
             output = lambda x: os.path.join(args.output_dir, "-".join([
-                common_output_prefix, str(i), x]))
+                os.path.commonprefix(map(os.path.basename, args.spectra)), 
+                str(i), x]))
 
         elif args.multiple_sources:
             # INPUT_FILENAME_WITHOUT_EXT-DESC.EXT
@@ -487,7 +483,7 @@ def solve(args):
         else:
             # COMMON_FILENAME-DESC.EXT
             output = lambda x: os.path.join(args.output_dir, "-".join([
-                common_output_prefix, x]))
+                os.path.commonprefix(map(os.path.basename, args.spectra)), x]))
 
         # Does a solution already exist for this star? Can we clobber it?
         if os.path.exists(output("result.json")) and not args.clobber:
