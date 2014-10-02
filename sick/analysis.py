@@ -595,30 +595,55 @@ def random_scattering(observed_spectra, model):
     # Evaluate some initial thetas psi in serial, then map to parallel
     astrophysical_samples = (eval_prior(model) for _ in xrange(samples))
 
-    pool = multiprocessing.Pool(model.configuration["settings"].get("threads", 1))
-    try:
-        scatter_func = utils.wrapper(initial_point, [model, observed_spectra])
-        points = pool.map(scatter_func, astrophysical_samples)
+    threads = model.configuration["settings"].get("threads", 1)
+    if threads > 1:
 
-        lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
-        probabilities = pool.map(lnprob_func, points)
+        pool = multiprocessing.Pool(threads)
+        try:
+            scatter_func = utils.wrapper(initial_point, [model, observed_spectra])
+            points = pool.map(scatter_func, astrophysical_samples)
 
-    except:
-        logging.exception("Exception raised while doing random random_scattering")
-        raise
+            lnprob_func = utils.wrapper(log_probability, [model, observed_spectra])
+            probabilities = pool.map(lnprob_func, points)
+
+        except:
+            logging.exception("Exception raised while doing random random_scattering")
+            raise
+
+        else:
+            index = np.argmax(probabilities)
+            p0 = points[index]
+
+        finally:
+            pool.close()
+            pool.join()
 
     else:
+        points = [initial_point(prior, model, observed_spectra) for prior in astrophysical_samples]
+        probabilities = [log_probability(point, model, observed_spectra) for point in points]
+
         index = np.argmax(probabilities)
         p0 = points[index]
-
-    finally:
-        pool.close()
-        pool.join()
 
     logger.info("Calculating log probabilities of {0:.0f} prior points took {1:.2f} seconds".format(
         samples, time() - ta))
     
     return p0
+
+
+def _reduced_chi_sq(theta, observed_spectra, model):
+    """ Calculate the reduced chi squared value for some model parameters theta. """
+
+    model_fluxes = model(observations=observed_spectra, **theta)
+    r_chi_sq, num_pixels = 0, 0
+    for observed_spectrum, model_flux in zip(observed_spectra, model_fluxes):
+        chi_sq = (observed_spectrum.flux - model_flux)**2/observed_spectrum.variance
+        r_chi_sq += np.nansum(chi_sq)
+        num_pixels += np.sum(np.isfinite(chi_sq))
+    r_chi_sq /= (num_pixels - len(model.parameters) - 1)
+
+    return r_chi_sq
+
 
 
 def optimise(p0, observed_spectra, model, **kwargs):
@@ -651,26 +676,41 @@ def optimise(p0, observed_spectra, model, **kwargs):
     for parameter, value in zip(model.parameters, p0):
         logger.info("  {0}: {1:.2e}".format(parameter, value))
 
-    ta = time()
-
-    full_output = "full_output" in kwargs and kwargs["full_output"]
+    t_init = time()
 
     # Set some keyword defaults
     default_kwargs = {
         "maxfun": 10000,
         "maxiter": 10000,
         "xtol": 100,
-        "ftol": 0.1
+        "ftol": 0.1,
+        "disp": False
     }
     [kwargs.setdefault(k, v) for k, v in default_kwargs.iteritems()]
     
-    # And we need to overwrite this one because we want all the information, even if the user doesn't.
+    # And we need to overwrite this one because we want all the information, 
+    # even if the user doesn't.
     kwargs.update({"full_output": True})
 
+    logger.debug("Passing keywords to optimiser (these can be passed directly "\
+        "from optimise_settings in the model configuration file if using the "\
+        "command line interface): {0}".format(kwargs))
+
     # Optimisation
-    opt_theta, fopt, niter, funcalls, warnflag = optimize.fmin(
+    theta, fopt, niter, funcalls, warnflag = optimize.fmin(
         lambda theta, model, obs: -log_probability(theta, model, obs), p0,
         args=(model, observed_spectra), **kwargs)
+
+    opt_theta = dict(zip(model.parameters, theta))
+    r_chi_sq = _reduced_chi_sq(opt_theta, observed_spectra, model)
+    additional_info = {
+        "fopt": fopt,
+        "niter": niter,
+        "funcalls": funcalls,
+        "warnflag": warnflag,
+        "time_elapsed": time() - t_init,
+        "reduced_chi_sq": r_chi_sq
+    }
 
     if warnflag > 0:
         messages = [
@@ -678,12 +718,9 @@ def optimise(p0, observed_spectra, model, **kwargs):
             "Maximum number of iterations reached. Optimised solution may be inaccurate."
         ]
         logger.warn(messages[warnflag - 1])
-    logger.info("Optimisation took {0:.2f} seconds".format(time() - ta))
+    logger.info("Optimisation took {0:.2f} seconds".format(additional_info["time_elapsed"]))
 
-    if full_output:
-        return (opt_theta, fopt, niter, funcalls, warnflag)
-
-    return opt_theta
+    return (opt_theta, additional_info)
 
 
 def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=None,
@@ -750,7 +787,7 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
     if sample is None:
         sample = model.configuration["settings"]["sample"]
 
-    mean_acceptance_fractions = np.zeros(burn + sample)
+    mean_acceptance_fractions = []
     autocorrelation_time = np.zeros((burn, len(model.parameters)))
 
     # Initialise the sampler
@@ -763,20 +800,20 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
         for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, \
             lnprob0=lnprob0, rstate0=rstate0, iterations=burn)):
             
-            mean_acceptance_fractions[i] = np.mean(sampler.acceptance_fraction)
+            mean_acceptance_fractions.append(np.mean(sampler.acceptance_fraction))
             
             # Announce progress
             logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f},"\
                 " maximum log probability in last step was {2:.3e}".format(i + 1,
-                mean_acceptance_fractions[i], np.max(sampler.lnprobability[:, i])))
+                mean_acceptance_fractions[-1], np.max(sampler.lnprobability[:, i])))
 
-            if mean_acceptance_fractions[i] in (0, 1):
+            if mean_acceptance_fractions[-1] in (0, 1):
                 raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(
                     mean_acceptance_fractions[i]))
 
     except KeyboardInterrupt as e:
         # Convergence achieved.
-        mean_acceptance_fractions = mean_acceptance_fractions[i + 1 + sample]
+        None
 
     # Save the chain and calculated log probabilities for later
     chain, lnprobability = sampler.chain, sampler.lnprobability
@@ -784,10 +821,40 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
     logger.info("Resetting chain...")
     sampler.reset()
 
-    logger.info("Sampling posterior...")
-    for j, state in enumerate(sampler.sample(pos, iterations=sample)):
-        mean_acceptance_fractions[i + j + 1] = np.mean(sampler.acceptance_fraction)
+    while True:
 
+        logger.info("Sampling posterior for {0} steps...".format(sample))
+        for j, state in enumerate(sampler.sample(pos, iterations=sample)):
+            mean_acceptance_fractions.append(np.mean(sampler.acceptance_fraction))
+
+        # Estimate auto-correlation times for all parameters.
+        logger.info("Auto-correlation lengths:")
+        autocorrelation_times = []
+        max_parameter_len = max(map(len, model.parameters))
+        for i, parameter in enumerate(model.parameters):
+            acor_time = acor.acor(np.mean(sampler.chain[:, :, i], axis=0))
+
+            is_ok = ["", "[OK]"][sample >= model._acor_multiple * acor_time[0]]
+            logger.info("  acor({0}): {1:.2f}   {2}".format(
+                parameter.rjust(max_parameter_len), acor_time[0], is_ok))
+            autocorrelation_times.append(acor_time[0])
+
+        if not model._judge_convergence:
+            break
+
+        else:
+            # Judge convergence.
+            logger.info("Checking for convergence...")
+            converged = (sample >= model._acor_multiple * max(autocorrelation_times))
+
+            if converged:
+                logger.info("Achievement unlocked: convergence.")
+                break
+
+            else:
+                logger.warn("Convergence may not be achieved.")
+                break
+                
     # Concatenate the existing chain and lnprobability with the posterior samples
     chain = np.concatenate([chain, sampler.chain], axis=1)
     lnprobability = np.concatenate([lnprobability, sampler.lnprobability], axis=1)
@@ -796,35 +863,35 @@ def sample(observed_spectra, model, p0=None, lnprob0=None, rstate0=None, burn=No
     ml_index = np.argmax(lnprobability.reshape(-1))
     ml_values = chain.reshape(-1, len(model.parameters))[ml_index]
 
-    # AGAINST MY BETTER JUDGEMENT:
-    # Calculate a reduced chi-sq value for the most likely theta.
-    ml_model_fluxes = model(observations=observed_spectra, **dict(zip(model.parameters, ml_values)))
-    r_chi_sq, num_pixels = 0, 0
-    for observed_spectrum, model_flux in zip(observed_spectra, ml_model_fluxes):
-        chi_sq = (observed_spectrum.flux - model_flux)**2/observed_spectrum.variance
-        r_chi_sq += np.nansum(chi_sq)
-        num_pixels += np.sum(np.isfinite(chi_sq))
-    r_chi_sq /= (num_pixels - len(model.parameters) - 1)
-
-    # Get the quantiles
+    # Get the quantiles (we return the MAP value)
     posteriors = {}
-    for parameter_name, ml_value, (quantile_16, quantile_84) in zip(model.parameters, ml_values, 
-        map(lambda v: (v[2]-v[1], v[1]-v[0]),
+    for parameter_name, (quantile_16, map_value, quantile_84) in zip(model.parameters, 
+        map(lambda v: (v[2]-v[1], v[1], v[1]-v[0]),
             zip(*np.percentile(sampler.chain.reshape(-1, len(model.parameters)), [16, 50, 84], axis=0)))):
-        posteriors[parameter_name] = (ml_value, quantile_16, quantile_84)
+        posteriors[parameter_name] = (map_value, quantile_16, quantile_84)
 
         # Transform redshift posteriors to velocity posteriors
         if parameter_name.startswith("z."):
             posteriors["v_rad." + parameter_name[2:]] = list(np.array(posteriors[parameter_name]) * 299792458e-3)
+
+    # AGAINST MY BETTER JUDGEMENT:
+    ml_r_chi_sq = _reduced_chi_sq(
+        dict(zip(model.parameters, ml_values)), observed_spectra, model)
+    r_chi_sq = _reduced_chi_sq(
+        dict(zip(model.parameters, [posteriors[p][0] for p in model.parameters])),
+        observed_spectra, model)
 
     # Send back additional information
     additional_info = {
         "priors": p0,
         "chain": chain,
         "lnprobability": lnprobability,
-        "mean_acceptance_fractions": mean_acceptance_fractions,
+        "warnflag": 0,
+        "mean_acceptance_fractions": np.array(mean_acceptance_fractions),
         "time_elapsed": time() - t_init,
-        "reduced_chi_sq": r_chi_sq
+        "reduced_chi_sq": r_chi_sq,
+        "ml_reduced_chi_sq": ml_r_chi_sq,
+        "ml_theta": dict(zip(model.parameters, ml_values))
     }
     return posteriors, sampler, additional_info
 
@@ -866,20 +933,23 @@ def solve(observed_spectra, model, **kwargs):
         most_probable_scattered_point = random_scattering(observed_spectra, model)
 
         kwargs_copy = kwargs.copy()
-        kwargs_copy.update({"full_output": True})
-        opt_theta, fopt, niter, funcalls, warnflag = optimise(
-            most_probable_scattered_point, observed_spectra, model, **kwargs_copy)
+        opt_theta, additional_info = optimise(most_probable_scattered_point, 
+            observed_spectra, model, **kwargs_copy)
 
         # Sample around opt_theta using some sensible things
-        p0 = sample_ball(dict(zip(model.parameters, opt_theta)), observed_spectra, model)
+        p0 = sample_ball(opt_theta, observed_spectra, model)
         
     else:
         warnflag, p0 = 0, priors.explicit(model, observed_spectra)
+        additional_info = {
+            "warnflag": warnflag
+        }
 
     logger.info("Starting point summary:")
     for i, parameter in enumerate(model.parameters):
         if len(p0.shape) > 1 and p0.shape[1] > 1:
-            logger.info("  Parameter {0} - mean: {1:.4e}, std: {2:.4e}, min: {3:.4e}, max: {4:.4e}".format(
+            logger.info("  Parameter {0} - mean: {1:.4e}, std: {2:.4e}, min: "\
+                "{3:.4e}, max: {4:.4e}".format(
                 parameter, np.mean(p0[:, i]), np.std(p0[:, i]), np.min(p0[:, i]), np.max(p0[:, i])))
         else:
             logger.info(" Parameter {0} - initial point: {1:.2e}".format(parameter, p0[i]))
@@ -888,11 +958,9 @@ def solve(observed_spectra, model, **kwargs):
     posteriors, sampler, additional_info = sample(observed_spectra, model, p0)
 
     # Update the additional_info dictionary with information from other steps    
-    additional_info.update({ 
-        "warnflag": warnflag,
-        "time_elapsed": time() - t_init
-    })
-    logger.info("Completed in {0:.2f} seconds".format(additional_info["time_elapsed"]))
+    additional_info["time_elapsed"] = time() - t_init
+    logger.info("Completed solving (scattering, optimisation, inference) in "\
+        "{0:.0f} seconds".format(additional_info["time_elapsed"]))
 
     return (posteriors, sampler, additional_info)
 
