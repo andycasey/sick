@@ -8,6 +8,8 @@ virtualenv:
   system_site_packages: true
 before_install:
   - sudo apt-get install libcfitsio3-dev python-matplotlib python-pyfits python-scipy
+  - "export DISPLAY=:99.0"
+  - "sh -e /etc/init.d/xvfb start"
 install: 
   - pip install coveralls
   - pip install -r requirements.txt --use-mirrors
