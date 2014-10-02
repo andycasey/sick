@@ -11,12 +11,11 @@ __author__ = ("Triangle.py (corner) was written by Dan Foreman-Mackey, and "
 __all__ = ["chains", "corner", "projection"]
 
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
+import acor
 from triangle import corner
 
 import specutils
@@ -257,15 +256,64 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     return fig
 
 
-def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None):
+def autocorrelation(chain, index=0, limit=-1, fig=None, figsize=None):
+    """
+    Plot the autocorrelation for each parameter of a sampler chain.
+
+    :param chain:
+        The sampled parameter values.
+
+    :type chain:
+        :class:`numpy.ndarray`
+
+    :param index: [optional]
+        Index to calculate the autocorrelation from.
+
+    :type index:
+        int
+
+    :param limit: [optional]
+        Maximum number of MCMC steps to display.
+
+    :type limit:
+        int
+
+    :param fig: [optional]
+        Figure class to use.
+
+    :type fig:
+        :class:`matplotlib.Figure` or None
+
+    :param figsize: [optional]
+        The figure size (x-dimension, y-dimension) in inches.
+
+    :type figsize:
+        tuple or None
+    """
+
+    if fig is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        ax = fig.axes[0]
+
+    # Calculate the autocorrelation function for each parameter
+    num_parameters = chain.shape[2]
+    for i in xrange(num_parameters):
+        ax.plot(acor.function(np.mean(chain[:, index:, i], axis=0)), "k",
+            lw=2)
+
+    ax.axhline(0, color="k")
+    ax.set_xlim(0, limit if limit > 0 else chain.shape[1] - index)
+    ax.set_xlabel("$\\tau$")
+    ax.set_ylabel("Auto-correlation")
+
+    return fig
+
+
+def projection(model, data, optimised_theta=None, sampler=None, n=100, 
+    extents=None, fig=None, figsize=None):
     """
     Project the maximum likelihood values and sampled posterior points as spectra.
-
-    :param sampler:
-        The sampler employed.
-
-    :type sampler:
-        :class:`emcee.EnsembleSampler`
 
     :param model:
         The model employed.
@@ -278,6 +326,19 @@ def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None
 
     :type data:
         iterable of :class:`sick.specutils.Spectrum1D` objects
+
+    :param optimised_theta: [optional]
+        The optimised model parameters given the data. Either optimised_theta
+        or sampler should be given.
+
+    :type optimised_theta:
+        dict
+
+    :param sampler: [optional]
+        The sampler employed. Either optimised_theta or sampler should be given.
+
+    :type sampler:
+        :class:`emcee.EnsembleSampler`    
 
     :param extents: [optional]
         The wavelength extents to plot for each channel in the form of [(min_chan_1,
@@ -332,34 +393,47 @@ def projection(sampler, model, data, n=100, extents=None, fig=None, figsize=None
 
     else:
         try:
-            axes = np.array(fig.axes).reshape((1, K))
+            axes = np.array(fig.axes).reshape((K, 1))
         except:
             raise ValueError("Provided figure has {0} axes, but data has "
                 "parameters K={1}".format(len(fig.axes), K))
 
     # Find the most probable sampled theta and compute spectra for it
-    max_lnprob_index = np.argmax(sampler.lnprobability.flatten())
-    max_lnprob_theta = sampler.flatchain[max_lnprob_index]
-    max_lnprob_fluxes = model(observations=data, **dict(zip(model.parameters, max_lnprob_theta)))
+    if sampler is not None:
 
-    if n > 0:
-        # Draw samples from sampler.chain and compute spectra for them
+        max_lnprob_index = np.argmax(sampler.lnprobability.flatten())
+        max_lnprob_theta = sampler.flatchain[max_lnprob_index]
+        max_lnprob_fluxes = model(observations=data, **dict(zip(model.parameters, max_lnprob_theta)))
+
+        if n > 0:
+            # Draw samples from sampler.chain and compute spectra for them
+            sampled_fluxes = []
+            n_samples = len(sampler.flatchain)
+
+            for i in range(n):
+                sampled_theta = dict(zip(model.parameters, sampler.flatchain[np.random.randint(0, n_samples)]))
+                try:
+                    sampler_flux = model(observations=data, **sampled_theta)
+                except:
+                    continue
+                else:
+                    sampled_fluxes.append(sampler_flux)
+        
+    elif optimised_theta is not None:
+
         sampled_fluxes = []
-        n_samples = len(sampler.flatchain)
+        max_lnprob_fluxes = model(observations=data, **optimised_theta)
+        
+    else:
+        raise ValueError("either optimised_theta or sampler should be given")
 
-        for i in range(n):
-            sampled_theta = dict(zip(model.parameters, sampler.flatchain[np.random.randint(0, n_samples)]))
-            try:
-                sampler_flux = model(observations=data, **sampled_theta)
-            except:
-                continue
-            else:
-                sampled_fluxes.append(sampler_flux)
-    
+
     if len(data) == 1:
         axes = [axes]
 
-    for k, (ax, max_lnprob_flux, observed_spectrum) in enumerate(zip(axes, max_lnprob_fluxes, data)):
+    for k, (max_lnprob_flux, observed_spectrum) in enumerate(zip(max_lnprob_fluxes, data)):
+
+        ax = axes[k]
 
         # Draw the random samples from the chain
         if n > 0:
