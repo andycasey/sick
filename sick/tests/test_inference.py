@@ -115,7 +115,7 @@ class InferenceTest(unittest.TestCase):
         fig.savefig("inference-all.pdf")
 
         # Make a projection plot
-        fig = sick.plot.projection(sampler, model, observations)
+        fig = sick.plot.projection(model, observations, sampler=sampler)
         fig.savefig("projection.pdf")
 
         # Assert that we have at least some solution
