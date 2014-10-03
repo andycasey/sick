@@ -1010,7 +1010,8 @@ def main():
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
     # Create a default filename prefix based on the input filename arguments
-    if args.filename_prefix is None:
+    if args.command.lower() in ("solve", "optimise", "resume") \
+    and args.filename_prefix is None:
         args.filename_prefix = _default_output_prefix(args.spectra)
 
     return args.func(args)
