@@ -79,7 +79,8 @@ class InferenceTest(unittest.TestCase):
 
         # Now let's solve for the model parameters
         posteriors, sampler, info = sick.solve(observations, model)
-
+        print(posteriors)
+        
         # Plot the chains
         fig = sick.plot.chains(info["chain"],
             labels=sick.utils.latexify(model.parameters), burn_in=1000,
