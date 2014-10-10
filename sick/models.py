@@ -521,7 +521,7 @@ class Model(object):
             self.configuration["settings"] = {}
 
         default_settings = {
-            "sample": int(3.5 * len(self.parameters)**2),
+            "sample": int(4 * len(self.parameters)**2),
             "walkers": 2 * len(self.parameters),
             "burn": 1000
         }
