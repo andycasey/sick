@@ -76,17 +76,20 @@ def load_model_data(filename, **kwargs):
 def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
     smoothing_kernels, sampling_rate, mean_dispersion_diffs):
 
+    logger.debug("Caching point {0}: {1}".format(index, 
+        ", ".join(map(os.path.basename, filenames.values()))))
+
     flux = np.zeros(np.sum(num_pixels))
     for i, (channel, flux_filename) in enumerate(filenames.iteritems()):
 
-        sj, ej = map(int, map(sum, [num_pixels[:j], num_pixels[:j+1]]))
+        sj, ej = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
 
         # Get the flux
         si, ei = wavelength_indices[channel]
         channel_flux = load_model_data(flux_filename)
 
         # Do we need to convolve it first?
-        if smoothing_kernels.has_key(channel):
+        if channel in smoothing_kernels:
             sigma = (smoothing_kernels[channel]/(2 * (2*np.log(2))**0.5))\
                 /mean_dispersion_diffs[channel]
             channel_flux = ndimage.gaussian_filter1d(channel_flux, sigma)
@@ -123,6 +126,9 @@ class Model(object):
     """
 
     def __init__(self, filename, validate=True):
+
+        self._acor_multiple = 100
+        self._judge_convergence = False
         
         if not os.path.exists(filename):
             raise IOError("no model filename {0} exists".format(filename))
@@ -132,10 +138,6 @@ class Model(object):
         # Load the model filename
         with open(filename, "r") as fp:
             self.configuration = parse(fp)
-
-        # Perform validation checks to ensure there are no forseeable problems
-        if validate:
-            self.validate()
 
         # Regardless of whether the model is cached or not, the dispersion is specified in
         # the same way: channels -> <channel_name> -> dispersion_filename
@@ -250,6 +252,10 @@ class Model(object):
 
         # Initialise the parameters property to avoid nasty fringe cases
         _ = self.parameters
+
+        # Perform validation checks to ensure there are no forseeable problems
+        if validate:
+            self.validate()
         return None
 
 
@@ -536,25 +542,57 @@ class Model(object):
             TypeError if an incorrect data type is specified for a normalisation setting.
         """
 
-        settings = self.configuration.get("settings", {})
-        integer_keys_required = ("sample", "walkers", "burn")
-        for key in integer_keys_required:
-            if key not in settings:
-                raise KeyError("configuration setting 'settings.{0}' not found".format(key))
+        if "settings" not in self.configuration:
+            self.configuration["settings"] = {}
 
-            try: int(settings[key])
-            except (ValueError, TypeError) as e:
-                raise TypeError("configuration setting 'settings.{0}' must be an integer-like type".format(key))
+        default_settings = {
+            "sample": int(4 * len(self.parameters)**2),
+            "walkers": 2 * len(self.parameters),
+            "burn": 1000
+        }
+        self._judge_convergence = False
+        settings = self.configuration["settings"]
+        for option, default_value in default_settings.iteritems():
+            if option not in settings:
+                logger.warn("Option settings.{0} not found in configuration. "\
+                    "Setting default to {1}".format(option, default_value))
+                self.configuration["settings"][option] = default_value
+                self._judge_convergence = True
+
+            else:
+                try: int(settings[option])
+                except (ValueError, TypeError) as e:
+                    raise TypeError("configuration setting settings.{0} must be"\
+                        " an integer-like type".format(option))
+
+        if self._judge_convergence:
+            logger.info("Default MCMC convergence criteria will be employed: "\
+                "{0} walkers will burn in for {1} steps each, then they will "\
+                "sample the posterior for {2} steps each.".format(
+                    self.configuration["settings"]["walkers"],
+                    self.configuration["settings"]["burn"],
+                    self.configuration["settings"]["sample"]))
+
+        if self.configuration["settings"]["walkers"] < 2*len(self.parameters):
+            raise ValueError("number of walkers must be at least twice the "\
+                "number of model parameters")
+
+        if self.configuration["settings"]["burn"] > self.configuration["settings"]["sample"]:
+            logger.warn("Number of burn-in steps exceeds the production quantity.")
 
         if settings.get("optimise", True):
 
             # If we are optimising, then we need initial_samples
             if "initial_samples" not in settings:
-                raise KeyError("configuration setting 'settings.initial_samples' is required for optimisation and was not found")
+                logger.warn("Option settings.initial_samples not found in "\
+                    "configuration. Setting default to 1000")
+                self.configuration["settings"]["initial_samples"] = 1000
 
-            try: int(settings["initial_samples"])
-            except (ValueError, TypeError) as e:
-                raise TypeError("configuration setting 'settings.initial_samples' must be an integer-like type")
+            else:
+                try: int(settings["initial_samples"])
+                except (ValueError, TypeError) as e:
+                    raise TypeError("Option settings.initial_samples must be "\
+                        " integer-like type")
 
         if "threads" in settings and not isinstance(settings["threads"], (float, int)):
             raise TypeError("configuration setting 'settings.threads' must be an integer-like type")
@@ -700,7 +738,7 @@ class Model(object):
 
     def cache(self, grid_points_filename, flux_filename, dispersion_filenames=None,
         wavelengths=None, smoothing_kernels=None, sampling_rate=None, clobber=False,
-        threads=1):
+        threads=1, verbose=False):
         """
         Cache the model for faster read access at runtime.
 
@@ -757,6 +795,13 @@ class Model(object):
         :type threads:
             int
 
+        :param verbose: [optional]
+            Momentarily change the logging level to INFO so that the progress of
+            the caching is announced.
+
+        :type verbose:
+            bool
+
         :returns:
             A dictionary containing the current model configuration with the newly
             cached channel parameters. This dictionary can be directly written to a
@@ -769,6 +814,13 @@ class Model(object):
         :raises TypeError:
             If an invalid smoothing kernel or wavelength region is supplied.
         """
+
+        assert grid_points_filename != flux_filename, "Grid points and flux "\
+            "filename must be different"
+
+        if dispersion_filenames is not None:
+            assert grid_points_filename not in dispersion_filenames.values()
+            assert flux_filename not in dispersion_filenames.values()
 
         if not clobber:
             filenames = [grid_points_filename, flux_filename]
@@ -794,6 +846,15 @@ class Model(object):
         if sampling_rate is None:
             sampling_rate = dict(zip(self.channels, np.ones(len(self.channels))))
 
+        if smoothing_kernels is None:
+            smoothing_kernels = {}
+
+        if verbose:
+            current_level = logger.getEffectiveLevel()
+            logger.setLevel(logging.DEBUG)
+            logger.info("Logging verbosity temporarily changed to {0} (from {1})".format(
+                logging.DEBUG, current_level))
+
         n_points = len(self.grid_points)
         if wavelengths is None:
             n_pixels = []
@@ -818,14 +879,16 @@ class Model(object):
             pickle.dump(self.grid_points, fp)
 
         # Create empty memmap
-        flux = np.memmap(flux_filename, dtype=np.double, mode="w+",
+        fluxes = np.memmap(flux_filename, dtype=np.double, mode="w+",
             shape=(n_points, np.sum(n_pixels)))
 
         processes = []
-        pool = multiprocessing.Pool(threads)
         mean_dispersion_diffs = dict(zip(self.channels,
             [np.mean(np.diff(self.dispersion[each])) for each in self.channels]))
 
+        if threads > 1:
+            pool = multiprocessing.Pool(threads)
+        
         # Run the caching
         for i in range(n_points):
 
@@ -834,18 +897,28 @@ class Model(object):
 
             filenames = dict(zip(self.channels,
                 [self.flux_filenames[channel][i] for channel in self.channels]))
-            processes.append(pool.apply_async(_cache_model_point,
-                args=(i, filenames, n_pixels, wavelength_indices, smoothing_kernels,
-                    sampling_rate, mean_dispersion_diffs)))
 
-        # Update the array.
-        for process in processes:
-            index, flux = process.get()
-            flux[index, :] = flux
+            if threads > 1:
+                processes.append(pool.apply_async(_cache_model_point,
+                    args=(i, filenames, n_pixels, wavelength_indices, smoothing_kernels,
+                        sampling_rate, mean_dispersion_diffs)))
 
-        # Winter is coming; close the pool
-        pool.close()
-        pool.join()
+            else:
+                index, flux = _cache_model_point(i, filenames, n_pixels,
+                    wavelength_indices, smoothing_kernels, sampling_rate,
+                    mean_dispersion_diffs)
+                fluxes[index, :] = flux
+
+        if threads > 1:
+            # Update the array.
+            for process in processes:
+                index, flux = process.get()
+                logger.info("Completed caching point {0}".format(index))
+                fluxes[index, :] = flux
+
+            # Winter is coming; close the pool
+            pool.close()
+            pool.join()
 
         # Save the resampled dispersion arrays to disk
         if dispersion_filenames is not None:
@@ -858,20 +931,30 @@ class Model(object):
                     dtype=np.double)
                 del disp
 
-        flux[:] = np.ascontiguousarray(flux, dtype=np.double)
-        del flux
+        fluxes[:] = np.ascontiguousarray(fluxes, dtype=np.double)
+        del fluxes
 
         # Create the cached version 
         cached_model = self.configuration.copy()
         cached_model["cached_channels"] = {
-            "grid_points": grid_points_filename,
+            "points_filename": grid_points_filename,
             "flux_filename": flux_filename,
         }
         if dispersion_filenames is not None:
-            cached_model["cached_channels"].update(dispersion_filenames)
+            for channel, dispersion_filename in dispersion_filenames.iteritems():
+                cached_model["cached_channels"][channel] = {
+                    "dispersion_filename": dispersion_filename
+                }
         else:
-            cached_model["cached_channels"].update(dict(zip(self.channels,
-                [cached_model["channels"][each] for each in self.channels])))
+            for channel in self.channels:
+                cached_model["cached_channels"][channel] = {
+                    "dispersion_filename": cached_model["channels"][each]
+                }
+            
+        # Return logger back to original levele
+        if verbose:
+            logger.info("Resetting logging level back to {0}".format(current_level))
+            logger.setLevel(current_level)
 
         return cached_model
 

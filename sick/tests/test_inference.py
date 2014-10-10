@@ -9,16 +9,9 @@ __author__ = "Andy Casey <andy@ast.cam.ac.uk>"
 import os
 import unittest
 import urllib
-
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
 
 import sick
-import triangle
 
 TEST_DATA_URL = "http://astrowizici.st/test-inference-data.tar.gz"
 
@@ -83,6 +76,7 @@ class InferenceTest(unittest.TestCase):
             observations.append(spectrum)
 
         # Plot the noisy spectrum
+        """
         fig, axes = plt.subplots(len(observations))
         if len(observations) == 1: axes = [axes]
         for ax, spectrum in zip(axes, observations):
@@ -92,31 +86,40 @@ class InferenceTest(unittest.TestCase):
             ax.set_xlim(spectrum.disp[0], spectrum.disp[-1])
             ax.set_xlabel("Wavelength, $\lambda$ [$\AA$]")
         fig.savefig("spectrum.pdf")
+        """
 
         # Now let's solve for the model parameters
         posteriors, sampler, info = sick.solve(observations, model)
 
         # Plot the chains
-        fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.parameters),
-            truths=[truth[parameter] for parameter in model.parameters], burn_in=1000)
+        fig = sick.plot.chains(info["chain"],
+            labels=sick.utils.latexify(model.parameters), burn_in=1000,
+            truths=[truth[parameter] for parameter in model.parameters])
         fig.savefig("chains.pdf")
 
         # Make a corner plot with just the parameters of interest
         psi_len = len(model.grid_points.dtype.names)
-        fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, :psi_len],
-            labels=sick.utils.latexify(model.grid_points.dtype.names), quantiles=[.16, .50, .84], verbose=False,
-            truths=[truth[parameter] for parameter in model.parameters[:psi_len]], extents=[0.95]*psi_len)
+        fig = sick.plot.corner(
+            sampler.chain.reshape(-1, len(model.parameters))[:, :psi_len],
+            labels=sick.utils.latexify(model.grid_points.dtype.names), 
+            truths=[truth[parameter] for parameter in model.parameters[:psi_len]],
+            quantiles=[.16, .50, .84], verbose=False)
         fig.savefig("inference.pdf")
 
         # Make a corner plot with *all* of the model parameters
         fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters)),
-            labels=sick.utils.latexify(model.parameters), quantiles=[.16, .50, .84], verbose=False,
-            truths=[truth[parameter] for parameter in model.parameters])
+            labels=sick.utils.latexify(model.parameters), 
+            truths=[truth[parameter] for parameter in model.parameters],
+            quantiles=[.16, .50, .84], verbose=False)
         fig.savefig("inference-all.pdf")
 
         # Make a projection plot
-        fig = sick.plot.projection(sampler, model, observations)
+        fig = sick.plot.projection(model, observations, sampler=sampler)
         fig.savefig("projection.pdf")
+
+        # Make an auto-correlation plot
+        fig = sick.plot.autocorrelation(sampler.chain)
+        fig.savefig("autocorrelation.pdf")
 
         # Assert that we have at least some solution
         if acceptable_ci_multiple is not None:
@@ -131,12 +134,15 @@ class InferenceTest(unittest.TestCase):
         Remove the downloaded files, and remove the created figures.
         """
 
+        return None
         # Remove the plots we produced
-        filenames = ["chains.pdf", "spectrum.pdf", "inference.pdf", "inference-all.pdf", "projection.pdf"]
+        filenames = ["chains.pdf", "spectrum.pdf", "inference.pdf", 
+            "inference-all.pdf", "projection.pdf", "autocorrelation.pdf"]
 
         # Remove the model filenames
-        filenames.extend(["inference-model.yaml", "inference-dispersion.memmap", "inference-flux.memmap",
-            "inference-grid-points.pickle", "test-inference-data.tar"])
+        filenames.extend(["inference-model.yaml", "inference-dispersion.memmap",
+            "inference-flux.memmap", "inference-grid-points.pickle", 
+            "test-inference-data.tar"])
 
         map(os.unlink, filenames)
 
@@ -149,5 +155,7 @@ if __name__ == "__main__":
     dat_inference = InferenceTest()
     dat_inference.setUp()
     dat_inference.runTest()
-    # Clean up can be left as an exercise for the reader
+
+    # If we are running this as main then clean up can be left as an exercise
+    # for the reader
     #dat_inference.tearDown()
