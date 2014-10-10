@@ -148,8 +148,8 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     Create a plot showing the walker values for each parameter at every step.
 
     :param xs:
-        The samples. This should be a 3D :class:`numpy.ndarray` of size (``n_walkers``,
-        ``n_steps``, ``n_parameters``).
+        The samples. This should be a 3D :class:`numpy.ndarray` of size 
+        (``n_walkers``, ``n_steps``, ``n_parameters``).
 
     :type xs:
         :class:`numpy.ndarray`
@@ -256,6 +256,47 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     return fig
 
 
+def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
+    """
+    Plot the meana cceptance fractions for each MCMC step.
+
+    :param mean_acceptance_fractions:
+        The acceptance fractions at each MCMC step.
+
+    :type mean_acceptance_fractions:
+        :class:`numpy.array`
+
+    :param burn_in: [optional]
+        The burn-in point. If provided, a dashed vertical line will be shown at
+        the burn-in point.
+
+    :type burn_in:
+        int
+
+    :param ax: [optional]
+        The axes to plot the mean acceptance fractions on.
+
+    :type ax:
+        :class:`matplotlib.axes.AxesSubplot`
+
+    :returns:
+        The acceptance fractions figure.
+    """
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    ax.plot(mean_acceptance_fractions, color="k", lw=2)
+    if burn_in is not None:
+        ax.axvline(burn_in, linestyle=":", color="k")
+
+    ax.set_xlabel("Step")
+    ax.set_ylabel("$\langle{}a_f\\rangle$")
+    return fig
+
+
 def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
     """
     Plot the autocorrelation for each parameter of a sampler chain.
@@ -273,8 +314,8 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
         int
 
     :param limit: [optional]
-        Maximum number of MCMC steps to display. By default the first half of
-        the chain will be shown.
+        Maximum number of MCMC steps to display. By default half of the chain
+        will be shown.
 
     :type limit:
         int
@@ -303,12 +344,11 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
         ax.plot(acor.function(np.mean(chain[:, index:, i], axis=0)), "k",
             lw=2)
 
-
-
     ax.axhline(0, color="k")
     ax.set_xlim(0, limit if limit is not None else chain.shape[1]/2)
-    ax.set_xlabel("$\\tau$")
-    ax.set_ylabel("Auto-correlation")
+    ax.set_ylim(-1, 1)
+    ax.set_ylabel("$\\tau$")
+    ax.set_xlabel("Step")
 
     return fig
 
@@ -406,7 +446,8 @@ def projection(model, data, optimised_theta=None, sampler=None, n=100,
 
         max_lnprob_index = np.argmax(sampler.lnprobability.flatten())
         max_lnprob_theta = sampler.flatchain[max_lnprob_index]
-        max_lnprob_fluxes = model(observations=data, **dict(zip(model.parameters, max_lnprob_theta)))
+        max_lnprob_fluxes = model(observations=data, 
+            **dict(zip(model.parameters, max_lnprob_theta)))
 
         if n > 0:
             # Draw samples from sampler.chain and compute spectra for them
@@ -414,7 +455,8 @@ def projection(model, data, optimised_theta=None, sampler=None, n=100,
             n_samples = len(sampler.flatchain)
 
             for i in range(n):
-                sampled_theta = dict(zip(model.parameters, sampler.flatchain[np.random.randint(0, n_samples)]))
+                sampled_theta = dict(zip(model.parameters,
+                    sampler.flatchain[np.random.randint(0, n_samples)]))
                 try:
                     sampler_flux = model(observations=data, **sampled_theta)
                 except:

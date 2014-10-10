@@ -243,12 +243,9 @@ def resume(args):
                 pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
                 
                 # Plot the mean acceptance fractions
-                fig, ax = plt.subplots()
-                ax.plot(info["mean_acceptance_fractions"], color="k", lw=2)
-                ax.axvline(model.configuration["settings"]["burn"], linestyle=":", color="k")
-                ax.set_xlabel("Step")
-                ax.set_ylabel("$\langle{}a_f\\rangle$")
-                fig.savefig(acceptance_plot_filename)
+                fig = sick.plot.acceptance_fractions(info["mean_acceptance_fractions"],
+                    burn_in=model.configuration["settings"]["burn"])
+                fig.savefig(acceptance_plot_filename))
                 logger.info("Created figure {0}".format(acceptance_plot_filename))
 
                 # Plot the chains
@@ -419,7 +416,7 @@ def _default_output_prefix(filenames):
 def _parse_and_load_spectra(args):
     """ Parse and load the spectra from the arguments provided. """
 
-    all_spectra = [sick.specutils.Spectrum.load(filename) for filename in args.spectra]
+    all_spectra = map(sick.specutils.Spectrum.load, args.spectrum_filenames)
 
     # Possibilities:
     # (1) Many spectra for single star [default behaviour]
@@ -500,7 +497,7 @@ def optimise(args):
         if args.multiplexing:
             # COMMON_MULTIPLEX_FILENAME-NUM-DESC.EXT
             output = lambda x: os.path.join(args.output_dir, "-".join([
-                os.path.commonprefix(map(os.path.basename, args.spectra)), 
+                os.path.commonprefix(map(os.path.basename, args.spectrum_filenames)), 
                 str(i), x]))
 
         elif args.multiple_sources:
@@ -511,7 +508,7 @@ def optimise(args):
         else:
             # COMMON_FILENAME-DESC.EXT
             output = lambda x: os.path.join(args.output_dir, "-".join([
-                os.path.commonprefix(map(os.path.basename, args.spectra)), x]))
+                os.path.commonprefix(map(os.path.basename, args.spectrum_filenames)), x]))
 
         # Does a solution already exist for this star? If so are we authorised to clobber it?
         if os.path.exists(output("result.json")):
@@ -626,7 +623,7 @@ def solve(args):
         "UTDATE", "UTSTART", )
     default_metadata = {
         "model": model.hash, 
-        "input_filenames": ", ".join(args.spectra),
+        "input_filenames": ", ".join(args.spectrum_filenames),
         "sick_version": sick.__version__,
     }
 
@@ -693,7 +690,7 @@ def solve(args):
             max_parameter_len = max(map(len, model.parameters))
             for parameter in model.parameters:
                 posterior_value, pos_uncertainty, neg_uncertainty = posteriors[parameter]
-                logger.info("    {0}: {1:.2e} (+{2:.2e}, -{3:.2e})".format(
+                logger.info("    {0}: {1:.2e} ({2:+.2e}, {3:+.2e})".format(
                     parameter.rjust(max_parameter_len), posterior_value, 
                     pos_uncertainty, neg_uncertainty))
 
@@ -778,11 +775,8 @@ def solve(args):
                 autocorrelation_filename = output("auto-correlation.{0}".format(args.plot_format))
                 
                 # Plot the mean acceptance fractions
-                fig, ax = plt.subplots()
-                ax.plot(info["mean_acceptance_fractions"], color="k", lw=2)
-                ax.axvline(model.configuration["settings"]["burn"], linestyle=":", color="k")
-                ax.set_xlabel("Step")
-                ax.set_ylabel("$\langle{}a_f\\rangle$")
+                fig = sick.plot.acceptance_fractions(info["mean_acceptance_fractions"],
+                    burn_in=model.configuration["settings"]["burn"])
                 fig.savefig(acceptance_plot_filename)
                 logger.info("Created figure {0}".format(acceptance_plot_filename))
 
@@ -961,8 +955,9 @@ def main():
         help="Number of sources to skip (default: %(default)s)")
     optimise_parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True,
         help="Disable plotting.")
-    optimise_parser.add_argument("--plot-format", "-pf", dest="plot_format", action="store", type=str,
-        default="png", help="Format for output plots (default: %(default)s)")
+    optimise_parser.add_argument("--plot-format", "-pf", dest="plot_format", 
+        action="store", type=str, default="pdf", help="Format for output plots"\
+        " (default: %(default)s)")
     optimise_parser.set_defaults(func=optimise)
 
     # Create parser for the solve command
@@ -975,6 +970,8 @@ def main():
         help="Filenames of (observed) spectroscopic data.")
     solve_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?",
         type=str, default=os.getcwd(), help="Directory for output files.")
+    solve_parser.add_argument("--filename-prefix", "-p", dest="filename_prefix",
+        type=str, help="The filename prefix to use for the output files.")
     solve_parser.add_argument("--multi-sources", dest="multiple_sources",
         action="store_true", default=False, help="Each spectrum is considered "\
         "a different source.")
@@ -990,12 +987,13 @@ def main():
         type=int, default=0, help="Number of sources to skip. This is only "\
         "applicable when --multi-sources or --multi-plexing is used. Default: "\
         "%(default)s)")
+    solve_parser.add_argument("--no-chain-files", dest="save_chain_files",
+        help="Do not save the chains to disk.", action="store_false", default=True)
     solve_parser.add_argument("--no-plots", dest="plotting", action="store_false",
         default=True, help="Disable plotting.")
     solve_parser.add_argument("--plot-format", "-pf", dest="plot_format", 
-        action="store", type=str, default="jpg", help="Format for output plots"\
-        " (default: %(default)s). Available formats are (case insensitive):" \
-        " PDF, JPG, PNG, EPS")
+        action="store", type=str, default="pdf", help="Format for output plots"\
+        " (default: %(default)s)")
     solve_parser.set_defaults(func=solve)
 
     # Create parser for the resume command
@@ -1024,8 +1022,9 @@ def main():
         help="Number of sources to skip (default: %(default)s)")
     resume_parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True,
         help="Disable plotting.")
-    resume_parser.add_argument("--plot-format", "-pf", dest="plot_format", action="store", type=str,
-        default="png", help="Format for output plots (default: %(default)s)")
+    resume_parser.add_argument("--plot-format", "-pf", dest="plot_format", 
+        action="store", type=str, default="pdf", help="Format for output plots"\
+        " (default: %(default)s)")
     resume_parser.set_defaults(func=resume)
 
     cache_parser = subparsers.add_parser("cache", parents=[parent_parser],
@@ -1045,7 +1044,7 @@ def main():
     # Create a default filename prefix based on the input filename arguments
     if args.command.lower() in ("solve", "optimise", "resume") \
     and args.filename_prefix is None:
-        args.filename_prefix = _default_output_prefix(args.spectra)
+        args.filename_prefix = _default_output_prefix(args.spectrum_filenames)
 
     return args.func(args)
 

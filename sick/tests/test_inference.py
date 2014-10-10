@@ -13,7 +13,7 @@ import numpy as np
 
 import sick
 
-TEST_DATA_URL = "http://astrowizici.st/test-inference-data.tar.gz"
+np.random.seed(888)
 
 # This world needs a little more truthiness.
 truth = {
@@ -22,12 +22,14 @@ truth = {
     "feh": -0.514,
     "alpha": 0.02,
     "convolve.blue": 0.581,
-    "z.blue": +13.0/299792458e-3,
+    "z.blue": 13./299792458e-3,  # My lucky number.
     "f.blue": np.log(0.10), # ~10% underestimated
-    "normalise.blue.c0": 0.00123,
-    "normalise.blue.c1": -0.5934,
-    "normalise.blue.c2": -423.18,
+    "normalise.blue.c0": 1.63e-06,
+    "normalise.blue.c1": -0.000788,
+    "normalise.blue.c2": -0.000756,
 }
+
+TEST_DATA_URL = "http://astrowizici.st/test-inference-data.tar.gz"
 
 class InferenceTest(unittest.TestCase):
 
@@ -44,7 +46,7 @@ class InferenceTest(unittest.TestCase):
         os.system("tar -xzf test-inference-data.tar")
 
 
-    def runTest(self, acceptable_ci_multiple=None):
+    def runTest(self):
         """
         Create a faux spectrum then infer the model parameters given the faux data.
         """
@@ -60,7 +62,7 @@ class InferenceTest(unittest.TestCase):
         fluxes = model(observations=faux_obs, **truth)
 
         observations = []
-        for channel, flux in zip(model.channels, fluxes):
+        for i, (channel, flux) in enumerate(zip(model.channels, fluxes)):
             disp = model.dispersion[channel]
 
             N = len(disp)
@@ -74,19 +76,6 @@ class InferenceTest(unittest.TestCase):
             spectrum = sick.specutils.Spectrum1D(disp=disp[::2], flux=flux[::2],
                 variance=flux_err[::2]**2)
             observations.append(spectrum)
-
-        # Plot the noisy spectrum
-        """
-        fig, axes = plt.subplots(len(observations))
-        if len(observations) == 1: axes = [axes]
-        for ax, spectrum in zip(axes, observations):
-            ax.plot(spectrum.disp, spectrum.flux, 'k')
-            ax.set_ylabel("Flux, $F_\lambda$")
-            ax.set_yticklabels([])
-            ax.set_xlim(spectrum.disp[0], spectrum.disp[-1])
-            ax.set_xlabel("Wavelength, $\lambda$ [$\AA$]")
-        fig.savefig("spectrum.pdf")
-        """
 
         # Now let's solve for the model parameters
         posteriors, sampler, info = sick.solve(observations, model)
@@ -121,23 +110,21 @@ class InferenceTest(unittest.TestCase):
         fig = sick.plot.autocorrelation(sampler.chain)
         fig.savefig("autocorrelation.pdf")
 
-        # Assert that we have at least some solution
-        if acceptable_ci_multiple is not None:
-            for parameter in model.parameters:
-                peak_posterior, pos_ci, neg_ci = posteriors[parameter]
-                assert (peak_posterior + acceptable_ci_multiple * pos_ci >= truth[parameter] >= peak_posterior - acceptable_ci_multiple * neg_ci), (
-                    "Inferences on the test case were not within {0}-'sigma' of the {1} truth values".format(acceptable_ci_multiple, parameter))
-        
+        # Make a mean acceptance fraction plot
+        fig = sick.plot.acceptance_fractions(info["mean_acceptance_fractions"],
+            burn_in=model.configuration["settings"]["burn"])
+        fig.savefig("acceptance.pdf")
+
 
     def tearDown(self):
         """
         Remove the downloaded files, and remove the created figures.
         """
 
-        return None
         # Remove the plots we produced
         filenames = ["chains.pdf", "spectrum.pdf", "inference.pdf", 
-            "inference-all.pdf", "projection.pdf", "autocorrelation.pdf"]
+            "inference-all.pdf", "projection.pdf", "autocorrelation.pdf",
+            "acceptance.pdf"]
 
         # Remove the model filenames
         filenames.extend(["inference-model.yaml", "inference-dispersion.memmap",

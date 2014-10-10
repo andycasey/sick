@@ -9,7 +9,7 @@ import sick.utils as utils
 def test_latexify():
 
     input_labels = ("teff", "f.blue", "v.blue", "normalise.red.a1")
-    output_labels = ['$T_{\\rm eff}$ [K]', '$ln(f_{blue})$', '$V_{rad,{blue}}$ [km/s]', '$r_{a1}$']
+    output_labels = ['$T_{\\rm eff}$ [K]', '$ln(f_{blue})$', '$V_{rad,{blue}}$ [km/s]', '$r_{1}$']
     assert utils.latexify(input_labels) == output_labels
     assert utils.latexify(input_labels[0]) == output_labels[0]
     assert utils.latexify("convolve.green") == "$\sigma_{green}$ [$\AA$]"

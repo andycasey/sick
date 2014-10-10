@@ -256,7 +256,7 @@ def latexify(labels, default_latex_labels=None):
 
         elif label.startswith("normalise."):
             aperture, coefficient = label.split(".")[1:]
-            latex_labels.append("${0}_{{{1}}}$".format(aperture[0], coefficient))
+            latex_labels.append("${0}_{{{1}}}$".format(aperture[0], coefficient[1:]))
 
         else:
             latex_labels.append(label)
