@@ -10,6 +10,7 @@ import os
 import unittest
 import urllib
 import numpy as np
+from glob import glob
 
 import sick
 
@@ -47,6 +48,49 @@ class InferenceTest(unittest.TestCase):
 
 
     def runTest(self):
+        self.run_api_test()
+        self.run_cli_test()
+
+
+    def run_cli_test(self):
+        """
+        Create a faux spectrum then infer the model parameters given the faux data.
+        """
+
+        # Initialise the model
+        model = sick.models.Model("inference-model.yaml")
+
+        # We create a faux-faux observation just so our faux observations get mapped
+        # back onto the model.dispersion once they have been redshifted
+        faux_obs = [sick.specutils.Spectrum1D(disp=model.dispersion[channel],
+            flux=np.zeros(len(model.dispersion[channel]))) \
+            for channel in model.channels]
+        fluxes = model(observations=faux_obs, **truth)
+
+        for i, (channel, flux) in enumerate(zip(model.channels, fluxes)):
+            disp = model.dispersion[channel]
+
+            N = len(disp)
+            flux_err = 0.1 + 0.5 * np.random.randn(N)
+            jitter_true = np.exp(truth["f.{0}".format(channel)])
+
+            flux += np.abs(jitter_true*flux) * np.random.randn(N)
+            flux += flux_err * np.random.randn(N)
+
+            # Now let's throw away half of the data just for fun
+            spectrum = sick.specutils.Spectrum1D(disp=disp[::2], flux=flux[::2],
+                variance=flux_err[::2]**2)
+            spectrum.save("sick-spectrum-{0}.fits".format(channel))
+
+        executable = "solve inference-model.yaml".split()
+        executable.extend(glob("sick-spectrum-*.fits"))
+        args = sick.cli.parser(executable)
+        output = args.func(args)
+        assert output == True
+        return None
+        
+
+    def run_api_test(self):
         """
         Create a faux spectrum then infer the model parameters given the faux data.
         """
@@ -125,6 +169,8 @@ class InferenceTest(unittest.TestCase):
         # Remove the plots we produced
         filenames = ["chains.pdf", "inference.pdf", "acceptance.pdf",
             "inference-all.pdf", "projection.pdf", "autocorrelation.pdf"]
+
+        filenames.extend("sick-spectrum-blue*")
 
         # Remove the model filenames
         filenames.extend(["inference-model.yaml", "inference-dispersion.memmap",
