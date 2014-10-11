@@ -123,7 +123,7 @@ class InferenceTest(unittest.TestCase):
         """
 
         # Remove the plots we produced
-        filenames = ["chains.pdf", "inference.pdf", "acceptance.pdf"
+        filenames = ["chains.pdf", "inference.pdf", "acceptance.pdf",
             "inference-all.pdf", "projection.pdf", "autocorrelation.pdf"]
 
         # Remove the model filenames
