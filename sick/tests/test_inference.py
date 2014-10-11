@@ -80,7 +80,7 @@ class InferenceTest(unittest.TestCase):
         # Now let's solve for the model parameters
         posteriors, sampler, info = sick.solve(observations, model)
         print(posteriors)
-        
+
         # Plot the chains
         fig = sick.plot.chains(info["chain"],
             labels=sick.utils.latexify(model.parameters), burn_in=1000,
@@ -123,9 +123,8 @@ class InferenceTest(unittest.TestCase):
         """
 
         # Remove the plots we produced
-        filenames = ["chains.pdf", "spectrum.pdf", "inference.pdf", 
-            "inference-all.pdf", "projection.pdf", "autocorrelation.pdf",
-            "acceptance.pdf"]
+        filenames = ["chains.pdf", "inference.pdf", "acceptance.pdf"
+            "inference-all.pdf", "projection.pdf", "autocorrelation.pdf"]
 
         # Remove the model filenames
         filenames.extend(["inference-model.yaml", "inference-dispersion.memmap",
