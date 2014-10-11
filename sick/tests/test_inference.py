@@ -170,7 +170,7 @@ class InferenceTest(unittest.TestCase):
         filenames = ["chains.pdf", "inference.pdf", "acceptance.pdf",
             "inference-all.pdf", "projection.pdf", "autocorrelation.pdf"]
 
-        filenames.extend("sick-spectrum-blue*")
+        filenames.extend(glob("sick-spectrum-blue*"))
 
         # Remove the model filenames
         filenames.extend(["inference-model.yaml", "inference-dispersion.memmap",
