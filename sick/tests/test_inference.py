@@ -13,6 +13,7 @@ import numpy as np
 from glob import glob
 
 import sick
+import sick.cli
 
 np.random.seed(888)
 
@@ -46,18 +47,6 @@ class InferenceTest(unittest.TestCase):
         os.system("gunzip -f test-inference-data.tar.gz")
         os.system("tar -xzf test-inference-data.tar")
 
-
-    def runTest(self):
-        self.run_api_test()
-        self.run_cli_test()
-
-
-    def run_cli_test(self):
-        """
-        Create a faux spectrum then infer the model parameters given the faux data.
-        """
-
-        # Initialise the model
         model = sick.models.Model("inference-model.yaml")
 
         # We create a faux-faux observation just so our faux observations get mapped
@@ -82,44 +71,15 @@ class InferenceTest(unittest.TestCase):
                 variance=flux_err[::2]**2)
             spectrum.save("sick-spectrum-{0}.fits".format(channel))
 
-        executable = "solve inference-model.yaml".split()
-        executable.extend(glob("sick-spectrum-*.fits"))
-        args = sick.cli.parser(executable)
-        output = args.func(args)
-        assert output == True
-        return None
-        
 
-    def run_api_test(self):
+    def runTest(self):
         """
         Create a faux spectrum then infer the model parameters given the faux data.
         """
 
         # Initialise the model
         model = sick.models.Model("inference-model.yaml")
-
-        # We create a faux-faux observation just so our faux observations get mapped
-        # back onto the model.dispersion once they have been redshifted
-        faux_obs = [sick.specutils.Spectrum1D(disp=model.dispersion[channel],
-            flux=np.zeros(len(model.dispersion[channel]))) \
-            for channel in model.channels]
-        fluxes = model(observations=faux_obs, **truth)
-
-        observations = []
-        for i, (channel, flux) in enumerate(zip(model.channels, fluxes)):
-            disp = model.dispersion[channel]
-
-            N = len(disp)
-            flux_err = 0.1 + 0.5 * np.random.randn(N)
-            jitter_true = np.exp(truth["f.{0}".format(channel)])
-
-            flux += np.abs(jitter_true*flux) * np.random.randn(N)
-            flux += flux_err * np.random.randn(N)
-
-            # Now let's throw away half of the data just for fun
-            spectrum = sick.specutils.Spectrum1D(disp=disp[::2], flux=flux[::2],
-                variance=flux_err[::2]**2)
-            observations.append(spectrum)
+        observations = map(sick.specutils.Spectrum.load, glob("sick-spectrum-*.fits"))
 
         # Now let's solve for the model parameters
         posteriors, sampler, info = sick.solve(observations, model)
@@ -160,6 +120,14 @@ class InferenceTest(unittest.TestCase):
             burn_in=model.configuration["settings"]["burn"])
         fig.savefig("acceptance.pdf")
 
+        executable = "solve inference-model.yaml".split()
+        executable.extend(glob("sick-spectrum-*.fits"))
+        args = sick.cli.parser(executable)
+        output = args.func(args)
+        assert output == True
+        
+        return None
+        
 
     def tearDown(self):
         """
