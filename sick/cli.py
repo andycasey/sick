@@ -245,7 +245,7 @@ def resume(args):
                 # Plot the mean acceptance fractions
                 fig = sick.plot.acceptance_fractions(info["mean_acceptance_fractions"],
                     burn_in=model.configuration["settings"]["burn"])
-                fig.savefig(acceptance_plot_filename))
+                fig.savefig(acceptance_plot_filename)
                 logger.info("Created figure {0}".format(acceptance_plot_filename))
 
                 # Plot the chains
@@ -816,6 +816,7 @@ def solve(args):
                 del primary_hdu, table_hdu, hdulist
 
     logger.info("Fin.")
+    return True
 
 
 def aggregate(args):
@@ -893,8 +894,8 @@ def aggregate(args):
         len(results), len(results[0]), args.output_filename))
 
 
-def main():
-    """ Parse arguments and execute a particular subparser. """
+def parser(input_args=None):
+    """ Create a parser. """
 
     parser = argparse.ArgumentParser(
         description="sick, the spectroscopic inference crank",
@@ -1038,7 +1039,7 @@ def main():
     cache_parser.set_defaults(func=cache)
 
     # Parse arguments and specify logging level
-    args = parser.parse_args()
+    args = parser.parse_args(input_args)
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
     # Create a default filename prefix based on the input filename arguments
@@ -1046,7 +1047,15 @@ def main():
     and args.filename_prefix is None:
         args.filename_prefix = _default_output_prefix(args.spectrum_filenames)
 
+    return args
+
+    
+def main():
+    """ Parse arguments and execute the correct sub-parser. """
+
+    args = parse()
     return args.func(args)
+
 
 if __name__ == "__main__":
     main()
