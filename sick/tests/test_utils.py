@@ -4,6 +4,9 @@
 
 from __future__ import print_function
 
+import numpy as np
+from time import time, sleep
+
 import sick.utils as utils
 
 def test_latexify():
@@ -41,3 +44,23 @@ def test_wrapper():
     func = lambda x, y, z: x**2 + y**3 - z
     func_wrap = utils.wrapper(func, [5, 3])
     assert func_wrap(1.23) == 123.5129
+
+
+def test_lru_cacher():
+
+    @utils.lru_cache(maxsize=10)
+    def func(x):
+        sleep(5)
+        return x**2
+
+    t_init = time()
+    x = np.random.uniform(-1000, 1000)
+    y1 = func(x)
+    t_a = time() - t_init
+
+    t_init = time()
+    y2 = func(x)
+    t_b = time() - t_init
+
+    assert y2 == y1
+    assert (t_a - t_b) > 4 # assumes func(x) takes less than 1 second
