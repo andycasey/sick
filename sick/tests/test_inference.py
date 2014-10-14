@@ -35,7 +35,7 @@ TEST_DATA_URL = "http://astrowizici.st/test-inference-data.tar.gz"
 
 class InferenceTest(unittest.TestCase):
 
-    def setUp(self):
+    def setUpClass(self):
         """
         Download the model information and initialise it.
         """
@@ -72,7 +72,7 @@ class InferenceTest(unittest.TestCase):
             spectrum.save("sick-spectrum-{0}.fits".format(channel))
 
 
-    def runTest(self):
+    def run_api(self):
         """
         Create a faux spectrum then infer the model parameters given the faux data.
         """
@@ -120,6 +120,8 @@ class InferenceTest(unittest.TestCase):
             burn_in=model.configuration["settings"]["burn"])
         fig.savefig("acceptance.pdf")
 
+
+    def run_cli(self):
         executable = "solve inference-model.yaml".split()
         executable.extend(glob("sick-spectrum-*.fits"))
         args = sick.cli.parser(executable)
@@ -129,7 +131,7 @@ class InferenceTest(unittest.TestCase):
         return None
         
 
-    def tearDown(self):
+    def tearDownClass(self):
         """
         Remove the downloaded files, and remove the created figures.
         """
@@ -154,8 +156,9 @@ if __name__ == "__main__":
     # run this themselves. If that's the case, we will not do the cleanup so that they
     # can look at the plots.
     dat_inference = InferenceTest()
-    dat_inference.setUp()
-    dat_inference.runTest()
+    dat_inference.setUpClass()
+    dat_inference.run_cli()
+    dat_inference.run_api()
 
     # If we are running this as main then clean up can be left as an exercise
     # for the reader
