@@ -73,12 +73,7 @@ class InferenceTest(unittest.TestCase):
             spectrum.save("sick-spectrum-{0}.fits".format(channel))
 
 
-    def runTest(self):
-        self.run_api()
-        self.run_cli()
-
-
-    def run_api(self):
+    def test_api(self):
         """
         Create a faux spectrum then infer the model parameters given the faux data.
         """
@@ -127,7 +122,7 @@ class InferenceTest(unittest.TestCase):
         fig.savefig("acceptance.pdf")
 
 
-    def run_cli(self):
+    def test_cli(self):
         executable = "solve inference-model.yaml".split()
         executable.extend(glob("sick-spectrum-*.fits"))
         args = sick.cli.parser(executable)
