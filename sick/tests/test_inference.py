@@ -35,7 +35,8 @@ TEST_DATA_URL = "http://astrowizici.st/test-inference-data.tar.gz"
 
 class InferenceTest(unittest.TestCase):
 
-    def setUpClass(self):
+    @classmethod
+    def setUpClass(cls):
         """
         Download the model information and initialise it.
         """
@@ -70,6 +71,11 @@ class InferenceTest(unittest.TestCase):
             spectrum = sick.specutils.Spectrum1D(disp=disp[::2], flux=flux[::2],
                 variance=flux_err[::2]**2)
             spectrum.save("sick-spectrum-{0}.fits".format(channel))
+
+
+    def runTest(self):
+        self.run_api()
+        self.run_cli()
 
 
     def run_api(self):
@@ -131,7 +137,8 @@ class InferenceTest(unittest.TestCase):
         return None
         
 
-    def tearDownClass(self):
+    @classmethod
+    def tearDownClass(cls):
         """
         Remove the downloaded files, and remove the created figures.
         """
