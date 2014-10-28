@@ -24,8 +24,7 @@ truth = {
     "feh": -0.514,
     "alpha": 0.02,
     "convolve.blue": 0.581,
-    "z.blue": 13./299792458e-3,  # My lucky number.
-    "f.blue": np.log(0.10), # ~10% underestimated
+    "z.blue": 13./299792458e-3,  # My lucky number
     "normalise.blue.c0": 1.63e-06,
     "normalise.blue.c1": -0.000788,
     "normalise.blue.c2": -0.000756,
@@ -48,30 +47,25 @@ class InferenceTest(unittest.TestCase):
         os.system("gunzip -f test-inference-data.tar.gz")
         os.system("tar -xzf test-inference-data.tar")
 
-        model = sick.models.Model("inference-model.yaml")
+        cls.model = sick.models.Model("inference-model.yaml")
 
         # We create a faux-faux observation just so our faux observations get mapped
         # back onto the model.dispersion once they have been redshifted
-        faux_obs = [sick.specutils.Spectrum1D(disp=model.dispersion[channel],
-            flux=np.zeros(len(model.dispersion[channel]))) \
-            for channel in model.channels]
-        fluxes = model(observations=faux_obs, **truth)
+        faux_obs = [sick.specutils.Spectrum1D(disp=cls.model.dispersion[c],
+            flux=np.zeros(len(cls.model.dispersion[c]))) for c in cls.model.channels]
+        fluxes = cls.model(observations=faux_obs, **truth)
 
-        for i, (channel, flux) in enumerate(zip(model.channels, fluxes)):
-            disp = model.dispersion[channel]
+        for i, (channel, flux) in enumerate(zip(cls.model.channels, fluxes)):
+            disp = cls.model.dispersion[channel]
 
             N = len(disp)
-            flux_err = 0.1 + 0.5 * np.random.randn(N)
-            jitter_true = np.exp(truth["f.{0}".format(channel)])
-
-            flux += np.abs(jitter_true*flux) * np.random.randn(N)
+            flux_err = np.random.poisson(flux, size=flux.size)**0.5
             flux += flux_err * np.random.randn(N)
-
-            # Now let's throw away half of the data just for fun
-            spectrum = sick.specutils.Spectrum1D(disp=disp[::2], flux=flux[::2],
-                variance=flux_err[::2]**2)
+            
+            spectrum = sick.specutils.Spectrum1D(disp=disp, flux=flux)
             spectrum.save("sick-spectrum-{0}.fits".format(channel))
-
+            
+            
 
     def test_api(self):
         """
@@ -80,7 +74,8 @@ class InferenceTest(unittest.TestCase):
 
         # Initialise the model
         model = sick.models.Model("inference-model.yaml")
-        observations = map(sick.specutils.Spectrum.load, glob("sick-spectrum-*.fits"))
+        observations = map(sick.specutils.Spectrum1D.load, 
+            ["sick-spectrum-{0}.fits".format(c) for c in self.model.channels])
 
         # Now let's solve for the model parameters
         posteriors, sampler, info = sick.solve(observations, model)
@@ -124,13 +119,15 @@ class InferenceTest(unittest.TestCase):
 
     def test_cli(self):
         executable = "solve inference-model.yaml".split()
-        executable.extend(glob("sick-spectrum-*.fits"))
+        executable.extend(["sick-spectrum-{0}.fits".format(c) \
+            for c in self.model.channels])
         args = sick.cli.parser(executable)
-        output = args.func(args)
-        assert output == True
-        
-        return None
-        
+        assert args.func(args)
+
+
+    def runTest(self):
+        pass
+
 
     @classmethod
     def tearDownClass(cls):
@@ -141,7 +138,6 @@ class InferenceTest(unittest.TestCase):
         # Remove the plots we produced
         filenames = ["chains.pdf", "inference.pdf", "acceptance.pdf",
             "inference-all.pdf", "projection.pdf", "autocorrelation.pdf"]
-
         filenames.extend(glob("sick-spectrum-blue*"))
 
         # Remove the model filenames
@@ -149,7 +145,11 @@ class InferenceTest(unittest.TestCase):
             "inference-flux.memmap", "inference-grid-points.pickle", 
             "test-inference-data.tar"])
 
-        map(os.unlink, filenames)
+        for filename in filenames:
+            if os.path.exists(filename):
+                os.unlink(filename)
+            else:
+                print("Expected file {0} does not exist!".format(filename))
 
 
 if __name__ == "__main__":
@@ -159,9 +159,9 @@ if __name__ == "__main__":
     # can look at the plots.
     dat_inference = InferenceTest()
     dat_inference.setUpClass()
-    dat_inference.run_cli()
-    dat_inference.run_api()
+    dat_inference.test_cli()
+    dat_inference.test_api()
 
-    # If we are running this as main then clean up can be left as an exercise
+    # So if we are running this as main then clean up can be left as an exercise
     # for the reader
-    #dat_inference.tearDown()
+    #dat_inference.tearDownClass()

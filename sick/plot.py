@@ -10,6 +10,7 @@ __author__ = ("Triangle.py (corner) was written by Dan Foreman-Mackey, and "
 
 __all__ = ["chains", "corner", "projection"]
 
+import logging
 import numpy as np
 
 import matplotlib.pyplot as plt
@@ -19,6 +20,8 @@ import acor
 from triangle import corner
 
 import specutils
+
+logger = logging.getLogger("sick")
 
 # Update the triangle.corner docstring to be sphinxy
 corner.__doc__ = """
@@ -289,8 +292,16 @@ def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
         fig = ax.figure
 
     ax.plot(mean_acceptance_fractions, color="k", lw=2)
+
     if burn_in is not None:
         ax.axvline(burn_in, linestyle=":", color="k")
+
+    ax.set_xlim(0, len(mean_acceptance_fractions))
+
+    ax.xaxis.set_major_locator(MaxNLocator(5))
+    [l.set_rotation(45) for l in ax.get_xticklabels()]
+    ax.yaxis.set_major_locator(MaxNLocator(5))
+    [l.set_rotation(45) for l in ax.get_yticklabels()]
 
     ax.set_xlabel("Step")
     ax.set_ylabel("$\langle{}a_f\\rangle$")
@@ -347,14 +358,14 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
     ax.axhline(0, color="k")
     ax.set_xlim(0, limit if limit is not None else chain.shape[1]/2)
     ax.set_ylim(-1, 1)
-    ax.set_ylabel("$\\tau$")
+    ax.set_ylabel("$\\rho$")
     ax.set_xlabel("Step")
 
     return fig
 
 
-def projection(model, data, optimised_theta=None, sampler=None, n=100, 
-    extents=None, fig=None, figsize=None):
+def projection(model, data, theta=None, chain=None, n=100, 
+    extents=None, uncertainties=True, fig=None, figsize=None):
     """
     Project the maximum likelihood values and sampled posterior points as spectra.
 
@@ -370,18 +381,18 @@ def projection(model, data, optimised_theta=None, sampler=None, n=100,
     :type data:
         iterable of :class:`sick.specutils.Spectrum1D` objects
 
-    :param optimised_theta: [optional]
-        The optimised model parameters given the data. Either optimised_theta
-        or sampler should be given.
+    :param theta: [optional]
+        The optimised model parameters given the data. Either theta
+        or chain should be given.
 
-    :type optimised_theta:
+    :type theta:
         dict
 
-    :param sampler: [optional]
-        The sampler employed. Either optimised_theta or sampler should be given.
+    :param chain: [optional]
+        The chain of sampled parameters.
 
-    :type sampler:
-        :class:`emcee.EnsembleSampler`    
+    :type chain:
+        :class:`numpy.ndarray`    
 
     :param extents: [optional]
         The wavelength extents to plot for each channel in the form of [(min_chan_1,
@@ -441,64 +452,68 @@ def projection(model, data, optimised_theta=None, sampler=None, n=100,
             raise ValueError("Provided figure has {0} axes, but data has "
                 "parameters K={1}".format(len(fig.axes), K))
 
-    # Find the most probable sampled theta and compute spectra for it
-    if sampler is not None:
+    if chain is not None:
 
-        max_lnprob_index = np.argmax(sampler.lnprobability.flatten())
-        max_lnprob_theta = sampler.flatchain[max_lnprob_index]
-        max_lnprob_fluxes = model(observations=data, 
-            **dict(zip(model.parameters, max_lnprob_theta)))
+        flat_chain = chain.reshape(-1, len(model.parameters))
+        map_theta = np.mean(flat_chain, axis=0)
+
+        try:
+            map_fluxes = model(observations=data, **model._dictify_theta(map_theta))
+        except:
+            logger.warn("Could not draw MAP fluxes from posterior")
 
         if n > 0:
             # Draw samples from sampler.chain and compute spectra for them
             sampled_fluxes = []
-            n_samples = len(sampler.flatchain)
+            n_samples = len(flat_chain)
 
             for i in range(n):
                 sampled_theta = dict(zip(model.parameters,
-                    sampler.flatchain[np.random.randint(0, n_samples)]))
+                    flat_chain[np.random.randint(0, n_samples)]))
                 try:
                     sampler_flux = model(observations=data, **sampled_theta)
                 except:
+                    logger.warn("Could not draw sample flux from posterior")
                     continue
                 else:
                     sampled_fluxes.append(sampler_flux)
         
-    elif optimised_theta is not None:
+    elif theta is not None:
 
         sampled_fluxes = []
-        max_lnprob_fluxes = model(observations=data, **optimised_theta)
+        map_fluxes = model(observations=data, **model._dictify_theta(theta))
         
     else:
-        raise ValueError("either optimised_theta or sampler should be given")
+        raise ValueError("either theta or chain should be given")
 
 
     if len(data) == 1:
         axes = [axes]
 
-    for k, (max_lnprob_flux, observed_spectrum) in enumerate(zip(max_lnprob_fluxes, data)):
+    for k, (map_flux, observed_spectrum) in enumerate(zip(map_fluxes, data)):
 
         ax = axes[k]
 
         # Draw the random samples from the chain
         if n > 0:
             for sampled_flux in sampled_fluxes:
-                ax.plot(observed_spectrum.disp, sampled_flux[k], color="r", alpha=0.1)
+                ax.plot(observed_spectrum.disp, sampled_flux[k], color="r", zorder=10)
 
         # Draw the ML spectra
-        ax.plot(observed_spectrum.disp, max_lnprob_flux, color="r", lw=2)
+        ax.plot(observed_spectrum.disp, map_flux, color="r", lw=2)
 
         # Plot the data
-        ax.fill_between(observed_spectrum.disp,
-            observed_spectrum.flux - observed_spectrum.variance**0.5,
-            observed_spectrum.flux + observed_spectrum.variance**0.5,
-            facecolor="#cccccc", edgecolor="#666666", zorder=-1)
+        if uncertainties:
+            ax.fill_between(observed_spectrum.disp,
+                observed_spectrum.flux - observed_spectrum.variance**0.5,
+                observed_spectrum.flux + observed_spectrum.variance**0.5,
+                facecolor="#cccccc", edgecolor="#666666", zorder=-1)
         ax.plot(observed_spectrum.disp, observed_spectrum.flux, color="k", zorder=10)
 
         # By default only show common overlap between the model and spectral data
         if extents is None:
             finite_data = np.isfinite(observed_spectrum.flux)
-            finite_model = np.isfinite(max_lnprob_flux)
+            finite_model = np.isfinite(map_flux)
 
             x_extent = [
                 np.max([observed_spectrum.disp[indices][0]  for indices in (finite_model, finite_data)]),

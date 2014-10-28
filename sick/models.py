@@ -8,7 +8,6 @@ __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 __all__ = ["Model"]
 
-# Standard library
 import cPickle as pickle
 import json
 import logging
@@ -17,24 +16,22 @@ import os
 import re
 from hashlib import md5
 from glob import glob
+from time import time
 
-# Third-party
+import emcee
 import numpy as np
 import pyfits
 import yaml
-from scipy import interpolate, ndimage
+from scipy import interpolate, ndimage, optimize as op
 
-# Module-specific
+import inference
 import utils
-from specutils import Spectrum1D
+import specutils
+from validation import validate as model_validate
 
-logger = logging.getLogger(__name__.split(".")[0])
+logger = logging.getLogger("sick")
 
 _sick_interpolator_ = None
-@utils.lru_cache(maxsize=1000, typed=False)
-def _interpolator_(*args):
-    global _sick_interpolator_
-    return _sick_interpolator_(*args)
 
 def load_model_data(filename, **kwargs):
     """
@@ -58,19 +55,20 @@ def load_model_data(filename, **kwargs):
     """
 
     # Load by the filename extension
-    if filename.endswith(".fits"):
+    extension = filename.split(os.path.extsep)[-1].lower()
+    if extension == "fits":
         with pyfits.open(filename, **kwargs) as image:
             data = image[0].data
 
-    elif filename.endswith(".memmap"):
+    elif extension == "memmap":
         kwargs.setdefault("mode", "c")
         kwargs.setdefault("dtype", np.double)
         data = np.memmap(filename, **kwargs)
 
     else:
         data = np.loadtxt(filename, **kwargs)
-    
     return data
+
 
 
 def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
@@ -100,6 +98,7 @@ def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
     return (index, flux)
 
 
+
 class Model(object):
     """
     A class to represent the approximate data-generating model for spectra.
@@ -125,36 +124,69 @@ class Model(object):
         (parameter) names.
     """
 
+    _default_priors_ = {}
+    _default_configuration_ = {
+        "priors": {},
+        "normalise": False,
+        "masks": None,
+        "redshift": False,
+        "convolve": False,
+        "outliers": False,
+        "underestimated_noise": False,
+        "settings": {
+            "dtype": "double",
+            "threads": 1,
+            "optimise": True,
+            "burn": 5000,
+            "sample_until_converged": True,
+            "sample": 10000,
+            "proposal_scale": 2,
+            "check_convergence_frequency": 1000,
+            "rescale_interpolator": False,
+            "op_maxfun": 5000,
+            "op_maxiter": 5000,
+            "op_xtol": 1e-4,
+            "op_ftol": 1e-4
+        },
+    }
+
     def __init__(self, filename, validate=True):
 
-        self._acor_multiple = 100
-        self._judge_convergence = False
-        
         if not os.path.exists(filename):
             raise IOError("no model filename {0} exists".format(filename))
 
-        parse = yaml.load if filename.endswith(".yaml") else json.load
+        parse = yaml.load if filename[-5:].lower() == ".yaml" else json.load
         
         # Load the model filename
         with open(filename, "r") as fp:
-            self.configuration = parse(fp)
+            self.configuration = utils.update_recursively(
+                self._default_configuration_.copy(), parse(fp))
 
         # Regardless of whether the model is cached or not, the dispersion is specified in
         # the same way: channels -> <channel_name> -> dispersion_filename
 
-        # Is this a cached model?
         if self.cached:
-            self.dispersion = dict(zip(self.channels, \
-                [load_model_data(self.configuration["cached_channels"][channel]["dispersion_filename"], dtype=np.double) \
-                for channel in self.channels]))
+
+            logger.debug("Loading dispersion maps")
+            self.dispersion = {}
+            for channel, dispersion_filename in self.configuration["cached_channels"].iteritems():
+                if channel not in ("points_filename", "flux_filename"):
+                    self.dispersion[channel] = load_model_data(dispersion_filename["dispersion_filename"])
+
+            #self.dispersion = dict(zip(self.channels, 
+            #    [load_model_data(self.configuration["cached_channels"][channel]["dispersion_filename"]) \
+            #        for channel in self.channels]))
 
             # Grid points must be pickled data so that the parameter names are known
             with open(self.configuration["cached_channels"]["points_filename"], "rb") as fp:
                 self.grid_points = pickle.load(fp)
-                num_points = len(self.grid_points)
-                
+                num_points = self.grid_points.size
+
             if len(self.grid_points.dtype.names) == 0:
                 raise TypeError("cached grid points filename has no column names")
+
+            if validate:
+                model_validate(self.configuration, self.channels, self.parameters)
 
             global _sick_interpolator_
 
@@ -162,19 +194,20 @@ class Model(object):
             missing_flux_filenames = []
             if "flux_filename" in self.configuration["cached_channels"]:
                 
-                fluxes = np.memmap(self.configuration["cached_channels"]["flux_filename"], 
-                    mode="r+", dtype=np.double).reshape((num_points, -1))
+                logger.debug("Loading cached flux")
+                fluxes = load_model_data(
+                    self.configuration["cached_channels"]["flux_filename"]).reshape((num_points, -1))
 
             else:
                 # We are expecting flux filenames in each channel (this is less efficient)
                 fluxes = []
+                logger.debug("Loading cached fluxes")
                 for i, channel in enumerate(self.channels):
                     if not "flux_filename" in self.configuration["cached_channels"][channel]:
+                        logger.warn("Missing flux filename for {0} channel".format(channel))
                         missing_flux_filenames.append(channel)
                         continue
-
-                    fluxes.append(np.memmap(self.configuration["cached_channels"][channel]["flux_filename"], 
-                        mode="r+", dtype=np.double).reshape((num_points, -1)))
+                    fluxes.append(load_model_data(self.configuration["cached_channels"][channel]["flux_filename"]).reshape((num_points, -1)))
 
                 fluxes = fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes)
 
@@ -184,20 +217,33 @@ class Model(object):
                 for channel in missing_flux_filenames:
                     logger.warn("No flux filename specified for {0} channel".format(channel))
 
-                raise ValueError("the total flux pixels ({0}) was different to what was expected ({1})".format(
-                    total_flux_pixels, total_dispersion_pixels))
+                raise ValueError("the total flux pixels ({0}) was different to "\
+                    " what was expected ({1})".format(total_flux_pixels,
+                        total_dispersion_pixels))
 
+            logger.debug("Reshaping grid points")
             points = self.grid_points.view(float).reshape((num_points, -1))
-            _sick_interpolator_ = interpolate.LinearNDInterpolator(points, fluxes)
+            logger.debug("Creating interpolator..")
+            rescale = self.configuration["settings"]["rescale_interpolator"]
+            if rescale:
+                logger.debug("Rescaling interpolator to unit cube..")
+                _sick_interpolator_ = interpolate.LinearNDInterpolator(
+                    points, fluxes, rescale=rescale)
+
+            else:
+                _sick_interpolator_ = interpolate.LinearNDInterpolator(
+                    points, fluxes)
             del fluxes
 
         else:
-            # Model is not cached. Naughty!
-            self.dispersion = dict(zip(self.channels, \
-                [load_model_data(self.configuration["channels"][channel]["dispersion_filename"], dtype=np.double) \
-                for channel in self.channels]))
+            logger.warn("Model is not cached")
 
-            assert len(self.configuration["channels"]) == len(self.channels)
+            # Model is not cached. Naughty!
+            self.dispersion = {}
+            for channel, dispersion_filename in self.configuration["channels"].iteritems():
+                if channel not in ("points_filename", "flux_filename"):
+                    self.dispersion[channel] = load_model_data(dispersion_filename["dispersion_filename"])
+
             
             self.grid_points = None
             self.flux_filenames = {}
@@ -232,120 +278,45 @@ class Model(object):
                 first_point_flux = load_model_data(matched_filenames[0])
                 if len(first_point_flux) != len(self.dispersion[channel]):
                     raise ValueError("number of dispersion ({0}) and flux ({1}) points in {2} "
-                        "channel do not match".format(len(self.dispersion[channel]), len(first_point_flux),
-                        channel))
+                        "channel do not match".format(len(self.dispersion[channel]),
+                            len(first_point_flux), channel))
 
                 if i == 0:
                     # Save the grid points as a record array
-                    self.grid_points = np.core.records.fromrecords(points, names=parameters,
-                        formats=["f8"]*len(parameters))
-                    self.flux_filenames[channel] = matched_filenames
+                    self.grid_points = np.core.records.fromrecords(points, 
+                        names=parameters, formats=["f8"]*len(parameters))
+
+                    # Sorting
+                    sort_indices = self.grid_points.argsort(order=parameters)
+                    self.grid_points = self.grid_points[sort_indices]
+                    self.flux_filenames[channel] = [matched_filenames[index] \
+                        for index in sort_indices]
 
                 else:
-                    sort_indices = np.argsort(map(self.check_grid_point, points))
-                    self.flux_filenames[channel] = [matched_filenames[index] for index in sort_indices]
+                    sort_indices = np.argsort(map(self._check_grid_point, points))
+                    self.flux_filenames[channel] = [matched_filenames[index] \
+                        for index in sort_indices]
 
-        # Pre-compute the grid boundaries
+            if validate:
+                model_validate(self.configuration, self.channels, self.parameters)
+
+        # Get the grid boundaries
         self.grid_boundaries = dict(zip(self.grid_points.dtype.names, 
-            [(np.min(self.grid_points[_]), np.max(self.grid_points[_])) \
+            [(self.grid_points[_].view(float).min(), self.grid_points[_].view(float).max()) \
                 for _ in self.grid_points.dtype.names]))
 
-        # Initialise the parameters property to avoid nasty fringe cases
-        _ = self.parameters
+        self.priors = self._default_priors_.copy()
+        # Set some implicit priors
+        for parameter, ranges in self.grid_boundaries.iteritems():
+            self.priors[parameter] = "uniform({0},{1})".format(*ranges)
 
-        # Perform validation checks to ensure there are no forseeable problems
-        if validate:
-            self.validate()
+        # Update with explicit priors
+        self.priors.update(self.configuration["priors"])
+
         return None
 
 
-    def __str__(self):
-        return unicode(self).encode("utf-8")
-
-
-    def __unicode__(self):
-        num_channels = len(self.channels)
-        num_models = len(self.grid_points) * num_channels
-        num_pixels = sum([len(d) * num_models for d in self.dispersion.values()])
-        
-        return u"{module}.Model({num_models} {is_cached} models; "\
-            "{num_total_parameters} parameters: {num_nuisance_parameters} "\
-            "additional parameters, {num_grid_parameters} grid parameters: "\
-            "{parameters}; {num_channels} channels: {channels}; ~{num_pixels} "\
-            "pixels)".format(module=self.__module__, num_models=num_models, 
-            num_channels=num_channels, channels=', '.join(self.channels), 
-            num_pixels=utils.human_readable_digit(num_pixels),
-            num_total_parameters=len(self.parameters), 
-            is_cached=["", "cached"][self.cached],
-            num_nuisance_parameters=len(self.parameters) - len(self.grid_points.dtype.names), 
-            num_grid_parameters=len(self.grid_points.dtype.names),
-            parameters=', '.join(self.grid_points.dtype.names))
-
-
-    def __repr__(self):
-        return u"<{0}.Model object with hash {1} at {2}>".format(
-            self.__module__, self.hash[:10], hex(id(self)))
-
-
-    @property
-    def hash(self):
-        """ Return a MD5 hash of the JSON-dumped model configuration. """ 
-        return md5(json.dumps(self.configuration).encode("utf-8")).hexdigest()
-
-
-    @property
-    def cached(self):
-        """ Return whether the model has been cached. """
-        return "cached_channels" in self.configuration.keys()
-
-
-    @property
-    def channels(self):
-        """ Return the model channels. """
-
-        try:
-            return self._channels
-        except AttributeError:
-            key = ["channels", "cached_channels"][self.cached]
-            protected = ("points_filename", "flux_filename")
-            setattr(self, "_channels", 
-                list(set(self.configuration[key].keys()).difference(protected)))
-            return self._channels
-
-
-    @property
-    def priors(self):
-        """
-        Return the prior distributions employed for the model.
-
-        :returns:
-            Dictionary of parameters (keys) and prior distributions (values)
-        """
-
-        try:
-            return self._priors
-
-        except AttributeError:
-
-            # Some default priors to apply:
-            # uniform between grid boundaries
-            # uniform ln(jitter) between -10, 1
-
-            self._priors = {}
-            self._priors.update(dict(zip(
-                ["f.{0}".format(channel) for channel in self.channels],
-                ["uniform(-10, 1)"] * len(self.channels)
-            )))
-            self._priors.update(dict(zip(self.grid_points.dtype.names,
-                ["uniform({0}, {1})".format(*self.grid_boundaries[parameter]) \
-                    for parameter in self.grid_points.dtype.names]
-            )))
-
-            self._priors.update(self.configuration.get("priors", {}))
-            return self._priors
-
-
-    def save(self, filename, clobber=False):
+    def save(self, filename, clobber=False, **kwargs):
         """
         Save the model configuration.
 
@@ -370,18 +341,77 @@ class Model(object):
 
         if os.path.exists(filename) and not clobber:
             raise IOError("model configuration filename exists and we have been"\
-            " asked not to clobber it")
+                " asked not to clobber it")
 
-        dump = yaml.dump if filename.endswith(".yaml") else json.dump
+        dump = yaml.dump if filename[-5:].lower() == ".yaml" else json.dump
         with open(filename, "w+") as fp:
-            dump(self.configuration, fp)
+            dump(self.configuration, fp, **kwargs)
 
         return True
 
 
-    def map_channels(self, observations):
+    def __str__(self):
+        return unicode(self).encode("utf-8")
+
+
+    def __unicode__(self):
+        num_channels = len(self.channels)
+        num_models = len(self.grid_points) * num_channels
+        num_pixels = sum([len(d) * num_models for d in self.dispersion.values()])
+        
+        return u"{module}.Model({num_models} {is_cached} models; "\
+            "{num_total_parameters} parameters: {num_extra} "\
+            "additional parameters, {num_grid_parameters} grid parameters: "\
+            "{parameters}; {num_channels} channels: {channels}; ~{num_pixels} "\
+            "pixels)".format(module=self.__module__, num_models=num_models, 
+            num_channels=num_channels, channels=', '.join(self.channels), 
+            num_pixels=utils.human_readable_digit(num_pixels),
+            num_total_parameters=len(self.parameters), 
+            is_cached=["", "cached"][self.cached],
+            num_extra=len(self.parameters) - len(self.grid_points.dtype.names), 
+            num_grid_parameters=len(self.grid_points.dtype.names),
+            parameters=', '.join(self.grid_points.dtype.names))
+
+
+    def __repr__(self):
+        return u"<{0}.Model object with hash {1} at {2}>".format(self.__module__,
+            self.hash[:10], hex(id(self)))
+
+
+    @property
+    def hash(self):
+        """ Return a MD5 hash of the JSON-dumped model configuration. """ 
+        return md5(json.dumps(self.configuration).encode("utf-8")).hexdigest()
+
+
+    @property
+    def cached(self):
+        """ Return whether the model has been cached. """
+        return "cached_channels" in self.configuration.keys()
+
+
+    @property
+    def channels(self):
+        """ Return the model channels. """
+        return sorted(self.dispersion, key=lambda x: x[0])
+
+
+    def _dictify_theta(self, theta):
+        if isinstance(theta, dict):
+            return theta
+        return dict(zip(self.parameters, theta))
+
+
+    def _undictify_theta(self, theta):
+        if isinstance(theta, dict):
+            return np.array([theta[p] for p in self.parameters])
+        return theta
+
+
+    def _chi_sq(self, observations, theta):
         """
-        Reference model channels to observed spectra based on their dispersions.
+        Return the standard and reduced chi-squared values for some model 
+        parameters theta, given the observed data.
 
         :param observations:
             The observed spectra.
@@ -389,349 +419,107 @@ class Model(object):
         :type observations:
             list of :class:`sick.specutils.Spectrum1D` objects
 
-        :returns:
-            A list of model channels mapped to each observed channel.
-        """
+        :param theta:
+            The model parameters theta.
 
-        mapped_channels = []
-        for i, spectrum in enumerate(observations):
-
-            # Initialise the list
-            channels_found = []
-
-            observed_wlmin = np.min(spectrum.disp)
-            observed_wlmax = np.max(spectrum.disp)
-
-            for model_channel, model_dispersion in self.dispersion.iteritems():
-
-                model_wlmin = np.min(model_dispersion)
-                model_wlmax = np.max(model_dispersion)
-
-                # Is there overlap?
-                if (model_wlmin <= observed_wlmin and observed_wlmax <= model_wlmax) \
-                or (observed_wlmin <= model_wlmin and model_wlmax <= observed_wlmax) \
-                or (model_wlmin <= observed_wlmin and (observed_wlmin <= model_wlmax and model_wlmax <= observed_wlmax)) \
-                or ((observed_wlmin <= model_wlmin and model_wlmin <= observed_wlmax) and observed_wlmax <= model_wlmax):
-                    channels_found.append(model_channel)
-
-            if len(channels_found) == 0:
-                raise ValueError("no model channels found for observed dispersion"\
-                    " map from {wl_start:.1f} to {wl_end:.1f}".format(
-                        wl_start=observed_wlmin, wl_end=observed_wlmax))
-
-            elif len(channels_found) > 1:
-                index = np.argmin(np.abs(np.mean(spectrum.disp) \
-                    - map(np.mean, [self.dispersion[c] for c in channels_found])))
-                channels_found = [channels_found[index]]
-
-                logging.warn("Multiple model channels found for observed channel"\
-                    " {0} ({1:.0f} to {2:.0f}). Using '{0}' because it's closest"\
-                    " by mean dispersion.".format(
-                        i, observed_wlmin, observed_wlmax, channels_found[0]))
-
-            mapped_channels.append(channels_found[0])
-
-        # Check that the mean pixel size in the model dispersion maps is smaller than the observed dispersion maps
-        for channel, spectrum in zip(mapped_channels, observations):
-
-            mean_observed_pixel_size = np.mean(np.diff(spectrum.disp))
-            mean_model_pixel_size = np.mean(np.diff(self.dispersion[channel]))
-            if mean_model_pixel_size > mean_observed_pixel_size:
-                logging.warn("The mean model pixel size in the {channel} channel"\
-                    " is larger than the mean pixel size in the observed "\
-                    "dispersion map from {wl_start:.1f} to {wl_end:.1f}".format(
-                        channel=channel, wl_start=np.min(spectrum.disp), 
-                        wl_end=np.max(spectrum.disp)))
-
-            elif mean_observed_pixel_size > 10 * mean_model_pixel_size:
-                logging.warn("The mean model pixel in the {channel} channel is"\
-                    " much higher than the mean observed pixel in the dispersion"\
-                    " map from {wl_start:.1f} to {wl_end:.1f}".format(
-                        channel=channel, wl_start=np.min(spectrum.disp),
-                        wl_end=np.max(spectrum.disp)))
-
-        # Keep an internal reference of the channel mapping
-        self._channels = mapped_channels
-        return mapped_channels
-
-
-    def validate(self):
-        """
-        Validate that the model has been specified properly.
+        :type theta:
+            dict
 
         :returns:
-            True
+            The standard chi-squarde value and the reduced chi-squared value:
+            ((data - model)**2/variance)/(num_pixels - num_model_parameters - 1)
+
+        :rtype:
+            (float, float)
         """
 
-        self._validate_channels()
-        self._validate_settings()
-        self._validate_normalisation()
-        self._validate_doppler()
-        self._validate_smoothing()
-        self._validate_masks()
+        model_fluxes = self.__call__(observations=observations, **self._dictify_theta(theta))
+        chi_sq, num_pixels = 0, 0
+        for observed, model_flux in zip(observations, model_fluxes):
+            chi_sq_i = (observed.flux - model_flux)**2 * observed.ivariance
+            chi_sq += np.nansum(chi_sq_i)
+            num_pixels += np.sum(np.isfinite(chi_sq_i))
+        r_chi_sq = chi_sq / (num_pixels - len(self.parameters) - 1)
+        if num_pixels == 0:
+            logger.warn("No finite pixels found for chi-sq calculation!")
+        return (chi_sq, r_chi_sq)
 
-        return True
 
-
-    def _validate_normalisation(self):
+    def _check_grid_point(self, point):
         """
-        Validate that the normalisation settings in the model are specified correctly.
+        Return whether the provided point exists in the model grid.
+
+        :param point:
+            The point to find in the model grid.
+
+        :type point:
+            list
 
         :returns:
-            True if the normalisation settings for this model are specified correctly.
-
-        :raises:
-            KeyError if a model channel does not have a normalisation settings specified.
-            TypeError if an incorrect data type is specified for a normalisation setting.
-            ValueError if an incompatible data value is specified for a normalisation setting.
+            The index of the point in the model grid if it exists, otherwise False.
         """
 
-        if "normalise" not in self.configuration.keys():
-            return True
-
-        # Verify the settings for each channel.
-        for channel in set(self.channels):
-
-            # Are there any normalisation settings specified for this channel?
-            if not self.configuration["normalise"].get(channel, None): continue
-
-            settings = self.configuration["normalise"][channel]
-            if "method" not in settings:
-                raise KeyError("configuration setting 'normalise.{0}.method' not found".format(channel))
-
-            method = settings["method"]
-            if method == "spline":
-
-                knots = settings.get("knots", 0)
-                if not isinstance(knots, (int, )):
-                    # Could be a list-type of rest wavelength points
-                    if not isinstance(knots, (tuple, list, np.ndarray)):
-                        raise TypeError("configuration setting 'normalise.{0}.knots' is expected"
-                            "to be an integer or a list-type of rest wavelength points".format(channel))
-
-                    try: map(float, knots) 
-                    except (TypeError, ValueError) as e:
-                        raise TypeError("configuration setting 'normalise.{0}.knots' is expected"
-                            "to be an integer or a list-type of rest wavelength points".format(channel))
-
-            elif method == "polynomial":
-
-                if "order" not in settings:
-                    raise KeyError("configuration setting 'normalise.{0}.order' not found".format(channel))
-
-                elif not isinstance(settings["order"], (float, int)):
-                    raise TypeError("configuration setting 'normalise.{0}.order'"
-                        " is expected to be an integer-like object".format(channel))
-
-            else:
-                raise ValueError("configuration setting 'normalise.{0}.method' not recognised"
-                    " -- must be spline or polynomial".format(channel))
-        
-        return True
-
-
-    def _validate_settings(self):
-        """
-        Validate that the settings in the model are specified correctly.
-
-        :returns:
-            True if the settings for this model are specified correctly.
-
-        :raises:
-            KeyError if a model channel does not have a normalisation settings specified.
-            TypeError if an incorrect data type is specified for a normalisation setting.
-        """
-
-        if "settings" not in self.configuration:
-            self.configuration["settings"] = {}
-
-        default_settings = {
-            "sample": int(4 * len(self.parameters)**2),
-            "walkers": 2 * len(self.parameters),
-            "burn": 1000
-        }
-        self._judge_convergence = False
-        settings = self.configuration["settings"]
-        for option, default_value in default_settings.iteritems():
-            if option not in settings:
-                logger.warn("Option settings.{0} not found in configuration. "\
-                    "Setting default to {1}".format(option, default_value))
-                self.configuration["settings"][option] = default_value
-                self._judge_convergence = True
-
-            else:
-                try: int(settings[option])
-                except (ValueError, TypeError) as e:
-                    raise TypeError("configuration setting settings.{0} must be"\
-                        " an integer-like type".format(option))
-
-        if self._judge_convergence:
-            logger.info("Default MCMC convergence criteria will be employed: "\
-                "{0} walkers will burn in for {1} steps each, then they will "\
-                "sample the posterior for {2} steps each.".format(
-                    self.configuration["settings"]["walkers"],
-                    self.configuration["settings"]["burn"],
-                    self.configuration["settings"]["sample"]))
-
-        if self.configuration["settings"]["walkers"] < 2*len(self.parameters):
-            raise ValueError("number of walkers must be at least twice the "\
-                "number of model parameters")
-
-        if self.configuration["settings"]["burn"] > self.configuration["settings"]["sample"]:
-            logger.warn("Number of burn-in steps exceeds the production quantity.")
-
-        if settings.get("optimise", True):
-
-            # If we are optimising, then we need initial_samples
-            if "initial_samples" not in settings:
-                logger.warn("Option settings.initial_samples not found in "\
-                    "configuration. Setting default to 1000")
-                self.configuration["settings"]["initial_samples"] = 1000
-
-            else:
-                try: int(settings["initial_samples"])
-                except (ValueError, TypeError) as e:
-                    raise TypeError("Option settings.initial_samples must be "\
-                        " integer-like type")
-
-        if "threads" in settings and not isinstance(settings["threads"], (float, int)):
-            raise TypeError("configuration setting 'settings.threads' must be an integer-like type")
-
-        return True
-
-
-    def _validate_doppler(self):
-        """
-        Validate that the doppler shift settings in the model are specified correctly.
-
-        :returns:
-            True if the doppler settings for this model are specified correctly.
-        """
-
-        if "redshift" not in self.configuration.keys():
-            return True 
-
-        for channel in set(self.channels):
-            if not self.configuration["redshift"].get(channel, None): continue
-
-        return True
-
-
-    def _validate_smoothing(self):
-        """
-        Validate that the smoothing settings in the model are specified correctly.
-
-        :returns:
-            True if the smoothing settings for this model are specified correctly.
-        """ 
-
-        if "convolve" not in self.configuration.keys():
-            return True 
-
-        for channel in set(self.channels):
-            if not self.configuration["convolve"].get(channel, None): continue
-        return True
-
-
-    def _validate_channels(self):
-        """
-        Validate that the channels in the model are specified correctly.
-
-        :returns:
-            True if the channels in the model are specified correctly.
-
-        :raises:
-            KeyError if no channels are specified.
-            ValueError if an illegal character is present in any of the channel names.
-        """
-
-        if "channels" not in self.configuration.keys() and "cached_channels" not in self.configuration.keys():
-            raise KeyError("no channels found in model file")
-
-        for channel in set(self.channels):
-            if "." in channel:
-                raise ValueError("channel name '{0}' cannot contain a full-stop character".format(channel))
-        return True
-
-
-    def _validate_masks(self):
-        """
-        Validate that the masks in the model are specified correctly.
-
-        :returns:
-            True if the masks in the model are specified correctly.
-
-        :raises:
-            TypeError if the masks are not specified correctly.
-        """
-
-        # Masks are optional
-        if "masks" not in self.configuration.keys():
-            return True
-
-        for channel in set(self.channels):
-            if not self.configuration["masks"].get(channel, None): continue
-
-            if not isinstance(self.configuration["masks"][channel], (tuple, list)):
-                raise TypeError("masks must be a list of regions (e.g., [start, stop])")
-
-            for region in self.configuration["masks"][channel]:
-                if not isinstance(region, (list, tuple)) or len(region) != 2:
-                    raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
-
-                try: map(float, region)
-                except TypeError:
-                    raise TypeError("masks must be a list of regions (e.g., [start, stop]) in Angstroms")
-        return True
+        num_parameters = len(self.grid_points.dtype.names)
+        index = np.all(self.grid_points.view(np.float)\
+            .reshape((-1, num_parameters)) == np.array([point]).view(np.float),
+            axis=-1)
+        return False if not any(index) else np.where(index)[0][0]
 
 
     @property
     def parameters(self):
         """ Return the model parameters. """
 
-        if hasattr(self, "_parameters"):
+        try:
             return self._parameters
 
-        parameters = [] + list(self.grid_points.dtype.names)
-        for parameter in self.configuration.keys():
-        
-            if parameter == "normalise":
-                # Append normalisation parameters for each channel
+        except AttributeError:
+            parameters = [] + list(self.grid_points.dtype.names)
+
+            # Normalisation parameters
+            if isinstance(self.configuration["normalise"], dict):
                 for channel in self.channels:
-                    if not self.configuration[parameter].get(channel, False): continue
-
-                    method = self.configuration[parameter][channel]["method"]
-                    assert method in ("polynomial", "spline")
-
-                    if method == "polynomial":
-                        order = self.configuration[parameter][channel]["order"]
+                    if channel in self.configuration["normalise"]:
+                        order = self.configuration["normalise"][channel]["order"]
                         parameters.extend(["normalise.{0}.c{1}".format(channel, i) \
                             for i in range(order + 1)])
-                        
-                    elif method == "spline":
-                        knots = self.configuration[parameter][channel].get("knots", 0)
-                        parameters.extend(["normalise.{0}.k{1}".format(channel, i) \
-                            for i in range(knots)])
+            
+            # Redshift parameters
+            if isinstance(self.configuration["redshift"], dict):
+                # Some/all channels
+                parameters.extend(["z.{}".format(c) for c in self.channels \
+                    if self.configuration["redshift"][c]])
 
-            elif parameter == "redshift":
-                # Check which channels have doppler shifts allowed and add them
-                parameters.extend(["z.{0}".format(each) \
-                    for each in self.channels if self.configuration[parameter].get(each, False)])
+            elif self.configuration["redshift"] == True:
+                # All channels
+                parameters.extend(["z.{}".format(c) for c in self.channels])
 
-            elif parameter == "convolve":
-                # Check which channels have smoothing allowed and add them
-                parameters.extend(["convolve.{0}".format(each) \
-                    for each in self.channels if self.configuration[parameter].get(each, False)])  
+            # Convolution parameters
+            if isinstance(self.configuration["convolve"], dict):
+                # Some/all channels
+                parameters.extend(["convolve.{}".format(c) for c in self.channels \
+                    if self.configuration["convolve"][c]])
 
-            elif parameter == "outliers" and self.configuration["outliers"]:
-                # Append outlier parameters
+            elif self.configuration["convolve"] == True:
+                # All channels
+                parameters.extend(["convolve.{}".format(c) for c in self.channels])
+
+            # Underestimated variance?
+            if isinstance(self.configuration["underestimated_noise"], dict):
+                # Some/all channels
+                parameters.extend(["f.{}".format(c) for c in self.channels \
+                    if self.configuration["underestimated_noise"][c]])
+
+            elif self.configuration["underestimated_noise"] == True:
+                # All channels
+                parameters.extend(["f.{}".format(c) for c in self.channels])
+
+            # Outliers?
+            if self.configuration["outliers"] == True:
                 parameters.extend(["Pb", "Vb"])
-        
-        # Append jitter
-        parameters.extend(["f.{0}".format(channel) for channel in self.channels])
 
-        # Cache for future
-        setattr(self, "_parameters", parameters)
+            # Cache for future
+            setattr(self, "_parameters", parameters)
         
         return parameters
 
@@ -959,68 +747,229 @@ class Model(object):
         return cached_model
 
 
-    def get_nearest_neighbours(self, point, n=1):
+    def initial_theta(self, observations, **kwargs):
         """
-        Return the indices of the nearest `n` neighbours to `point`.
+        Return the closest point within the grid that matches the observed data.
+        If redshift is modelled, the data are cross-correlated with the entire
+        grid and the redshifts are taken from the points with the highest cross-
+        correlation function. Normalisation coefficients are calculated by
+        matrix inversion such that the best normalisation is performed for each
+        possible model point.
 
-        :param point:
-            The point to find neighbours around.
+        :param observations:
+            The observed data.
 
-        :type point:
-            list
-
-        :param n: [optional]
-            The number of neighbours to find on each side, in each parameter.
-
-        :type n:
-            int
+        :type observations:
+            list of :class:`sick.specutils.Spectrum1D` objects
 
         :returns:
-            The indices of the nearest neighbours as a :class:`numpy.array`.
+            The closest point within the grid that can be modelled to fit the
+            data, and the approximate reduced chi-sq value for that theta.
 
-        :raises:
-            ValueError if the point is incompatible with the grid shape, or if it is
-            outside of the grid boundaries.
+        :rtype:
+            (dict, float)
         """
 
-        if len(point) != len(self.grid_points.dtype.names):
-            raise ValueError("point length ({0}) is incompatible with grid shape ({1})".format(
-                len(point), len(self.grid_points.dtype.names)))
+        # Single flux file assumed
+        intensities = load_model_data(self.configuration["cached_channels"]["flux_filename"])\
+            .reshape((self.grid_points.size, -1))
 
-        indices = set(np.arange(len(self.grid_points)))
-        for i, point_value in enumerate(point):
-            difference = np.unique(self.grid_points[:, i] - point_value)
+        readable_point = lambda x: ", ".join(["{0} = {1:.2f}".format(p, v) \
+            for p, v in zip(self.grid_points.dtype.names, x)])
 
-            if sum(difference > 0) * sum(difference < 0) == 0:
-                return ValueError("point ({0}) outside of the grid boundaries".format(point_value))
+        # I only became an astronomer so I could move to the 90210 postcode and
+        # call myself a 'Doctor to the Stars'.
+        theta = {}
+        continuum_coefficients = {}
+        chi_sqs = np.zeros(self.grid_points.size)
+        num_pixels = [self.dispersion[c].size for c in self.channels]
+        for i, (channel, observed) in enumerate(zip(self.channels, observations)):
+            logger.debug("Calculating initial point in {0} channel..".format(channel))
 
-            limit_min = difference[np.where(difference < 0)][-n:][0] + point_value
-            limit_max = difference[np.where(difference > 0)][:n][-1] + point_value
-    
-            these_indices = np.where((limit_max >= self.grid_points[:, i]) * (self.grid_points[:, i] >= limit_min))[0]
-            indices.intersection_update(these_indices)
+            # Indices and other information
+            dispersion = self.dispersion[channel]
+            si, ei = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
+            logger.debug("Points {0} -> {1} for {2} channel".format(si, ei, channel))
+            continuum_order = self.configuration["normalise"].get(channel, {"order": -1})["order"]
+            
+            # Any redshift to model?
+            if self.configuration["redshift"] == True \
+            or (isinstance(self.configuration["redshift"], dict) 
+                and self.configuration["redshift"].get(channel, False)):
 
-        return np.array(list(indices))
+                # Perform cross-correlation against the entire grid!
+                logger.debug("Performing cross-correlation in {0} channel..".format(channel))
+
+                z, z_err, R = specutils.cross_correlate_multiple(
+                    dispersion, intensities[:, si:ei], observed,
+                    continuum_order=continuum_order)
+
+                # Identify and announce the best one
+                index = R.argmax()
+                logger.debug("Highest CCF in {0} channel was R = {1:.3f} with z = "\
+                    "{2:.2e} +/- {3:.2e} ({4:.2f} +/- {5:.2f} km/s) at point {6}".format(
+                        channel, R[index], z[index], z_err[index], z[index] * 299792.458,
+                        z_err[index] * 299792.458, readable_point(self.grid_points[index])))
+
+                # Store the redshift
+                theta["z.{}".format(channel)] = z[index]
+
+                # Apply the redshift
+                # Note z is the *measured* redshift, so we need to apply -z to 
+                # put the observed spectrum back at rest
+                data = np.interp(dispersion, observed.disp * (1. - z[index]),
+                    observed.flux, left=np.nan, right=np.nan)
+                ivariance = np.interp(dispersion, observed.disp * (1. - z[index]),
+                    observed.ivariance, left=np.nan, right=np.nan)
+
+            else:
+                # Interpolate the data onto the model grid
+                # IF YOU LIKE KITTENS, YOU SHOULD NEVER DO THIS FOR SCIENCE
+                # THIS IS JUST FOR AN EXTREMELY ROUGH GUESTIMATE
+                data = np.interp(dispersion, observed.disp,
+                    observed.flux, left=np.nan, right=np.nan)
+                ivariance = np.interp(dispersion, observed.disp,
+                    observed.ivariance, left=np.nan, right=np.nan)
+            
+            # Get only finite data pixels
+            finite = np.isfinite(data)
+            finite[-1] = False
+            if finite.sum() == 0:
+                logger.warn("No finite pixels in the {} data!".format(channel))
+
+            # Apply mask?
+            logger.warn("no masks used for init point")
+
+            # Any normalisation to model?
+            if continuum_order >= 0:
+                logger.debug("Performing matrix calculations for {0} channel..".format(channel))
+                c = np.ones((continuum_order + 1, finite.sum()))
+                for j in range(continuum_order + 1):
+                    c[j] *= dispersion[finite]**j
+
+                # [f0 f1 f2 f3 f4 f5] = [m1 m2 m3 m3 m4][[b], [b], [b], [b], [b]]
+                # [m1 m2 m3 m4 m5]^(-1)[f0 f1 f2 f3 f4 f5] = [[b], [b], [b], [b], [b]]
+
+                # [[f0,0 f1,0 f2,0 f3,0 f4,0] = [b]
+
+                # [[f0, f1, f2, f3, f4] = [[m00, m01, m02, m03, m04] * [[b0],]
+                #                         [m10, m11, m12, m13, m14]    [b1],
+                #                         [m20, m21, m22, m23, m24]    [b2], 
+                A = (data[finite]/intensities[:, si:ei][:, finite]).T
+                #B = np.dot(np.matrix(intensities[:, si:ei][:, finite]).I.T, data)
+                
+                continuum_coefficients[channel] = np.linalg.lstsq(c.T, A)[0] # (continuum_order + 1, N)
+
+                #raise a
+                #if np.isfinite(continuum_coefficients[channel]).sum() == 0:
+                #    raise a
+
+                continuum = np.dot(continuum_coefficients[channel].T, c)
+                model = intensities[:, si:ei][:, finite] * continuum
+
+            else:
+                model = intensities[:, si:ei][:, finite]
+
+            # Add to the chi-sq values
+            chi_sqs += np.nansum((data[finite] - model)**2 * ivariance[finite],
+                axis=1)
+
+            index = chi_sqs.argmin()
+            reduced_chi_sq = chi_sqs[index] \
+                /(sum(num_pixels[:i+1]) - len(self.grid_points.dtype.names) - 1)
+            logger.debug("So far the closest point has r-chi-sq ~ {0:.2f} where"\
+                " {1:s}".format(reduced_chi_sq, readable_point(self.grid_points[index])))
+        
+        
+        # Find the best match, and update the theta dictionary with the values
+        index = np.argmin(chi_sqs)
+        theta.update(dict(zip(self.grid_points.dtype.names, self.grid_points[index])))
+        for channel, coefficients in continuum_coefficients.iteritems():
+            for j, value in enumerate(coefficients[::-1, index]):
+                theta["normalise.{0}.c{1:.0f}".format(channel, j)] = value
+        reduced_chi_sq = chi_sqs[index]/(sum(num_pixels) - len(self.grid_points.dtype.names) - 1)
+
+        _default_init_values = {
+            # Let's try and be reasonable.
+            "f": np.finfo(np.float).eps,
+            "Po": np.finfo(np.float).eps,
+            "Vo": np.finfo(np.float).eps
+        }
+        _default_init_values.update(kwargs.get("default_init_values", {}))
+        for parameter in set(self.parameters).difference(theta):
+
+            if parameter in ("Po", "Vo") or parameter[:2] == "f.":
+                theta[parameter] = _default_init_values[parameter]
+
+            elif parameter[:9] == "convolve.":
+                # Solve for the convolution parameter as a single value.
+                # compare convolve, projected flux with observed data
+                theta[parameter] = 0.
+                logger.warn("NO SMOOTHING VALUE ESTIMATED")
+
+            else:
+                raise ValueError("cannot evaluate initialisation rule for the "\
+                    "parameter {}".format(parameter))
+
+        # delete the memory-mapped reference to intensities grid
+        del intensities
+
+        logger.debug("Initial theta is {0}".format(theta))
+        return (self._undictify_theta(theta), reduced_chi_sq)
 
 
-    def check_grid_point(self, point):
-        """
-        Return whether the provided point exists in the model grid.
+    def interpolate_local_flux(self, point, neighbours=1):
 
-        :param point:
-            The point to find in the model grid.
+        # Identify the nearby points & create a nearby interpolator
+        col_indices = np.ones(len(point), dtype=bool)
+        indices = np.ones(self.grid_points.size, dtype=bool)
+        for i, (parameter, value) in enumerate(zip(self.grid_points.dtype.names, point)):
 
-        :type point:
-            list
+            #print(indices.sum())
+            #print(set(self.grid_points[parameter][indices]))
 
-        :returns:
-            The index of the point in the model grid if it exists, otherwise False.
-        """
+            # Is this point within the grid?
+            """
+            exact_grid_match = np.less_equal(
+                np.abs(self.grid_points[parameter] - value), np.finfo(float).eps)
+            if exact_grid_match.any():
+                indices[~exact_grid_match] = False
+                print("matching all {0} at {1}".format(parameter, value))
+                col_indices[i] = False
+                print("after", set(self.grid_points[parameter][indices]))
+                raise a
+                continue
+            """
 
-        num_parameters = len(self.grid_points.dtype.names)
-        index = np.all(self.grid_points.view(np.float).reshape((-1, num_parameters)) == np.array([point]).view(np.float),
-            axis=-1)
-        return False if not any(index) else np.where(index)[0][0]
+            # Check within some range
+            unique_points = np.sort(np.unique(self.grid_points[parameter]))
+            differences = unique_points - value
+
+            # Get closest points on either side
+            left = unique_points[differences < 0]
+            right = unique_points[differences > 0]
+            left_side, right_side = [
+                left[-min([len(left), neighbours])],
+                [neighbours - 1]
+            ]
+            within_neighbours = (right_side >= self.grid_points[parameter]) \
+                * (self.grid_points[parameter] >= left_side)
+            indices[~within_neighbours] = False
+
+            #print("after", set(self.grid_points[parameter][indices]))
+
+        # Prevent Qhull errors
+
+        size = self.grid_points.size
+        point = np.array(point).reshape(len(point), 1)
+        p = self.grid_points.view(float).reshape(size, -1)
+        fluxes = load_model_data(
+            self.configuration["cached_channels"]["flux_filename"]).reshape(size, -1)
+        interpolated_flux = interpolate.griddata(
+            p[indices, :], fluxes[indices, :], point.T).flatten()
+        del fluxes
+
+        return interpolated_flux
 
 
     def interpolate_flux(self, point, **kwargs):
@@ -1046,38 +995,22 @@ class Model(object):
             boundaries).
         """
 
-        global _interpolator_
-        if _interpolator_ is not None:
-       
-            interpolated_flux = _interpolator_(*np.array(point).copy())
-            if np.all(~np.isfinite(interpolated_flux)):
-                raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")    
-        
-            interpolated_fluxes = {}
-            num_pixels = map(len, [self.dispersion[channel] for channel in self.channels])
-            for i, channel in enumerate(self.channels):
-                si, ei = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
-                interpolated_fluxes[channel] = interpolated_flux[si:ei]
-            return interpolated_fluxes
+        if not self.cached:
+            raise TypeError("model must be cached first")
 
-        interpolated_fluxes = {}
-        indices = self.get_nearest_neighbours(point)
-        for channel in self.channels:
-            
-            flux = np.zeros((len(indices), len(self.dispersion[channel])))
-            flux[:] = np.nan
-
-            # Load the flux points
-            for i, index in enumerate(indices):
-                channel_flux[i, :] = load_model_data(self.flux_filenames[channel][index])
-            
-            try:
-                interpolated_flux[channel] = interpolate.griddata(self.grid_points[indices],
-                    channel_flux, [point], **kwargs).flatten()
-
-            except:
-                raise ValueError("could not interpolate flux point, as it is likely outside the grid boundaries")
+        global _sick_interpolator_
+        interpolated_flux = _sick_interpolator_(*np.array(point).copy())
+        if np.all(~np.isfinite(interpolated_flux)):
+            raise ValueError("could not interpolate flux point, as it is likely"\
+                " outside the grid boundaries")    
     
+        interpolated_fluxes = {}
+        num_pixels = map(len, [self.dispersion[c] for c in self.channels])
+        for i, channel in enumerate(self.channels):
+            si, ei = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
+            interpolated_fluxes[channel] = interpolated_flux[si:ei]
+        return interpolated_fluxes
+
 
     def masks(self, dispersion_maps, **theta):
         """
@@ -1101,13 +1034,13 @@ class Model(object):
             Zero in arrays indicates pixel was masked, one indicates it was used.
         """
 
-        if not self.configuration.get("masks", False):
+        if not self.configuration["masks"]:
             return None
 
         pixel_masks = {}
         for channel, dispersion_map in zip(self.channels, dispersion_maps):
             if channel not in self.configuration["masks"]:
-                masks[channel] = None
+                pixel_masks[channel] = None
             
             else:
                 # We are required to build a mask
@@ -1118,7 +1051,6 @@ class Model(object):
                         if "z.{0}".format(channel) in theta:
                             z = theta["z.{0}".format(channel)]
                             region = np.array(region) * (1. + z)
-                            
                         index_start, index_end = np.searchsorted(dispersion_map, region)
                         pixel_masks[index_start:index_end] = 0
                         
@@ -1126,47 +1058,368 @@ class Model(object):
         return pixel_masks
 
 
-    def _continuum(self, channel, obs, model_flux, **theta):
-    
-        method = self.configuration["normalise"][channel]["method"]
+    def _continuum(self, channel, observations, model_flux, **theta):
+        # The normalisation coefficients should be in the theta
+        order = self.configuration["normalise"][channel]["order"]
+        coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
+            for i in range(order + 1)]
 
-        if method == "polynomial":
+        return np.polyval(coefficients, observations.disp)
 
-            # The normalisation coefficients should be in the theta
-            order = self.configuration["normalise"][channel]["order"]
-            coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
-                for i in range(order + 1)]
 
-            return np.polyval(coefficients, obs.disp)
+    def optimise(self, observations, initial_theta=None, **kwargs):
+        """
+        Numerically optimise the log-probability given the data from an
+        optionally provided initial point.
 
-            """ 
-            elif method == "spline" and observations is not None:
+        :param observations:
+            The observed spectra (data).
 
-                num_knots = self.configuration["normalise"][channel]["knots"]
-                observed_channel = observations[self.channels.index(channel)]
-                        
-                # Divide the observed spectrum by the model channel spectrum
-                continuum = observed_channel.flux/model_flux
+        :type observations:
+            list of :class:`sick.specutils.Spectrum1D` objects
 
-                # Fit a spline function to the *finite* continuum points, since the model spectra is interpolated
-                # to all observed pixels (regardless of how much overlap there is)
-                finite = np.isfinite(continuum)
-                knots = [theta["normalise.{channel}.k{n}".format(channel=channel, n=n)] for n in xrange(num_knots)]
-                tck = interpolate.splrep(observed_channel.disp[finite], continuum[finite],
-                    w=1./np.sqrt(observed_channel.variance[finite]), t=knots)
+        :param initial_theta: [optional]
+            The initial point to optimise from. If not provided then the
+            initial point will be determined in the method described in
+            the sick paper.
 
-                # Scale the model by the continuum function
-                return lambda dispersion: interpolate.splev(dispersion, tck)
-            """
+        :type initial_theta:
+            dict or list
 
+        :param kwargs: [optional]
+            Keyword arguments to pass directly to the optimisation call.
+
+        :type kwargs:
+            dict
+
+        :returns:
+            The numerically optimised point :math:`\Theta_{opt}`.
+        """
+
+        if initial_theta is not None:
+            p0 = self._undictify_theta(initial_theta)
+            assert len(p0) == len(self.parameters), "Initial theta is missing "\
+                "parameters."
         else:
-            raise NotImplementedError("only polynomial continuums represented at the moment") 
+            p0, init_r_chi_sq = self.initial_theta(observations)
+
+        logger.info("Optimising from point:")
+        for p, v in zip(self.parameters, p0):
+            logger.info("  {0}: {1:.2e}".format(p, v))
+
+        # Set some keyword defaults
+        default_kwargs = {
+            "maxfun": self.configuration["settings"]["op_maxfun"],
+            "maxiter": self.configuration["settings"]["op_maxiter"],
+            "xtol": self.configuration["settings"]["op_xtol"],
+            "ftol": self.configuration["settings"]["op_ftol"],
+            "disp": False
+        }
+        [kwargs.setdefault(k, v) for k, v in default_kwargs.iteritems()]
+        
+        # And we need to overwrite this one because we want all the information, 
+        # even if the user doesn't.
+        kwargs.update({"full_output": True})
+        logger.debug("Passing keywords to optimiser (these can be passed directly "\
+            "from optimise_settings in the model configuration file if using the "\
+            "command line interface): {0}".format(kwargs))
+
+        # Optimisation
+        t_init = time()
+        nlp = lambda t, m, o: -inference.log_probability(t, m, o)
+        p1, fopt, niter, funcalls, warnflag = op.fmin(nlp, p0,
+            args=(self, observations), **kwargs)
+
+        # Book-keeping
+        chi_sq, r_chi_sq = self._chi_sq(observations, p1)
+        info = {
+            "fopt": fopt,
+            "niter": niter,
+            "funcalls": funcalls,
+            "warnflag": warnflag,
+            "time_elapsed": time() - t_init,
+            "chi_sq": chi_sq,
+            "r_chi_sq": r_chi_sq
+        }
+        if warnflag > 0:
+            m = [
+                "Maximum number of function evaluations ({}) made.".format(funcalls),
+                "Maximum number of iterations ({}) reached.".format(niter)
+            ][warnflag - 1]
+            logger.warn("{0} Optimised solution may be inaccurate.".format(m))
+
+        return (p1, r_chi_sq, info)
+
+
+    def walker_widths(self, observations, theta):
+        """
+        Return a list of standard deviations for each model parameter theta to serve
+        as the initial standard deviations for the sampler.
+        
+        :param observations:
+            The observed data.
+
+        :type observations:
+            list of :class:`sick.specutils.Spectrum1D` objects
+
+        :param theta:
+            The values of the model parameters theta.
+
+        :type theta:
+            list
+
+        :returns:
+            Initial standard deviations for each of the model parameters.
+
+        :rtype:
+            :class:`numpy.array`
+        """
+
+        base_env = { 
+            "locals": None,
+            "globals": None,
+            "__name__": None, 
+            "__file__": None,
+            "__builtins__": None,
+            "normal": np.random.normal,
+            "uniform": np.random.uniform,
+            "abs": abs
+        }
+
+        widths = np.zeros(len(theta))
+        theta = self._undictify_theta(theta)
+        for i, (parameter, value) in enumerate(zip(self.parameters, theta)):
+
+            # Check to see if there is an explicit walker width distribution for
+            # this parameter
+            if parameter in self.configuration.get("initial_walker_widths", {}):
+                
+                # Copy the environment and update with the value
+                env = base_env.copy()
+                env["x"] = value
+
+                # Evaluate the rule
+                rule = self.configuration["initial_walker_widths"][parameter]
+                try:
+                    widths[i] = eval(rule, env)
+                except (TypeError, ValueError):
+                    logger.exception("Exception in evaluating walker width rule"\
+                        " '{0}'. Ignoring rule.".format(rule))
+                else:
+                    # OK, we have updated the width. Continue to the next param
+                    continue
+
+            if parameter in self.grid_points.dtype.names:
+                widths[i] = 0.05 * np.ptp(self.grid_boundaries[parameter])
+
+            elif parameter[:2] == "z.": # Redshift
+                # Set the velocity width to be 1 km/s
+                widths[i] = 1./299792458e-3
+
+            elif parameter[:2] == "f.": # Jitter
+                widths[i] = 0.1
+
+            elif parameter[:9] == "convolve.": # Smoothing
+                # 10% of the value
+                widths[i] = 0.1 * value
+
+            elif parameter[:10] == "normalise.": # Normalisation
+                channel, coefficient = parameter.split(".")[1:]
+                coefficient = int(coefficient[1:]) # 'normalise.blue.c0'
+
+                observed = observations[self.channels.index(channel)]
+                order = self.configuration["normalise"][channel]["order"]
+
+                # And we arbitrarily specify the width to be ~3x the mean uncertainty in flux.
+                scale = 3 * np.nanmean(observed.variance)
+                widths[i] = scale/(observed.disp.mean()**(order - coefficient))
+
+            elif parameter == "Pb":
+                widths[i] = 0.01
+
+            elif parameter == "Vb":
+                logger.warn('probs not optimally effective')
+                widths[i] = 1e-4
+
+            else:
+                raise RuntimeError("whoops")
+
+        return widths
+
+
+    def infer(self, observed_spectra, p0, burn=None, sample=None):
+        """
+        Set up an EnsembleSampler and sample the parameters given the model and data.
+
+        :param observed_spectra:
+            The observed spectra.
+
+        :type observed_spectra:
+            A list of :class:`sick.specutils.Spectrum1D` objects.
+
+        :param model:
+            The model class.
+
+        :type model:
+            :class:`sick.models.Model`
+
+        :param p0:
+            The starting point for all the walkers.
+
+        :type p0:
+            :class:`numpy.ndarray`
+
+        :param lnprob0: [optional]
+            The log posterior probabilities for the walkers at positions given by
+            ``p0``. If ``lnprob0`` is None, the initial values are calculated.
+
+        :type lnprob0:
+            :class:`numpy.ndarray`
+
+        :param rstate0: [optional]
+            The state of the random number generator.
+
+        :param burn: [optional]
+            The number of samples to burn. Defaults to the ``burn`` value in
+            ``settings`` of ``model.configuration``.
+
+        :type burn:
+            int
+
+        :param sample: [optional]
+            The number of samples to make from the posterior. Defaults to the 
+            ``sample`` value in ``settings`` of ``model.configuration``.
+
+        :type sample:
+            int
+
+        :returns:
+            A tuple containing the posteriors, sampler, and general information.
+        """
+
+        # Set up MCMC settings and arrays
+        walkers = self.configuration["settings"]["walkers"]
+        if burn is None:
+            burn = self.configuration["settings"]["burn"]
+            logger.info("Burning for {0} steps (from settings.burn)".format(burn))
+        if sample is None:
+            sample = self.configuration["settings"]["sample"]
+            logger.info("Sampling for {0} steps (from settings.sample)".format(sample))
+
+        mean_acceptance_fractions = []
+        autocorrelation_time = np.zeros((burn, len(self.parameters)))
+
+        # Initialise the sampler
+        proposal_scale = self.configuration["settings"].get("proposal_scale", 2)
+        if proposal_scale != 2:
+            logger.info("Using non-standard proposal scale of {0:.2f}".format(proposal_scale))
+
+        sampler = emcee.EnsembleSampler(walkers, len(self.parameters),
+            inference.log_probability, args=(self, observed_spectra),
+            threads=self.configuration["settings"]["threads"], a=proposal_scale)
+
+        # Start burning
+        t_init = time()
+        for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, iterations=burn)):
+            mean_acceptance_fractions.append(np.mean(sampler.acceptance_fraction))
+            
+            # Announce progress
+            logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f},"\
+                " maximum log probability in last step was {2:.3e}".format(i + 1,
+                mean_acceptance_fractions[-1], np.max(sampler.lnprobability[:, i])))
+            if mean_acceptance_fractions[-1] in (0, 1):
+                raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(
+                    mean_acceptance_fractions[i]))
+
+        # Save the chain and calculated log probabilities for later
+        chain, lnprobability = sampler.chain, sampler.lnprobability
+
+        logger.info("Resetting chain...")
+        sampler.reset()
+
+        converged = None
+        while True:
+            logger.info("Sampling posterior for {0} steps...".format(sample))
+            for j, state in enumerate(sampler.sample(pos, iterations=sample)):
+                mean_acceptance_fractions.append(np.mean(sampler.acceptance_fraction))
+
+                # Announce progress
+                logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f},"\
+                    " maximum log probability in last step was {2:.3e}".format(j + i + 2,
+                    mean_acceptance_fractions[-1], np.max(sampler.lnprobability[:, j])))
+                if mean_acceptance_fractions[-1] in (0, 1):
+                    raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(
+                        mean_acceptance_fractions[i]))
+
+            # Estimate auto-correlation times for all parameters.
+            logger.info("Auto-correlation lengths:")
+            acor_lengths = []
+            max_parameter_len = max(map(len, self.parameters))
+            for i, parameter in enumerate(self.parameters):
+                try:
+                    acor_time = acor.acor(np.mean(sampler.chain[:, :, i], axis=0))
+                except:
+                    logger.exception("Error in calculating auto-correlation length "\
+                        "for parameter {}:".format(parameter))
+                    acor_time = [np.inf]
+
+                is_ok = ["", "[OK]"][sample >= 100 * acor_time[0]]
+                logger.info("  acor({0}): {1:.2f}   {2}".format(
+                    parameter.rjust(max_parameter_len), acor_time[0], is_ok))
+                acor_lengths.append(acor_time[0])
+
+            else:
+                # Judge convergence.
+                logger.info("Checking for convergence...")
+                converged = (sample >= 100 * max(acor_lengths))
+
+                if converged:
+                    logger.info("Achievement unlocked: convergence.")
+                    break
+
+                else:
+                    logger.warn("Convergence may not be achieved.")
+                    break
+                    
+        # Concatenate the existing chain and lnprobability with the posterior samples
+        chain = np.concatenate([chain, sampler.chain], axis=1)
+        lnprobability = np.concatenate([lnprobability, sampler.lnprobability], axis=1)
+
+        # Get the ML theta and calculate chi-sq values
+        ml_index = np.argmax(lnprobability.reshape(-1))
+        ml_values = chain.reshape(-1, len(self.parameters))[ml_index]
+        chi_sq, r_chi_sq = self._chi_sq(observed_spectra, dict(zip(self.parameters, ml_values)))
+
+        # Get the quantiles
+        posteriors = {}
+        for parameter_name, ml_value, (map_value, quantile_84, quantile_16) \
+        in zip(self.parameters, ml_values, 
+            map(lambda v: (v[2], v[2]-v[1], v[0]-v[1]),
+                zip(*np.percentile(sampler.chain.reshape(-1, len(self.parameters)), [16, 50, 84], axis=0)))):
+            posteriors[parameter_name] = (ml_value, quantile_84, quantile_16)
+
+            # Transform redshift posteriors to velocity posteriors
+            if parameter_name[:2] == "z.":
+                posteriors["v_rad." + parameter_name[2:]] = list(np.array(posteriors[parameter_name]) * 299792458e-3)
+
+        # Send back additional information
+        info = {
+            "chain": chain,
+            "lnprobability": lnprobability,
+            "converged": converged,
+            "mean_acceptance_fractions": np.array(mean_acceptance_fractions),
+            "time_elapsed": time() - t_init,
+            "chi_sq": chi_sq,
+            "reduced_chi_sq": r_chi_sq,
+            "autocorrelation_lengths": dict(zip(self.parameters, acor_lengths))
+        }
+        return (posteriors, sampler, info)
 
 
 
     def __call__(self, observations=None, full_output=False, **theta):
         """
-        Return normalised, doppler-shifted, convolved and transformed model fluxes.
+        Generate some spectra.
 
         :param observations: [optional]
             The observed data.
@@ -1191,24 +1444,15 @@ class Model(object):
             objects.
         """
 
-        # Any judicious rounding to do of the requested parameters?
-        astrophysical_point = []
-        rounding_precision = self.configuration.get("rounding_precision", {})
-        for parameter in self.grid_points.dtype.names:
-
-            decimal = rounding_precision.get(parameter, None)
-            if decimal is None:
-                astrophysical_point.append(theta[parameter])
-            else:
-                astrophysical_point.append(np.round(theta[parameter], decimal))
-
         # Interpolate the flux
-        interpolated_flux = self.interpolate_flux(tuple(astrophysical_point))
+        interpolated_flux = self.interpolate_flux(
+            [theta[p] for p in self.grid_points.dtype.names])
 
         model_fluxes = []
         model_continua = []
-        for channel, model_flux in interpolated_flux.iteritems():
-                
+        for i, channel in enumerate(self.channels):
+            
+            model_flux = interpolated_flux[channel]
             model_dispersion = self.dispersion[channel]
 
             # Any smoothing to apply?
@@ -1226,36 +1470,35 @@ class Model(object):
                 # before the doppler shift can be applied
                 log_delta = np.diff(model_dispersion).min()
                 wl_min, wl_max = model_dispersion.min(), model_dispersion.max()
-                log_model_dispersion = np.exp(np.arange(np.log(wl_min), np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
+                log_model_dispersion = np.exp(np.arange(np.log(wl_min), 
+                    np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
 
                 # Interpolate flux to log-lambda dispersion
-                log_model_flux = np.interp(log_model_dispersion, model_dispersion, model_flux, left=np.nan, right=np.nan)
+                log_model_flux = np.interp(log_model_dispersion, model_dispersion, 
+                    model_flux, left=np.nan, right=np.nan)
                 model_dispersion = log_model_dispersion * (1. + z)
                 model_flux = log_model_flux
 
             # Interpolate model fluxes to observed dispersion map
             if observations is not None:
-                index = self.channels.index(channel)
-                model_flux = np.interp(observations[index].disp,
+                model_flux = np.interp(observations[i].disp,
                     model_dispersion, model_flux, left=np.nan, right=np.nan)
-                model_dispersion = observations[index].disp
+                model_dispersion = observations[i].disp
 
             # Apply masks if necessary
-            if self.configuration.get("masks", None):
+            if self.configuration["masks"] is not None:
                 regions = self.configuration["masks"].get(channel, [])
                 for region in regions: 
                     if key in theta:
                         z = theta[key]
                         region = np.array(region) * (1. + z)
-
                     index_start, index_end = np.searchsorted(model_dispersion, region)
                     model_flux[index_start:index_end] = np.nan
 
-            # Normalise model fluxes to the data
-            if "normalise" in self.configuration and self.configuration["normalise"].get(channel, False):
-
-                index = self.channels.index(channel)
-                obs = observations[index]
+            # Normalise model fluxes to the data?
+            if self.configuration["normalise"] \
+            and self.configuration["normalise"].get(channel, False):
+                obs = observations[i]
 
                 continuum = self._continuum(channel, obs, model_flux, **theta)
                 model_flux *= continuum
@@ -1263,10 +1506,8 @@ class Model(object):
 
             else:
                 model_continua.append(0.)
-
             model_fluxes.append(model_flux)
 
         if full_output:
             return (model_fluxes, model_continua)
         return model_fluxes
-
