@@ -458,7 +458,7 @@ def projection(model, data, theta=None, chain=None, n=100,
         map_theta = np.mean(flat_chain, axis=0)
 
         try:
-            map_fluxes = model(observations=data, **model._dictify_theta(map_theta))
+            map_fluxes = model(data=data, **model._dictify_theta(map_theta))
         except:
             logger.warn("Could not draw MAP fluxes from posterior")
 
@@ -471,7 +471,7 @@ def projection(model, data, theta=None, chain=None, n=100,
                 sampled_theta = dict(zip(model.parameters,
                     flat_chain[np.random.randint(0, n_samples)]))
                 try:
-                    sampler_flux = model(observations=data, **sampled_theta)
+                    sampler_flux = model(data=data, **sampled_theta)
                 except:
                     logger.warn("Could not draw sample flux from posterior")
                     continue
@@ -481,7 +481,7 @@ def projection(model, data, theta=None, chain=None, n=100,
     elif theta is not None:
 
         sampled_fluxes = []
-        map_fluxes = model(observations=data, **model._dictify_theta(theta))
+        map_fluxes = model(data=data, **model._dictify_theta(theta))
         
     else:
         raise ValueError("either theta or chain should be given")

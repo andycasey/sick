@@ -10,9 +10,7 @@ __all__ = ["log_prior", "log_likelihood", "log_probability"]
 
 import logging
 from functools import partial
-from time import time
 
-import acor
 import numpy as np
 from scipy import stats
 
@@ -35,18 +33,22 @@ def log_prior(theta, model):
     :param theta:
         The model parameter values.
 
-    :type theta: list
+    :type theta:
+        list
 
     :param model:
         The model class.
 
-    :type model: :class:`sick.models.Model`
+    :type model:
+        :class:`sick.models.Model`
 
     :returns:
         The logarithmic prior for the parameters theta.
 
-    :rtype: float
+    :rtype:
+        float
     """
+
 
     log_prior = 0
     for parameter, value in zip(model.parameters, theta):
@@ -73,42 +75,46 @@ def log_prior(theta, model):
     return log_prior
 
 
-def log_likelihood(theta, model, observations):
+
+def log_likelihood(theta, model, data):
     """
     Return the logarithmic likelihood for a set of theta given the model.
 
     :param theta:
         The model parameter values.
 
-    :type theta: list
+    :type theta:
+        list
 
     :param model:
         The model class.
 
-    :type model: :class:`sick.models.Model`
+    :type model:
+        :class:`sick.models.Model`
 
-    :param observations:
+    :param data:
         The observed spectra.
 
-    :type observations:
+    :type data:
         A list of :class:`sick.specutils.Spectrum1D` objects.
 
     :returns:
         The logarithmic likelihood for the parameters theta.
 
-    :rtype: float
+    :rtype:
+        float
     """
 
     theta_dict = dict(zip(model.parameters, theta))
     try:
-        model_fluxes, model_continua = model(observations=observations,
+        model_fluxes, model_continua = model(data=data,
             full_output=True, **theta_dict)
     except ValueError:
         return -np.inf
 
     likelihood, num_finite_pixels = 0, 0
     for (channel, model_flux, model_continuum, observed_spectrum) \
-    in zip(model.channels, model_fluxes, model_continua, observations):
+    in zip(model.channels, model_fluxes, model_continua, data):
 
         # Underestimated variance?
         if "f.{}".format(channel) in theta_dict:
@@ -122,8 +128,7 @@ def log_likelihood(theta, model, observations):
             * signal_inverse_variance - np.log(signal_inverse_variance))
 
         # Are we modelling the outliers as well?
-        if "Pb" in theta_dict.keys():
-
+        if "Pb" in theta_dict:
             outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_spectrum.variance \
                 + additional_noise)
             outlier_likelihood = -0.5 * ((observed_spectrum.flux - model_continuum)**2 \
@@ -150,33 +155,36 @@ def log_likelihood(theta, model, observations):
     return likelihood
 
 
-def log_probability(theta, model, observations):
+def log_probability(theta, model, data):
     """
-    Return the logarithmic probability (prior + likelihood) for theta given the data.
+    Return the logarithmic probability for theta given the data.
 
     :param theta:
         The model parameter values.
 
-    :type theta: list
+    :type theta:
+        list
 
     :param model:
         The model class.
 
-    :type model: :class:`sick.models.Model`
+    :type model:
+        :class:`sick.models.Model`
 
-    :param observations:
+    :param data:
         The observed spectra.
 
-    :type observations:
+    :type data:
         A list of :class:`sick.specutils.Spectrum1D` objects.
 
     :returns:
         The logarithmic probability for the parameters theta.
 
-    :rtype: float
+    :rtype:
+        float
     """
 
     prior = log_prior(theta, model)
     if np.isinf(prior):
         return prior
-    return prior + log_likelihood(theta, model, observations)
+    return prior + log_likelihood(theta, model, data)

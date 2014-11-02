@@ -6,14 +6,11 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
-# Necessary for all sub-parsers
 import argparse
 import logging
 
-# Necessary for some sub-parsers
 import cPickle as pickle
 import json
-import multiprocessing
 import os
 import requests
 import sys
@@ -61,7 +58,7 @@ def resume(args):
 
 
 def cache(args):
-    """ Cache a model. """
+    """ Cache a model """
 
     if not os.path.exists(args.model):
         raise IOError("model filename {0} does not exist".format(args.model))
@@ -172,7 +169,6 @@ def _check_analysis_args(args):
         if args.plot_format.lower() not in available:
             raise ValueError("plotting format {0} not available: Options are: "\
                 "{1}".format(args.plot_format.lower(), ", ".join(available)))
-
     return None
 
 
@@ -223,163 +219,9 @@ def _parse_and_load_spectra(args):
     return sources
 
 
-def optimise(args):
-    """ Optimise the model parameters given the data (no MCMC). """
-
-    # Make some checks
-    _check_analysis_args(args)
-
-    # Load the model and the data
-    model = sick.models.Model(args.model)
-    all_spectra = _parse_and_load_spectra(args)
-
-    # Display some information about the model
-    logger.info("Model information: {0}".format(model))
-    logger.info("Configuration:")
-    map(logger.info, yaml.dump(model.configuration).split("\n"))
-
-    # Define headers that we want in the results filename 
-    default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS",
-        "LONG_OBS", "MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTEND",
-        "UTDATE", "UTSTART", )
-    default_metadata = {
-        "model": model.hash, 
-        # [TODO] input_filenames may be char-limited for possibility #2
-        "input_filenames": ", ".join(args.spectrum_filenames),
-        "sick_version": sick.__version__,
-    }
-
-    # For each source, solve
-    for i, spectra in enumerate(sources, start=1):
-
-        logger.info("Starting on object #{0} (RA {1}, DEC {2} -- {3})".format(i,
-            spectra[0].headers.get("RA", "None"),
-            spectra[0].headers.get("DEC", "None"),
-            spectra[0].headers.get("OBJECT", "Unknown")))
-
-        # Create metadata and put header information in
-        if args.skip > i - 1:
-            logger.info("Skipping object #{0}".format(i))
-            continue
-
-        # Check to see whether we should skip this source entirely
-        if  args.number_to_solve != "all" \
-        and i > (int(args.number_to_solve) + args.skip):
-            logger.info("We have analysed {0} spectra. Exiting..".format(
-                args.number_to_solve))
-            break
-
-        # Create reasonable output filename prefixes
-        if args.multiplexing:
-            # COMMON_MULTIPLEX_FILENAME-NUM-DESC.EXT
-            output = lambda x: os.path.join(args.output_dir, "-".join([
-                os.path.commonprefix(map(os.path.basename, args.spectrum_filenames)), 
-                str(i), x]))
-
-        elif args.multiple_sources:
-            # INPUT_FILENAME_WITHOUT_EXT-DESC.EXT
-            output = lambda x: os.path.join(args.output_dir, 
-                "-".join([os.path.splitext(args.spectrum_filenames[i])[0], x]))
-
-        else:
-            # COMMON_FILENAME-DESC.EXT
-            output = lambda x: os.path.join(args.output_dir, "-".join([
-                os.path.commonprefix(map(os.path.basename, args.spectrum_filenames)), x]))
-
-        # Does a solution already exist for this star? If so are we authorised to clobber it?
-        if os.path.exists(output("result.json")):
-            if not args.clobber:
-                logger.info("Skipping object #{0} as a results file already exists"\
-                    " ({1}) and we have been asked not to clobber it".format(
-                        i, output("result.json")))
-                continue
-            else:
-                logger.info("Overwriting existing file {0}".format(output("result.json")))
-
-        metadata = {}
-        header_columns = []
-        for header in default_headers:
-            if header not in spectra[0].headers: continue
-            header_columns.append(header)
-            metadata[header] = spectra[0].headers[header]
-
-        # Set defaults for metadata
-        metadata.update({"run_id": i})
-        metadata.update(default_metadata)
-
-        op_kwargs = model.configuration.get("optimise_settings", {})
-
-        try:
-            p0 = sick.random_scattering(spectra, model)
-            opt_parameters, info = sick.optimise(p0, spectra, model, **op_kwargs)
-
-        except:
-            logger.exception("Failed to analyse #{0}:".format(i))
-            if args.debug: raise
-
-        else:
-            
-            # Update results with the posteriors
-            logger.info("Optimised parameters:")
-            max_parameter_len = max(map(len, model.parameters))
-            for parameter in model.parameters:
-
-                optimised_value = opt_parameters[parameter]
-                logger.info("    {0} (opt): {1:.2e}".format(
-                    parameter.rjust(max_parameter_len), optimised_value))
-
-                metadata.update({
-                    parameter: optimised_value,
-                    "u_maxabs_{0}".format(parameter): np.nan,
-                    "u_pos_{0}".format(parameter): np.nan,
-                    "u_neg_{0}".format(parameter): np.nan,
-                })
-
-            # Save information related to the data
-            metadata.update(dict(
-                [("mean_flux_channel_{0}".format(k), 
-                    np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
-                    for k, spectrum in enumerate(spectra)]
-            ))
-
-            # Save information related to the analysis
-            metadata.update({
-                "reduced_chi_sq": info["reduced_chi_sq"],
-                "warnflag": info["warnflag"],
-                "maximum_log_likelihood": -info["fopt"],
-                "chain_filename": "",
-                "time_elapsed": info["time_elapsed"],
-                "final_mean_acceptance_fraction": np.nan,
-                "model_configuration": model.configuration
-            })
-            
-            # Write the result to disk
-            logger.info("Saving results to {0}".format(output("result.json")))
-            with open(output("result.json"), "wb+") as fp:
-                json.dump(metadata, fp, indent=2)
-
-            # Plot results
-            if args.plotting:
-
-                # Some filenames
-                opt_spectra_filename = output("opt-spectra.{0}".format(args.plot_format))
-                
-                # Plot some spectra
-                fig = sick.plot.projection(model, spectra, optimised_theta=opt_parameters,
-                    uncertainties=False)
-                fig.savefig(opt_spectra_filename)
-                logger.info("Created figure {0}".format(opt_spectra_filename))
-                
-                # Closing the figures isn't enough; matplotlib leaks memory
-                plt.close("all")
-
-    logger.info("Fin.")
-
-
 def solve(args):
     """ 
-    Calculate posterior probability distributions for model parameters,
-    given the data.
+    Calculate posterior distributions for model parameters given the data.
     """
 
     # Make some checks
@@ -430,7 +272,6 @@ def solve(args):
             break
 
         # If there are many spectra to analyse, include the run ID in the output filenames.
-
         # Update filename prefix if we are reading from a file
         if args.read_from_filename:
             filename_prefix = sick.utils.default_output_prefix(all_filenames[i].split())
@@ -468,6 +309,10 @@ def solve(args):
         # Determine an initial point
         initial_theta, initial_r_chi_sq = model.initial_theta(spectra)
 
+        # Save metadata about the initial point
+        metadata["initial_theta"] = model._dictify_theta(initial_theta)
+        metadata["initial_r_chi_sq"] = initial_r_chi_sq
+
         # Produce a plot projecting the initial value
         if args.plotting:
             projected_filename = output("projected-initial-theta.{}".format(
@@ -479,12 +324,17 @@ def solve(args):
 
         # Optimise the point
         if model.configuration["settings"]["optimise"]:
-            optimised_theta, optimised_chi_sq, info = model.optimise(
-                spectra, initial_theta=initial_theta)
+            optimised_theta, optimised_r_chi_sq, info = model.optimise(
+                spectra, initial_theta=initial_theta, 
+                fixed=["z.{}".format(c) for c in model.channels])
 
             logger.info("Optimised theta is {0}".format(model._dictify_theta(optimised_theta)))
             mcmc_initial_point = optimised_theta
 
+            # Save metadata about the optimised value
+            metadata["optimised_theta"] = model._dictify_theta(optimised_theta)
+            metadata["optimised_r_chi_sq"] = optimised_r_chi_sq
+            
             if args.plotting:
                 projected_filename = output("projected-optimised-theta.{}".format(
                     args.plot_format))
@@ -498,9 +348,9 @@ def solve(args):
             mcmc_initial_point = initial_theta
 
         # Create p0
+        walkers = model.configuration["settings"]["walkers"]
         std = model.walker_widths(spectra, mcmc_initial_point)
-        p0 = sample_ball(mcmc_initial_point, std,
-            model.configuration["settings"]["walkers"])
+        p0 = sample_ball(mcmc_initial_point, std, walkers)
 
         try:
             posteriors, sampler, info = model.infer(spectra, p0)
@@ -530,26 +380,23 @@ def solve(args):
                     "u_neg_{0}".format(parameter): neg_uncertainty,
                 })
 
-            # Save information related to the data
-            metadata.update(dict(
-                [("mean_flux_channel_{0}".format(k), \
-                    np.mean(spectrum.flux[np.isfinite(spectrum.flux)])) \
-                    for k, spectrum in enumerate(spectra)]
-            ))
-
             # Save information related to the analysis
+            metadata.update(dict(zip(
+                ["mean_snr_{}".format(c) for c in model.channels],
+                [np.nanmean(s.flux/(s.variance**0.5)) for s in spectra])))
+
             chain_filename = output("chain.fits")
             metadata.update({
                 "reduced_chi_sq": info["reduced_chi_sq"],
-                "warnflag": info["warnflag"],
-                "maximum_log_likelihood": np.max(info["lnprobability"][np.isfinite(info["lnprobability"])]),
+                "maximum_log_probability": np.nanmax(info["lnprobability"]),
                 "chain_filename": chain_filename if args.save_chain_files else "",
                 "time_elapsed": info["time_elapsed"],
                 "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
                 "model_configuration": model.configuration
             })
+            for channel, length in info["autocorrelation_lengths"].iteritems():
+                metadata["acor_{}".format(channel)] = length
             
-            walkers = model.configuration["settings"]["walkers"]
             chain_length = info["chain"].shape[0] * info["chain"].shape[1]
             chain = np.core.records.fromarrays(
                 np.vstack([
@@ -570,7 +417,7 @@ def solve(args):
                 hdulist.writeto(chain_filename, clobber=True)
 
             else:
-                logger.warn("Chain will not be saved to disk.")
+                logger.warn("Chain not saved to disk.")
 
             # Write the result to disk
             logger.info("Saving results to {0}".format(output("result.json")))
@@ -592,43 +439,41 @@ def solve(args):
 
             # Plot results
             if args.plotting:
-
-                # Some filenames
-                chain_plot_filename = output("chain.{0}".format(args.plot_format))
-                acceptance_plot_filename = output("acceptance.{0}".format(args.plot_format))
-                corner_plot_filename = output("corner.{0}".format(args.plot_format))
-                pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
-                autocorrelation_filename = output("auto-correlation.{0}".format(args.plot_format))
                 
                 # Plot the mean acceptance fractions
+                acceptance_plot_filename = output("acceptance.{0}".format(args.plot_format))
                 fig = sick.plot.acceptance_fractions(info["mean_acceptance_fractions"],
                     burn_in=model.configuration["settings"]["burn"])
                 fig.savefig(acceptance_plot_filename)
                 logger.info("Created figure {0}".format(acceptance_plot_filename))
 
                 # Plot the chains
-                fig = sick.plot.chains(info["chain"], labels=sick.utils.latexify(model.parameters),
-                    burn_in=model.configuration["settings"]["burn"], truth_color='r',
-                    truths=[posteriors[parameter][0] for parameter in model.parameters])
+                chain_plot_filename = output("chain.{0}".format(args.plot_format))
+                fig = sick.plot.chains(info["chain"],
+                    labels=sick.utils.latexify(model.parameters), truth_color='r',
+                    burn_in=model.configuration["settings"]["burn"],
+                    truths=[posteriors[p][0] for p in model.parameters])
                 fig.savefig(chain_plot_filename)
                 logger.info("Created figure {0}".format(chain_plot_filename))
 
                 # Make a corner plot with just the astrophysical parameters
-                indices = np.array([model.parameters.index(parameter) \
-                    for parameter in model.grid_points.dtype.names])
+                corner_plot_filename = output("corner.{0}".format(args.plot_format))
+                indices = np.arange(len(model.grid_points.dtype.names))
                 fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters))[:, indices],
-                    labels=sick.utils.latexify(model.grid_points.dtype.names), truth_color='r',
-                    quantiles=[.16, .50, .84], verbose=False,
-                    truths=[posteriors[parameter][0] for parameter in model.grid_points.dtype.names])
+                    labels=sick.utils.latexify(model.grid_points.dtype.names),
+                    truth_color='r', quantiles=[.16, .50, .84], verbose=False,
+                    truths=[posteriors[p][0] for p in model.grid_points.dtype.names])
                 fig.savefig(corner_plot_filename)
                 logger.info("Created figure {0}".format(corner_plot_filename))
 
                 # Plot the autocorrelation
+                autocorrelation_filename = output("auto-correlation.{0}".format(args.plot_format))
                 fig = sick.plot.autocorrelation(sampler.chain)
                 fig.savefig(autocorrelation_filename)
                 logger.info("Created figure {0}".format(autocorrelation_filename))
 
                 # Plot some spectra
+                pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
                 fig = sick.plot.projection(model, spectra, chain=sampler.chain)
                 fig.savefig(pp_spectra_plot_filename)
                 logger.info("Created figure {0}".format(pp_spectra_plot_filename))
@@ -698,17 +543,18 @@ def aggregate(args):
     sorted_columns.extend(all_parameteral_columns)
 
     other_columns = sorted(set(columns).difference(sorted_columns))
-    ignore_columns = ("model_configuration", )
+    ignore_columns = ("model_configuration", "optimised_theta", "initial_theta")
     sorted_columns.extend(list(set(other_columns).difference(ignore_columns)))
 
     # Create data types
-    formats = [("f8", "|S256")[isinstance(results[-1][each], (str, unicode))] for each in sorted_columns]
+    formats = [("f8", "|S256")[isinstance(results[-1][each], (str, unicode))] \
+        for each in sorted_columns]
 
     # Create table
-    results_table = np.core.records.fromrecords(
-        [[result.get(each, ["|S256", np.nan][formats[i] == "f8"]) \
-            for i, each in enumerate(sorted_columns)] for result in results],
-        names=sorted_columns, formats=formats)
+    data = [[result.get(each, ["", np.nan][formats[i] == "f8"]) \
+        for i, each in enumerate(sorted_columns)] for result in results]
+    results_table = np.core.records.fromrecords(data, names=sorted_columns,
+        formats=formats)
 
     # Write results to filename 
     primary_hdu = pyfits.PrimaryHDU()
@@ -716,8 +562,8 @@ def aggregate(args):
     hdulist = pyfits.HDUList([primary_hdu, table_hdu])
     hdulist.writeto(args.output_filename, clobber=args.clobber)
 
-    logger.info("Successfully written results from {0} sources with {1} fields to {2}".format(
-        len(results), len(results[0]), args.output_filename))
+    logger.info("Successfully written results from {0} sources with {1} fields"\
+        " to {2}".format(len(results), len(results[0]), args.output_filename))
 
 
 def parser(input_args=None):
@@ -760,33 +606,6 @@ def parser(input_args=None):
             "fault) to see what pre-cached models are available.", default="list")
     download_parser.set_defaults(func=download)
 
-    # Create parser for the optimise command
-    optimise_parser = subparsers.add_parser("optimise", parents=[parent_parser],
-        help="Numerically optimise the model parameters, given the data.")
-    optimise_parser.add_argument("model", type=str,
-        help="The model filename in YAML- or JSON-style formatting.")
-    optimise_parser.add_argument("spectra", nargs="+",
-        help="Filenames of (observed) spectroscopic data.")
-    optimise_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?",
-        type=str, default=os.getcwd(),
-        help="Directory where to save output files to.")
-    optimise_parser.add_argument("--filename-prefix", "-p", dest="filename_prefix",
-        type=str, help="The filename prefix to use for all output files.")
-    optimise_parser.add_argument("--multi-channel", "-mc", dest="multiple_channels",
-        action="store_true", default=False,
-        help="Use if each source has multiple spectral channels. Default is false, implying that "
-        "any additional spectra refers to a different source.")
-    optimise_parser.add_argument("-n", "--number-to-solve", dest="number_to_solve", default="all",
-        help="Specify the number of sources to optimise. Default is to optimise for %(default)s sources.")
-    optimise_parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0,
-        help="Number of sources to skip (default: %(default)s)")
-    optimise_parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True,
-        help="Disable plotting.")
-    optimise_parser.add_argument("--plot-format", "-pf", dest="plot_format", 
-        action="store", type=str, default="pdf", help="Format for output plots"\
-        " (default: %(default)s)")
-    optimise_parser.set_defaults(func=optimise)
-
     # Create parser for the solve command
     solve_parser = subparsers.add_parser("solve", parents=[parent_parser],
         help="Compute posterior probability distributions for the model "\
@@ -794,7 +613,7 @@ def parser(input_args=None):
     solve_parser.add_argument("model", type=str,
         help="The model filename in YAML- or JSON-style formatting.")
     solve_parser.add_argument("-r", action="store_true", dest="read_from_filename",
-        default=True, help="Read input spectra from a single filename.")
+        default=False, help="Read input spectra from a single filename.")
     solve_parser.add_argument("spectrum_filenames", nargs="+",
         help="Filenames of (observed) spectroscopic data.")
     solve_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?",
@@ -838,19 +657,19 @@ def parser(input_args=None):
         help="The number of MCMC steps to sample after burn-in.")
     resume_parser.add_argument("spectrum_filenames", nargs="+",
         help="Filenames of (observed) spectroscopic data.")
-    resume_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?", type=str,
-        default=os.getcwd(),
+    resume_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?",
+        type=str, default=os.getcwd(),
         help="Directory where to save output files to.")
     resume_parser.add_argument("--filename-prefix", "-p", dest="filename_prefix",
         type=str, help="The filename prefix to use for the output files.")
     resume_parser.add_argument("--multi-channel", "-mc", dest="multiple_channels",
         action="store_true", default=False,
-        help="Use if each source has multiple spectral channels. Default is false, implying that "
-        "any additional spectra refers to a different source.")
-    resume_parser.add_argument("-s", "--skip", dest="skip", action="store", type=int, default=0,
-        help="Number of sources to skip (default: %(default)s)")
-    resume_parser.add_argument("--no-plots", dest="plotting", action="store_false", default=True,
-        help="Disable plotting.")
+        help="Use if each source has multiple spectral channels. Default is false"\
+        ", implying that any additional spectra refers to a different source.")
+    resume_parser.add_argument("-s", "--skip", dest="skip", action="store",
+        type=int, default=0, help="Number of sources to skip (default: %(default)s)")
+    resume_parser.add_argument("--no-plots", dest="plotting", action="store_false",
+        default=True, help="Disable plotting.")
     resume_parser.add_argument("--plot-format", "-pf", dest="plot_format", 
         action="store", type=str, default="pdf", help="Format for output plots"\
         " (default: %(default)s)")

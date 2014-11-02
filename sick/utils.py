@@ -137,8 +137,8 @@ def latexify(labels, default_latex_labels=None):
             latex_labels.append("$\sigma_{{{0}}}$ [$\AA$]".format(aperture))
 
         elif label.startswith("normalise."):
-            aperture, coefficient = label.split(".")[1:]
-            latex_labels.append("${0}_{{{1}}}$".format(aperture[0], coefficient[1:]))
+            aperture, coeff = label.split(".")[1:]
+            latex_labels.append("${0}_{{{1}}}$".format(aperture[0], coeff[1:]))
 
         else:
             latex_labels.append(label)
@@ -191,9 +191,9 @@ def human_readable_digit(number):
     if 0 >= number:
         return "{0:.1f} ".format(number)
 
-    millnames = ["", "thousand", "million", "billion", "trillion"]
-    millidx = max(0, min(len(millnames)-1, int(np.floor(np.log10(abs(number))/3.0))))
-    return "{0:.1f} {1}".format(number/10**(3*millidx), millnames[millidx])
+    word = ["", "thousand", "million", "billion", "trillion"]
+    millidx = max(0, min(len(word)-1, int(np.floor(np.log10(abs(number))/3.0))))
+    return "{0:.1f} {1}".format(number/10**(3*millidx), word[millidx])
 
 
 class wrapper(object):

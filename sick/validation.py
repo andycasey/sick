@@ -26,7 +26,7 @@ def validate(configuration, channels, parameters):
     _validate_normalisation(configuration, channels, parameters)
     _validate_redshift(configuration, channels, parameters)
     _validate_convolve(configuration, channels, parameters)
-    _validate_masks(configuration, channels, parameters)
+    _validate_mask(configuration, channels, parameters)
 
     return True
 
@@ -179,7 +179,7 @@ def _validate_channels(configuration, channels, parameters):
     return True
 
 
-def _validate_masks(configuration, channels, parameters):
+def _validate_mask(configuration, channels, parameters):
     """
     Validate that the masks in the model are specified correctly.
 
@@ -191,26 +191,16 @@ def _validate_masks(configuration, channels, parameters):
     """
 
     # Masks are optional
-    if "masks" not in configuration.keys() \
-    or configuration["masks"] is None:
+    if "mask" not in configuration.keys() \
+    or configuration["mask"] is None:
         return True
 
-    for channel in channels:
-        if not configuration["masks"].get(channel, None):
-            continue
+    for region in configuration["mask"]:
+        assert len(region) == 2, "Masks must be a list of regions (e.g. [start,"\
+            " end])"
+        if not isinstance(region[0], (int, float)) \
+        or not isinstance(region[1], (int, float)):
+            raise TypeError("masks must be a float-type")
 
-        if not isinstance(configuration["masks"][channel], (tuple, list)):
-            raise TypeError("masks must be a list of regions (e.g., [start, stop])")
-
-        logger.info("Using {0} mask: {1}".format(channel, configuration["masks"][channel]))
-        for region in configuration["masks"][channel]:
-            if not isinstance(region, (list, tuple)) or len(region) != 2:
-                raise TypeError("masks must be a list of regions (e.g., "\
-                    "[start, stop]) in Angstroms")
-
-            try: map(float, region)
-            except TypeError:
-                raise TypeError("masks must be a list of regions (e.g., "\
-                    "[start, stop]) in Angstroms")
     return True
 

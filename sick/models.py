@@ -18,6 +18,7 @@ from hashlib import md5
 from glob import glob
 from time import time
 
+import acor
 import emcee
 import numpy as np
 import pyfits
@@ -32,6 +33,7 @@ from validation import validate as model_validate
 logger = logging.getLogger("sick")
 
 _sick_interpolator_ = None
+
 
 def load_model_data(filename, **kwargs):
     """
@@ -70,7 +72,6 @@ def load_model_data(filename, **kwargs):
     return data
 
 
-
 def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
     smoothing_kernels, sampling_rate, mean_dispersion_diffs):
 
@@ -96,7 +97,6 @@ def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
         flux[sj:ej] = channel_flux[si:ei:sampling_rate[channel]]
 
     return (index, flux)
-
 
 
 class Model(object):
@@ -128,13 +128,13 @@ class Model(object):
     _default_configuration_ = {
         "priors": {},
         "normalise": False,
-        "masks": None,
+        "mask": None,
         "redshift": False,
         "convolve": False,
         "outliers": False,
         "underestimated_noise": False,
         "settings": {
-            "dtype": "double",
+            "memmap_dtype": "double",
             "threads": 1,
             "optimise": True,
             "burn": 5000,
@@ -143,6 +143,8 @@ class Model(object):
             "proposal_scale": 2,
             "check_convergence_frequency": 1000,
             "rescale_interpolator": False,
+            "op_method": "powell",
+            "op_gtol": 1e-10,
             "op_maxfun": 5000,
             "op_maxiter": 5000,
             "op_xtol": 1e-4,
@@ -172,10 +174,6 @@ class Model(object):
             for channel, dispersion_filename in self.configuration["cached_channels"].iteritems():
                 if channel not in ("points_filename", "flux_filename"):
                     self.dispersion[channel] = load_model_data(dispersion_filename["dispersion_filename"])
-
-            #self.dispersion = dict(zip(self.channels, 
-            #    [load_model_data(self.configuration["cached_channels"][channel]["dispersion_filename"]) \
-            #        for channel in self.channels]))
 
             # Grid points must be pickled data so that the parameter names are known
             with open(self.configuration["cached_channels"]["points_filename"], "rb") as fp:
@@ -301,16 +299,13 @@ class Model(object):
                 model_validate(self.configuration, self.channels, self.parameters)
 
         # Get the grid boundaries
+        self._unique_grid_points = dict(zip(self.grid_points.dtype.names,
+            [np.sort(np.unique(self.grid_points[_])) for _ in self.grid_points.dtype.names]))
         self.grid_boundaries = dict(zip(self.grid_points.dtype.names, 
             [(self.grid_points[_].view(float).min(), self.grid_points[_].view(float).max()) \
                 for _ in self.grid_points.dtype.names]))
 
         self.priors = self._default_priors_.copy()
-        # Set some implicit priors
-        for parameter, ranges in self.grid_boundaries.iteritems():
-            self.priors[parameter] = "uniform({0},{1})".format(*ranges)
-
-        # Update with explicit priors
         self.priors.update(self.configuration["priors"])
 
         return None
@@ -408,15 +403,15 @@ class Model(object):
         return theta
 
 
-    def _chi_sq(self, observations, theta):
+    def _chi_sq(self, data, theta):
         """
         Return the standard and reduced chi-squared values for some model 
         parameters theta, given the observed data.
 
-        :param observations:
+        :param data:
             The observed spectra.
 
-        :type observations:
+        :type data:
             list of :class:`sick.specutils.Spectrum1D` objects
 
         :param theta:
@@ -433,9 +428,9 @@ class Model(object):
             (float, float)
         """
 
-        model_fluxes = self.__call__(observations=observations, **self._dictify_theta(theta))
+        model_fluxes = self.__call__(data=data, **self._dictify_theta(theta))
         chi_sq, num_pixels = 0, 0
-        for observed, model_flux in zip(observations, model_fluxes):
+        for observed, model_flux in zip(data, model_fluxes):
             chi_sq_i = (observed.flux - model_flux)**2 * observed.ivariance
             chi_sq += np.nansum(chi_sq_i)
             num_pixels += np.sum(np.isfinite(chi_sq_i))
@@ -747,7 +742,7 @@ class Model(object):
         return cached_model
 
 
-    def initial_theta(self, observations, **kwargs):
+    def initial_theta(self, data, **kwargs):
         """
         Return the closest point within the grid that matches the observed data.
         If redshift is modelled, the data are cross-correlated with the entire
@@ -756,10 +751,10 @@ class Model(object):
         matrix inversion such that the best normalisation is performed for each
         possible model point.
 
-        :param observations:
+        :param data:
             The observed data.
 
-        :type observations:
+        :type data:
             list of :class:`sick.specutils.Spectrum1D` objects
 
         :returns:
@@ -783,7 +778,7 @@ class Model(object):
         continuum_coefficients = {}
         chi_sqs = np.zeros(self.grid_points.size)
         num_pixels = [self.dispersion[c].size for c in self.channels]
-        for i, (channel, observed) in enumerate(zip(self.channels, observations)):
+        for i, (channel, observed) in enumerate(zip(self.channels, data)):
             logger.debug("Calculating initial point in {0} channel..".format(channel))
 
             # Indices and other information
@@ -831,38 +826,20 @@ class Model(object):
                 ivariance = np.interp(dispersion, observed.disp,
                     observed.ivariance, left=np.nan, right=np.nan)
             
-            # Get only finite data pixels
-            finite = np.isfinite(data)
-            finite[-1] = False
+            # Get only finite data pixels and apply any mask
+            finite = np.isfinite(data) * self.mask(dispersion)
             if finite.sum() == 0:
                 logger.warn("No finite pixels in the {} data!".format(channel))
 
-            # Apply mask?
-            logger.warn("no masks used for init point")
-
-            # Any normalisation to model?
+            # Any continuum modeling?
             if continuum_order >= 0:
                 logger.debug("Performing matrix calculations for {0} channel..".format(channel))
                 c = np.ones((continuum_order + 1, finite.sum()))
                 for j in range(continuum_order + 1):
                     c[j] *= dispersion[finite]**j
 
-                # [f0 f1 f2 f3 f4 f5] = [m1 m2 m3 m3 m4][[b], [b], [b], [b], [b]]
-                # [m1 m2 m3 m4 m5]^(-1)[f0 f1 f2 f3 f4 f5] = [[b], [b], [b], [b], [b]]
-
-                # [[f0,0 f1,0 f2,0 f3,0 f4,0] = [b]
-
-                # [[f0, f1, f2, f3, f4] = [[m00, m01, m02, m03, m04] * [[b0],]
-                #                         [m10, m11, m12, m13, m14]    [b1],
-                #                         [m20, m21, m22, m23, m24]    [b2], 
                 A = (data[finite]/intensities[:, si:ei][:, finite]).T
-                #B = np.dot(np.matrix(intensities[:, si:ei][:, finite]).I.T, data)
-                
-                continuum_coefficients[channel] = np.linalg.lstsq(c.T, A)[0] # (continuum_order + 1, N)
-
-                #raise a
-                #if np.isfinite(continuum_coefficients[channel]).sum() == 0:
-                #    raise a
+                continuum_coefficients[channel] = np.linalg.lstsq(c.T, A)[0]
 
                 continuum = np.dot(continuum_coefficients[channel].T, c)
                 model = intensities[:, si:ei][:, finite] * continuum
@@ -879,7 +856,6 @@ class Model(object):
                 /(sum(num_pixels[:i+1]) - len(self.grid_points.dtype.names) - 1)
             logger.debug("So far the closest point has r-chi-sq ~ {0:.2f} where"\
                 " {1:s}".format(reduced_chi_sq, readable_point(self.grid_points[index])))
-        
         
         # Find the best match, and update the theta dictionary with the values
         index = np.argmin(chi_sqs)
@@ -902,10 +878,9 @@ class Model(object):
                 theta[parameter] = _default_init_values[parameter]
 
             elif parameter[:9] == "convolve.":
-                # Solve for the convolution parameter as a single value.
-                # compare convolve, projected flux with observed data
-                theta[parameter] = 0.
-                logger.warn("NO SMOOTHING VALUE ESTIMATED")
+                # Let's assume the grid is slightly higher resolution than the
+                # observed data
+                theta[parameter] = 0.01
 
             else:
                 raise ValueError("cannot evaluate initialisation rule for the "\
@@ -915,72 +890,98 @@ class Model(object):
         del intensities
 
         logger.debug("Initial theta is {0}".format(theta))
+        if kwargs.get("full_output", False):
+            (self._undictify_theta(theta), reduced_chi_sq, chi_sqs)
         return (self._undictify_theta(theta), reduced_chi_sq)
 
 
-    def interpolate_local_flux(self, point, neighbours=1):
+    def interpolate_flux_locally(self, point, neighbours=2, **kwargs):
+        """
+        Return interpolated model fluxes at a given point using only the local 
+        neighbouring model grid points.
 
-        # Identify the nearby points & create a nearby interpolator
-        col_indices = np.ones(len(point), dtype=bool)
-        indices = np.ones(self.grid_points.size, dtype=bool)
-        for i, (parameter, value) in enumerate(zip(self.grid_points.dtype.names, point)):
+        :param point:
+            The point to interpolate model fluxes at.
 
-            #print(indices.sum())
-            #print(set(self.grid_points[parameter][indices]))
+        :type point:
+            :class:`numpy.array`
 
-            # Is this point within the grid?
-            """
-            exact_grid_match = np.less_equal(
-                np.abs(self.grid_points[parameter] - value), np.finfo(float).eps)
-            if exact_grid_match.any():
-                indices[~exact_grid_match] = False
-                print("matching all {0} at {1}".format(parameter, value))
-                col_indices[i] = False
-                print("after", set(self.grid_points[parameter][indices]))
-                raise a
-                continue
-            """
+        :param neighbours: [optional]
+            The number of dimension-wise neighbouring elements to use for
+            interpolation.
 
-            # Check within some range
-            unique_points = np.sort(np.unique(self.grid_points[parameter]))
-            differences = unique_points - value
+        :type neighbours:
+            int
 
-            # Get closest points on either side
-            left = unique_points[differences < 0]
-            right = unique_points[differences > 0]
-            left_side, right_side = [
-                left[-min([len(left), neighbours])],
-                [neighbours - 1]
-            ]
-            within_neighbours = (right_side >= self.grid_points[parameter]) \
-                * (self.grid_points[parameter] >= left_side)
-            indices[~within_neighbours] = False
+        :returns:
+            The interpolated model flux at the given point.
 
-            #print("after", set(self.grid_points[parameter][indices]))
+        :raises:
+            ValueError when a flux point could not be interpolated (e.g., 
+            outside grid boundaries).
+        """ 
 
-        # Prevent Qhull errors
+        # Specify the minimum number of points required for interpolation
+        min_points = 2**len(point)
+        n_range = [neighbours] if neighbours > 0 else range(1, 1 - neighbours)
+
+        for n in n_range:
+
+            # Identify the nearby points & create a nearby interpolator
+            col_indices = np.ones(len(point), dtype=bool)
+            indices = np.ones(self.grid_points.size, dtype=bool)
+            for i, (p, v) in enumerate(zip(self.grid_points.dtype.names, point)):
+                
+                differences = self._unique_grid_points[p] - v
+
+                # Get closest points on either side
+                left = self._unique_grid_points[p][differences < 0]
+                right = self._unique_grid_points[p][differences > 0]
+                left_side, right_side = [
+                    left[-min([len(left), n])],
+                    right[min([len(right), n]) - 1]
+                ]
+                within_neighbours = (right_side >= self.grid_points[p]) \
+                    * (self.grid_points[p] >= left_side)
+                indices[~within_neighbours] = False
+
+            if indices.sum() >= min_points: break
+
+        if min_points > indices.sum():
+            raise ValueError("not enough points for interpolation (required "\
+                "{0:.0f}, found {1:.0f})".format(min_points, indices.sum()))
 
         size = self.grid_points.size
         point = np.array(point).reshape(len(point), 1)
         p = self.grid_points.view(float).reshape(size, -1)
-        fluxes = load_model_data(
-            self.configuration["cached_channels"]["flux_filename"]).reshape(size, -1)
-        interpolated_flux = interpolate.griddata(
-            p[indices, :], fluxes[indices, :], point.T).flatten()
-        del fluxes
+        if fluxes in kwargs:
+            interpolated_flux = interpolate.griddata(
+                p[indices, :], fluxes[indices, :], point.T).flatten()    
+        else:
+            fluxes = load_model_data(
+                self.configuration["cached_channels"]["flux_filename"]).reshape(size, -1)
+            interpolated_flux = interpolate.griddata(
+                p[indices, :], fluxes[indices, :], point.T).flatten()    
+            del fluxes
 
-        return interpolated_flux
+        interpolated_fluxes = {}
+        num_pixels = map(len, [self.dispersion[c] for c in self.channels])
+        for i, channel in enumerate(self.channels):
+            si, ei = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
+            interpolated_fluxes[channel] = interpolated_flux[si:ei]
+        return interpolated_fluxes
 
 
-    def interpolate_flux(self, point, **kwargs):
+    def interpolate_flux_globally(self, point, **kwargs):
         """
-        Return interpolated model flux at a given point.
+        Return interpolated model flux at a given point from an interpolator
+        function that uses a Voroni mesh of all grid points.
 
         :param point:
             The point to interpolate a model flux at.
 
         :type point:
-            list
+            :class:`numpy.array`
 
         :param kwargs: [optional]
             Other parameters that are directly passed to :class:`scipy.interpolate.griddata`
@@ -995,11 +996,8 @@ class Model(object):
             boundaries).
         """
 
-        if not self.cached:
-            raise TypeError("model must be cached first")
-
         global _sick_interpolator_
-        interpolated_flux = _sick_interpolator_(*np.array(point).copy())
+        interpolated_flux = _sick_interpolator_(*point)
         if np.all(~np.isfinite(interpolated_flux)):
             raise ValueError("could not interpolate flux point, as it is likely"\
                 " outside the grid boundaries")    
@@ -1012,70 +1010,81 @@ class Model(object):
         return interpolated_fluxes
 
 
-    def masks(self, dispersion_maps, **theta):
+    def interpolate_flux(self, point, **kwargs):
         """
-        Return pixel masks for the model spectra, given theta.
+        Return the interpolated model flux at a given point.
 
-        :param dispersion_maps:
-            The dispersion maps for each channel.
+        :param point:
+            The point to interpolate a model flux at.
 
-        :type dispersion_maps:
-            List of :class:`numpy.array` objects.
-
-        :param theta:
-            The model parameters :math:`\\Theta`.
-
-        :type theta:
-            dict
+        :type point:
+            :class:`numpy.array`
 
         :returns:
-            None if no masks are specified by the model. If pixel masks are specified,
-            a pixel mask dictionary with channels as keys, and arrays as values is returned.
-            Zero in arrays indicates pixel was masked, one indicates it was used.
+            A dictionary of channels (keys) and :class:`numpy.array`s of interpolated
+            fluxes (values).
+
+        :raises:
+            ValueError when a flux point could not be interpolated (e.g., outside grid
+            boundaries).
         """
 
-        if not self.configuration["masks"]:
-            return None
-
-        pixel_masks = {}
-        for channel, dispersion_map in zip(self.channels, dispersion_maps):
-            if channel not in self.configuration["masks"]:
-                pixel_masks[channel] = None
-            
-            else:
-                # We are required to build a mask
-                mask = np.ones(len(dispersion_map))
-                if self.configuration["masks"][channel] is not None:
-
-                    for region in self.configuration["masks"][channel]:
-                        if "z.{0}".format(channel) in theta:
-                            z = theta["z.{0}".format(channel)]
-                            region = np.array(region) * (1. + z)
-                        index_start, index_end = np.searchsorted(dispersion_map, region)
-                        pixel_masks[index_start:index_end] = 0
-                        
-                pixel_masks[channel] = mask
-        return pixel_masks
+        if not self.cached:
+            return self.interpolate_flux_locally(point, **kwargs)
+        return self.interpolate_flux_globally(point, **kwargs)
 
 
-    def _continuum(self, channel, observations, model_flux, **theta):
+    def mask(self, dispersion, z=0):
+        """
+        Return a rest-frame pixel mask for the dispersion map.
+
+        :param dispersion:
+            The dispersion maps for each channel.
+
+        :type dispersion:
+            :class:`numpy.array`
+
+        :param z: [optional]
+            The redshift to be applied to the pixel mask.
+
+        :returns:
+            A pixel mask. Unmasked pixels have True values and masked values
+            have False values.
+
+        :rtype:
+            :class:`numpy.array`
+        """
+
+        if (isinstance(self.configuration["mask"], bool) \
+            and self.configuration["mask"] == False) \
+        or self.configuration["mask"] is None:
+            return np.ones(dispersion.size, dtype=bool)
+
+        mask = np.ones(dispersion.size, dtype=bool)
+        for region in self.configuration["mask"]:
+            si, ei = np.searchsorted(dispersion, np.array(region) * (1. + z))
+            mask[si:ei] = False
+        return mask
+
+
+    def _continuum(self, channel, dispersion, model_flux, **theta):
         # The normalisation coefficients should be in the theta
         order = self.configuration["normalise"][channel]["order"]
         coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
             for i in range(order + 1)]
 
-        return np.polyval(coefficients, observations.disp)
+        return np.polyval(coefficients, dispersion)
 
 
-    def optimise(self, observations, initial_theta=None, **kwargs):
+    def optimise(self, data, initial_theta=None, **kwargs):
         """
         Numerically optimise the log-probability given the data from an
         optionally provided initial point.
 
-        :param observations:
+        :param data:
             The observed spectra (data).
 
-        :type observations:
+        :type data:
             list of :class:`sick.specutils.Spectrum1D` objects
 
         :param initial_theta: [optional]
@@ -1101,65 +1110,213 @@ class Model(object):
             assert len(p0) == len(self.parameters), "Initial theta is missing "\
                 "parameters."
         else:
-            p0, init_r_chi_sq = self.initial_theta(observations)
+            p0, init_r_chi_sq = self.initial_theta(data)
 
+        # Should we optimise all parameters, or keep some fixed?
+        fixed = kwargs.pop("fixed", [])
+
+        optimise_parameters = [p for p in self.parameters if p not in fixed]
+        logger.info("Optimising parameters: {}".format(", ".join(optimise_parameters)))
         logger.info("Optimising from point:")
         for p, v in zip(self.parameters, p0):
             logger.info("  {0}: {1:.2e}".format(p, v))
 
-        # Set some keyword defaults
-        default_kwargs = {
-            "maxfun": self.configuration["settings"]["op_maxfun"],
-            "maxiter": self.configuration["settings"]["op_maxiter"],
-            "xtol": self.configuration["settings"]["op_xtol"],
-            "ftol": self.configuration["settings"]["op_ftol"],
-            "disp": False
+        # Which optimisation algorithm should we use?
+        method = kwargs.pop("method", self.configuration["settings"]["op_method"])
+        default_keys = {
+            "bfgs": ("maxfun", "maxiter"),
+            "nelder-meade": ("maxfun", "maxiter", "xtol", "ftol"),
+            "cg": ("maxiter", ),
+            "powell": ("maxiter", "maxfun")
         }
+        if method not in default_keys:
+            raise ValueError("optimisation method {0} not recognised "\
+                "(availiable: {1})".format(method, ", ".join(default_keys.keys())))
+
+        default_kwargs = {}
+        for key in default_keys[method]:
+            default_kwargs[key] = self.configuration["settings"]["op_" + key]
         [kwargs.setdefault(k, v) for k, v in default_kwargs.iteritems()]
+
+        bounds = []
+        for i, parameter in enumerate(optimise_parameters):
+            if parameter in self.grid_points.dtype.names:
+                indices = np.ones(self.grid_points.size, dtype=bool)
+                for j, p in enumerate(self.grid_points.dtype.names):
+                    if p != parameter:
+                        indices *= (self.grid_points[p] == p0[j])
+                bounds.append((
+                    self.grid_points[indices][parameter].min(),
+                    self.grid_points[indices][parameter].max()
+                ))
+            else:
+                bounds.append((None, None))
         
-        # And we need to overwrite this one because we want all the information, 
-        # even if the user doesn't.
-        kwargs.update({"full_output": True})
+        if method in ("nelder-meade", "powell", "bfgs", "cg"):
+            kwargs.update({
+                "full_output": True,
+                "disp": False
+            })
+
+        
+        if method == "bfgs":
+            eps = np.nan * np.ones(len(optimise_parameters))
+            for i, parameter in enumerate(optimise_parameters):
+                if parameter in self.grid_points.dtype.names:
+                    eps[i] = 0.01 * np.ptp(self.grid_boundaries[parameter])
+
+                elif parameter[:10] == "normalise.":
+                    eps[i] = 1e-6
+
+                elif parameter[:2] == "z.":
+                    eps[i] = 1. / 299792.458
+
+                elif parameter[:9] == "convolve.":
+                    eps[i] = 0.01
+
+            kwargs.setdefault("epsilon", eps)
+            kwargs.setdefault("bounds", bounds)
+
+        elif method == "cg":
+            eps = np.nan * np.ones(len(optimise_parameters))
+            for i, parameter in enumerate(optimise_parameters):
+                if parameter in self.grid_points.dtype.names:
+                    eps[i] = 0.1 * np.ptp(self.grid_boundaries[parameter])
+
+                elif parameter[:10] == "normalise.":
+                    eps[i] = 1e-8
+
+                elif parameter[:2] == "z.":
+                    eps[i] = 0.01 / 299792.458
+
+                elif parameter[:9] == "convolve.":
+                    eps[i] = p0[i] * 0.01
+            kwargs.setdefault("epsilon", eps)
+
         logger.debug("Passing keywords to optimiser (these can be passed directly "\
             "from optimise_settings in the model configuration file if using the "\
             "command line interface): {0}".format(kwargs))
-
+        
         # Optimisation
+        log_prob_args = (self.parameters, self.priors, self.channels, 
+            [self.dispersion[c] for c in self.channels], self.configuration["mask"],
+            len(self.grid_points.dtype.names), [s.disp for s in data],
+            [s.flux for s in data], [s.variance for s in data],
+            [s.ivariance for s in data])
+
         t_init = time()
-        nlp = lambda t, m, o: -inference.log_probability(t, m, o)
-        p1, fopt, niter, funcalls, warnflag = op.fmin(nlp, p0,
-            args=(self, observations), **kwargs)
+        def nlp(t):
+            # Fill up parameters
+            if len(fixed) > 0:
+                theta = dict(zip(optimise_parameters, t))
+                for p in set(self.parameters).difference(optimise_parameters):
+                    theta[p] = p0[self.parameters.index(p)]
+                theta = self._undictify_theta(theta)
+            else:
+                theta = t
+
+            nlp = -_log_probability(theta, *log_prob_args)
+            #nlp = -inference.log_probability(theta, self, data)
+            return nlp
+
+        def finite_nlp(theta):
+            prob = nlp(theta)
+            if np.isfinite(prob):
+                return prob
+            return -1e32
+
+        p0_with_fixed = np.array([p0[self.parameters.index(p)] \
+            for p in optimise_parameters])
+
+        if method == "nelder-meade":
+            p1_with_fixed, fopt, niter, func_calls, warnflag = op.fmin(nlp,
+                p0_with_fixed, **kwargs)
+            info = {
+                "fopt": fopt,
+                "niter": niter,
+                "func_calls": func_calls,
+                "warnflag": warnflag
+            }
+            messages = [
+                "Maximum number of function evaluations ({}) made.".format(func_calls),
+                "Maximum number of iterations ({}) reached.".format(niter)
+            ]
+
+        elif method == "bfgs":
+            p1_with_fixed, fopt, dinfo = op.fmin_l_bfgs_b(nlp, p0_with_fixed,
+                **kwargs)
+            info = {
+                "fopt": fopt,
+                "gopt": dinfo["grad"],
+                "niter": dinfo["nit"],
+                "func_calls": dinfo["funcalls"],
+                "warnflag": dinfo["warnflag"],
+            }
+            messages = [
+                "Maximum number of iterations exceeded.",
+                dinfo.get("task", "")
+            ]
+
+        elif method == "cg":
+            p1_with_fixed, fopt, func_calls, grad_calls, warnflag = op.fmin_cg(
+                finite_nlp, p0_with_fixed, **kwargs)
+            info = {
+                "fopt": fopt,
+                "func_calls": func_calls,
+                "grad_calls": grad_calls,
+                "warnflag": warnflag
+            }
+            messages = [
+                "Maximum number of function evaluations ({}) made.".format(func_calls),
+                "Maximum number of iterations reached."
+            ]
+
+        elif method == "powell":
+            p1_with_fixed, fopt, direc, niter, func_calls, warnflag = op.fmin_powell(nlp,
+                p0_with_fixed, **kwargs)
+            info = {
+                "fopt": fopt,
+                "direc": direc,
+                "niter": niter,
+                "func_calls": func_calls,
+                "warnflag": warnflag
+            }
+            messages = [
+                "Maximum number of function evaluations.",
+                "Maximum number of iterations."
+            ]
+
+        # If there were fixed parameters then re-assemble the proper p1
+        if len(fixed) > 0:
+            theta = dict(zip(optimise_parameters, p1_with_fixed))
+            for p in set(self.parameters).difference(optimise_parameters):
+                theta[p] = p0[self.parameters.index(p)]
+            p1 = self._undictify_theta(theta)
+        else:
+            p1 = p1_with_fixed
 
         # Book-keeping
-        chi_sq, r_chi_sq = self._chi_sq(observations, p1)
-        info = {
-            "fopt": fopt,
-            "niter": niter,
-            "funcalls": funcalls,
-            "warnflag": warnflag,
+        chi_sq, r_chi_sq = self._chi_sq(data, p1)
+        info.update({
             "time_elapsed": time() - t_init,
             "chi_sq": chi_sq,
             "r_chi_sq": r_chi_sq
-        }
-        if warnflag > 0:
-            m = [
-                "Maximum number of function evaluations ({}) made.".format(funcalls),
-                "Maximum number of iterations ({}) reached.".format(niter)
-            ][warnflag - 1]
-            logger.warn("{0} Optimised solution may be inaccurate.".format(m))
-
+        })
+        if info.get("warnflag", 0) > 0:
+            logger.warn("{} Optimised value might be inaccurate.".format(
+                messages[info["warnflag"] - 1]))
         return (p1, r_chi_sq, info)
 
 
-    def walker_widths(self, observations, theta):
+    def walker_widths(self, data, theta):
         """
         Return a list of standard deviations for each model parameter theta to serve
         as the initial standard deviations for the sampler.
         
-        :param observations:
+        :param data:
             The observed data.
 
-        :type observations:
+        :type data:
             list of :class:`sick.specutils.Spectrum1D` objects
 
         :param theta:
@@ -1186,10 +1343,10 @@ class Model(object):
             "abs": abs
         }
 
-        widths = np.zeros(len(theta))
+        # Default stretch size is small.
+        widths = 1e-4 * np.ones(len(theta))
         theta = self._undictify_theta(theta)
         for i, (parameter, value) in enumerate(zip(self.parameters, theta)):
-
             # Check to see if there is an explicit walker width distribution for
             # this parameter
             if parameter in self.configuration.get("initial_walker_widths", {}):
@@ -1206,55 +1363,19 @@ class Model(object):
                     logger.exception("Exception in evaluating walker width rule"\
                         " '{0}'. Ignoring rule.".format(rule))
                 else:
-                    # OK, we have updated the width. Continue to the next param
                     continue
-
-            if parameter in self.grid_points.dtype.names:
-                widths[i] = 0.05 * np.ptp(self.grid_boundaries[parameter])
-
-            elif parameter[:2] == "z.": # Redshift
-                # Set the velocity width to be 1 km/s
-                widths[i] = 1./299792458e-3
-
-            elif parameter[:2] == "f.": # Jitter
-                widths[i] = 0.1
-
-            elif parameter[:9] == "convolve.": # Smoothing
-                # 10% of the value
-                widths[i] = 0.1 * value
-
-            elif parameter[:10] == "normalise.": # Normalisation
-                channel, coefficient = parameter.split(".")[1:]
-                coefficient = int(coefficient[1:]) # 'normalise.blue.c0'
-
-                observed = observations[self.channels.index(channel)]
-                order = self.configuration["normalise"][channel]["order"]
-
-                # And we arbitrarily specify the width to be ~3x the mean uncertainty in flux.
-                scale = 3 * np.nanmean(observed.variance)
-                widths[i] = scale/(observed.disp.mean()**(order - coefficient))
-
-            elif parameter == "Pb":
-                widths[i] = 0.01
-
-            elif parameter == "Vb":
-                logger.warn('probs not optimally effective')
-                widths[i] = 1e-4
-
-            else:
-                raise RuntimeError("whoops")
 
         return widths
 
 
-    def infer(self, observed_spectra, p0, burn=None, sample=None):
+    def infer(self, data, p0, burn=None, sample=None):
         """
         Set up an EnsembleSampler and sample the parameters given the model and data.
 
-        :param observed_spectra:
+        :param data:
             The observed spectra.
 
-        :type observed_spectra:
+        :type data:
             A list of :class:`sick.specutils.Spectrum1D` objects.
 
         :param model:
@@ -1314,9 +1435,20 @@ class Model(object):
         if proposal_scale != 2:
             logger.info("Using non-standard proposal scale of {0:.2f}".format(proposal_scale))
 
+        args = (self.parameters, self.priors, self.channels,
+            [self.dispersion[c] for c in self.channels], self.configuration["mask"],
+            len(self.grid_points.dtype.names), [s.disp for s in data],
+            [s.flux for s in data], [s.variance for s in data],
+            [s.ivariance for s in data])
+
         sampler = emcee.EnsembleSampler(walkers, len(self.parameters),
-            inference.log_probability, args=(self, observed_spectra),
-            threads=self.configuration["settings"]["threads"], a=proposal_scale)
+            _log_probability, args=args, a=proposal_scale,
+            threads=self.configuration["settings"]["threads"])
+        """
+        sampler = emcee.EnsembleSampler(walkers, len(self.parameters),
+            inference.log_probability, args=(self, data), a=proposal_scale,
+            threads=self.configuration["settings"]["walkers"])
+        """
 
         # Start burning
         t_init = time()
@@ -1388,7 +1520,7 @@ class Model(object):
         # Get the ML theta and calculate chi-sq values
         ml_index = np.argmax(lnprobability.reshape(-1))
         ml_values = chain.reshape(-1, len(self.parameters))[ml_index]
-        chi_sq, r_chi_sq = self._chi_sq(observed_spectra, dict(zip(self.parameters, ml_values)))
+        chi_sq, r_chi_sq = self._chi_sq(data, dict(zip(self.parameters, ml_values)))
 
         # Get the quantiles
         posteriors = {}
@@ -1416,15 +1548,14 @@ class Model(object):
         return (posteriors, sampler, info)
 
 
-
-    def __call__(self, observations=None, full_output=False, **theta):
+    def __call__(self, data=None, full_output=False, **theta):
         """
         Generate some spectra.
 
-        :param observations: [optional]
+        :param data: [optional]
             The observed data.
 
-        :type observations:
+        :type data:
             list of :class:`sick.specutils.Spectrum1D` objects.
 
         :param full_output: [optional]
@@ -1480,27 +1611,21 @@ class Model(object):
                 model_flux = log_model_flux
 
             # Interpolate model fluxes to observed dispersion map
-            if observations is not None:
-                model_flux = np.interp(observations[i].disp,
+            if data is not None:
+                model_flux = np.interp(data[i].disp,
                     model_dispersion, model_flux, left=np.nan, right=np.nan)
-                model_dispersion = observations[i].disp
+                model_dispersion = data[i].disp
 
-            # Apply masks if necessary
-            if self.configuration["masks"] is not None:
-                regions = self.configuration["masks"].get(channel, [])
-                for region in regions: 
-                    if key in theta:
-                        z = theta[key]
-                        region = np.array(region) * (1. + z)
-                    index_start, index_end = np.searchsorted(model_dispersion, region)
-                    model_flux[index_start:index_end] = np.nan
+            # Apply mask if necessary
+            if self.configuration["mask"] is not None:
+                mask = self.mask(model_dispersion, theta.get(key, 0))
+                model_flux[~mask] = np.nan
 
             # Normalise model fluxes to the data?
             if self.configuration["normalise"] \
             and self.configuration["normalise"].get(channel, False):
-                obs = observations[i]
-
-                continuum = self._continuum(channel, obs, model_flux, **theta)
+                continuum = self._continuum(channel, data[i].disp, model_flux,
+                    **theta)
                 model_flux *= continuum
                 model_continua.append(continuum)
 
@@ -1511,3 +1636,148 @@ class Model(object):
         if full_output:
             return (model_fluxes, model_continua)
         return model_fluxes
+
+
+# It's ~15% faster if we do things this way..
+def _log_prior(theta, parameters, priors):
+
+    log_prior = 0
+    for parameter, value in zip(parameters, theta):
+        if (parameter[:9] == "convolve." and 0 > value) \
+        or (parameter == "Pb" and not (1 > value > 0)) \
+        or (parameter == "Vb" and 0 > value):
+            return -np.inf
+
+        try:
+            prior_rule = priors[parameter]
+
+        except KeyError:
+            continue
+
+        else:
+            f = eval(prior, _prior_eval_env_)
+            log_prior += f(value)
+
+    logging.debug("Returning log prior of {0:.2e} for parameters: {1}".format(
+        log_prior, ", ".join(["{0} = {1:.2e}".format(name, value) \
+            for name, value in zip(parameters, theta)])))
+    return log_prior
+
+
+def _log_likelihood(theta, parameters, channels, model_dispersions,
+    mask, n_grid_parameters, observed_dispersions, observed_fluxes, observed_variances,
+    observed_ivariances):
+
+    global _sick_interpolator_
+    try:
+        interpolated_flux = _sick_interpolator_(*theta[:n_grid_parameters])
+    except (ValueError, ):
+        print(-np.inf, dict(zip(parameters, theta)))
+        return -np.inf
+
+    likelihood, num_finite_pixels = 0, 0
+    theta_dict = dict(zip(parameters, theta))
+    num_model_pixels = map(len, model_dispersions)
+    
+    for i, (channel, model_dispersion) \
+    in enumerate(zip(channels, model_dispersions)):
+
+        si, ei = map(int, map(sum, [num_model_pixels[:i], num_model_pixels[:i+1]]))
+        model_flux = interpolated_flux[si:ei].copy()
+
+        # Convolution
+        convolve_key = "convolve.{}".format(channel)
+        if convolve_key in theta_dict:
+            wavelength_sigma = theta_dict[convolve_key] / 2.3548200450309493
+            pixel_sigma = wavelength_sigma / np.mean(np.diff(model_dispersion))
+            model_flux = ndimage.gaussian_filter1d(model_flux, pixel_sigma)
+
+        # Redshift
+        redshift_key = "z.{}".format(channel)
+        if redshift_key in theta_dict and redshift_key != 0:
+            z = theta_dict[redshift_key]
+            log_delta = np.diff(model_dispersion).min()
+            wl_min, wl_max = model_dispersion.min(), model_dispersion.max()
+            log_model_dispersion = np.exp(np.arange(np.log(wl_min), 
+                np.log(wl_max), np.log(wl_max/(wl_max-log_delta))))
+
+            # Interpolate flux to log-lambda dispersion
+            log_model_flux = np.interp(log_model_dispersion, model_dispersion, 
+                model_flux, left=np.nan, right=np.nan)
+            model_dispersion = log_model_dispersion * (1. + z)
+            model_flux = log_model_flux
+
+        else:
+            z = 0
+
+        # Interpolate model fluxes to observed dispersion map
+        model_flux = np.interp(observed_dispersions[i], model_dispersion,
+            model_flux, left=np.nan, right=np.nan)
+
+        # Apply mask
+        if mask is not None:
+            for region in mask:
+                sm, em = np.searchsorted(observed_dispersions[i],
+                    np.array(region) * (1. + z))
+                model_flux[sm:em] = np.nan
+
+        # Continuum normalise
+        if "normalise.{}.c0".format(channel) in theta_dict:
+            j, coefficients = 0, []
+            while "normalise.{0}.c{1}".format(channel, j) in theta_dict:
+                coefficients.append(theta_dict["normalise.{0}.c{1}".format(channel, j)])
+                j += 1
+
+            continuum = np.polyval(coefficients, observed_dispersions[i])
+            model_flux *= continuum
+            
+        else:
+            continuum = 0.
+
+        # Calculate likelihood
+        # Underestimated variance?
+        if "f.{}".format(channel) in theta_dict:
+            additive_variance = model_flux * np.exp(2. * theta_dict["f.{0}".format(channel)])
+            signal_inverse_variance = 1.0/(observed_variances[i] + additive_variance)
+        else:
+            additive_variance = 0.
+            signal_inverse_variance = observed_ivariances[i]
+
+        signal_likelihood = -0.5 * ((observed_fluxes[i] - model_flux)**2 \
+            * signal_inverse_variance - np.log(signal_inverse_variance))
+
+        # Are we modelling the outliers as well?
+        if "Pb" in theta_dict:
+            outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_variances[i] \
+                + additive_variance)
+            outlier_likelihood = -0.5 * ((observed_fluxes[i] - continuum)**2 \
+                * outlier_inverse_variance - np.log(outlier_inverse_variance))
+
+            Pb = theta_dict["Pb"]
+            finite = np.isfinite(outlier_likelihood * signal_likelihood)
+            likelihood += np.sum(np.logaddexp(
+                np.log(1. - Pb) + signal_likelihood[finite],
+                np.log(Pb) + outlier_likelihood[finite]))
+
+        else:
+            finite = np.isfinite(signal_likelihood)
+            likelihood += np.sum(signal_likelihood[finite])
+        num_finite_pixels += finite.sum()
+
+    if likelihood == 0:
+        return -np.inf
+
+    logger.debug("Returning log-likelihood of {0:.2e} with {1:.0f} pixels for "\
+        "parameters: {2}".format(likelihood, num_finite_pixels, 
+        ", ".join(["{0} = {1:.2e}".format(name, value) \
+            for name, value in theta_dict.iteritems()])))  
+
+    return likelihood
+
+
+def _log_probability(theta, parameters, priors, *args):
+
+    prior = _log_prior(theta, parameters, priors)
+    if np.isinf(prior):
+        return prior
+    return prior + _log_likelihood(theta, parameters, *args)
