@@ -30,7 +30,7 @@ Please cite ``Casey (2014, submitted)`` if you find this code useful in your res
          year = 2014,
     }
     
-This code is an independently-developed extension of the excellent [``emcee``](https://github.com/dfm/emcee) package, which you should also cite. If you use any pre-cached models available through the ``sick download`` command then please ensure you cite the appropriate works that originally published the spectra.
+This code relies on the excellent [``emcee``](https://github.com/dfm/emcee) package, which you should also cite. If you use any pre-cached models available through the ``sick download`` command then please ensure you cite the appropriate works that originally published the spectra.
 
 Bug reports/feature requests
 ----------------------------
