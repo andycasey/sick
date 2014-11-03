@@ -24,7 +24,7 @@ truth = {
     "feh": -0.514,
     "alpha": 0.02,
     "convolve.blue": 0.581,
-    "z.blue": 13./299792458e-3,  # My lucky number
+    "z.blue": np.random.normal(0, 100)/299792.458,
     "normalise.blue.c0": 1.63e-06,
     "normalise.blue.c1": -0.000788,
     "normalise.blue.c2": -0.000756,
@@ -41,50 +41,59 @@ class InferenceTest(unittest.TestCase):
         """
 
         # Download the data that we need
-        urllib.urlretrieve(TEST_DATA_URL, "test-inference-data.tar.gz")
+        if not os.path.exists("inference-model.yaml"):
+            urllib.urlretrieve(TEST_DATA_URL, "test-inference-data.tar.gz")
 
-        # Uncompress the data
-        os.system("gunzip -f test-inference-data.tar.gz")
-        os.system("tar -xzf test-inference-data.tar")
+            # Uncompress the data
+            os.system("gunzip -f test-inference-data.tar.gz")
+            os.system("tar -xzf test-inference-data.tar")
+
+        else:
+            print("DATA FOUND ALREADY.")
 
         cls.model = sick.models.Model("inference-model.yaml")
 
-        # We create a faux-faux observation just so our faux observations get mapped
-        # back onto the model.dispersion once they have been redshifted
+        # We create a faux-faux observation just so our faux observations get 
+        # mapped back onto the model.dispersion once they have been redshifted
         faux_obs = [sick.specutils.Spectrum1D(disp=cls.model.dispersion[c],
-            flux=np.zeros(len(cls.model.dispersion[c]))) for c in cls.model.channels]
-        fluxes = cls.model(observations=faux_obs, **truth)
+            flux=np.zeros(len(cls.model.dispersion[c]))) \
+                for c in cls.model.channels]
+        fluxes = cls.model(data=faux_obs, **truth)
 
         for i, (channel, flux) in enumerate(zip(cls.model.channels, fluxes)):
+            
             disp = cls.model.dispersion[channel]
+            flux = flux.copy()
 
             N = len(disp)
             flux_err = np.random.poisson(flux, size=flux.size)**0.5
             flux += flux_err * np.random.randn(N)
             
-            spectrum = sick.specutils.Spectrum1D(disp=disp, flux=flux)
+            spectrum = sick.specutils.Spectrum1D(disp=disp, flux=flux,
+                variance=flux_err**2)
             spectrum.save("sick-spectrum-{0}.fits".format(channel))
-            
-            
+
 
     def test_api(self):
         """
-        Create a faux spectrum then infer the model parameters given the faux data.
+        Create a faux spectrum then infer the model parameters given the data.
         """
 
         # Initialise the model
         model = sick.models.Model("inference-model.yaml")
-        observations = map(sick.specutils.Spectrum1D.load, 
+        data = map(sick.specutils.Spectrum1D.load, 
             ["sick-spectrum-{0}.fits".format(c) for c in self.model.channels])
 
         # Now let's solve for the model parameters
-        posteriors, sampler, info = sick.solve(observations, model)
-        print(posteriors)
+        optimised_theta, optimised_r_chi_sq, optimised_info = model.optimise(data)
+
+        # Start sampling with the default walker widths for initialisation
+        posteriors, sampler, info = model.infer(data, theta=optimised_theta)
 
         # Plot the chains
         fig = sick.plot.chains(info["chain"],
             labels=sick.utils.latexify(model.parameters), burn_in=1000,
-            truths=[truth[parameter] for parameter in model.parameters])
+            truths=[truth[p] for p in model.parameters])
         fig.savefig("chains.pdf")
 
         # Make a corner plot with just the parameters of interest
@@ -92,19 +101,19 @@ class InferenceTest(unittest.TestCase):
         fig = sick.plot.corner(
             sampler.chain.reshape(-1, len(model.parameters))[:, :psi_len],
             labels=sick.utils.latexify(model.grid_points.dtype.names), 
-            truths=[truth[parameter] for parameter in model.parameters[:psi_len]],
+            truths=[truth[p] for p in model.parameters[:psi_len]],
             quantiles=[.16, .50, .84], verbose=False)
         fig.savefig("inference.pdf")
 
         # Make a corner plot with *all* of the model parameters
         fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters)),
             labels=sick.utils.latexify(model.parameters), 
-            truths=[truth[parameter] for parameter in model.parameters],
+            truths=[truth[p] for p in model.parameters],
             quantiles=[.16, .50, .84], verbose=False)
         fig.savefig("inference-all.pdf")
 
         # Make a projection plot
-        fig = sick.plot.projection(model, observations, sampler=sampler)
+        fig = sick.plot.projection(model, data, chain=sampler.chain)
         fig.savefig("projection.pdf")
 
         # Make an auto-correlation plot
@@ -119,8 +128,9 @@ class InferenceTest(unittest.TestCase):
 
     def test_cli(self):
         executable = "solve inference-model.yaml".split()
-        executable.extend(["sick-spectrum-{0}.fits".format(c) \
+        executable.extend(["sick-spectrum-{}.fits".format(c) \
             for c in self.model.channels])
+        print("Executing command: {}".format(executable))
         args = sick.cli.parser(executable)
         assert args.func(args)
 
@@ -146,6 +156,7 @@ class InferenceTest(unittest.TestCase):
             "test-inference-data.tar"])
 
         for filename in filenames:
+            print("Removing filename {}".format(filename))
             if os.path.exists(filename):
                 os.unlink(filename)
             else:
@@ -154,9 +165,9 @@ class InferenceTest(unittest.TestCase):
 
 if __name__ == "__main__":
 
-    # Coveralls will run InferenceTest() properly, but sometimes the user might want to
-    # run this themselves. If that's the case, we will not do the cleanup so that they
-    # can look at the plots.
+    # Coveralls will run InferenceTest() properly, but sometimes the user might 
+    # want to run this themselves. If that's the case, we will not do the 
+    # cleanup so that they can look at the plots.
     dat_inference = InferenceTest()
     dat_inference.setUpClass()
     dat_inference.test_cli()

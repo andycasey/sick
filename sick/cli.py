@@ -329,7 +329,7 @@ def solve(args):
                 fixed=["z.{}".format(c) for c in model.channels])
 
             logger.info("Optimised theta is {0}".format(model._dictify_theta(optimised_theta)))
-            mcmc_initial_point = optimised_theta
+            walker_theta = optimised_theta
 
             # Save metadata about the optimised value
             metadata["optimised_theta"] = model._dictify_theta(optimised_theta)
@@ -344,16 +344,11 @@ def solve(args):
                 logger.info("Created figure {}".format(projected_filename))
 
         else:
-            # MCMC initial point
-            mcmc_initial_point = initial_theta
-
-        # Create p0
-        walkers = model.configuration["settings"]["walkers"]
-        std = model.walker_widths(spectra, mcmc_initial_point)
-        p0 = sample_ball(mcmc_initial_point, std, walkers)
+            # MCMC initial point will be the initial point
+            walker_theta = initial_theta
 
         try:
-            posteriors, sampler, info = model.infer(spectra, p0)
+            posteriors, sampler, info = model.infer(spectra, theta=walker_theta)
 
         except:
             logger.exception("Failed to analyse source #{0}:".format(i))
@@ -396,7 +391,8 @@ def solve(args):
             })
             for channel, length in info["autocorrelation_lengths"].iteritems():
                 metadata["acor_{}".format(channel)] = length
-            
+
+            walkers = model.configuration["settings"]["walkers"]
             chain_length = info["chain"].shape[0] * info["chain"].shape[1]
             chain = np.core.records.fromarrays(
                 np.vstack([

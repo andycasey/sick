@@ -352,8 +352,13 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
     # Calculate the autocorrelation function for each parameter
     num_parameters = chain.shape[2]
     for i in xrange(num_parameters):
-        ax.plot(acor.function(np.mean(chain[:, index:, i], axis=0)), "k",
-            lw=2)
+        try:
+            rho = acor.function(np.mean(chain[:, index:, i], axis=0))
+        except RuntimeError:
+            logger.exception("Error in calculating auto-correlation function "\
+                "for parameter index {}".format(i))
+        else:
+            ax.plot(rho, "k", lw=2)
 
     ax.axhline(0, color="k")
     ax.set_xlim(0, limit if limit is not None else chain.shape[1]/2)
@@ -367,7 +372,8 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
 def projection(model, data, theta=None, chain=None, n=100, 
     extents=None, uncertainties=True, fig=None, figsize=None):
     """
-    Project the maximum likelihood values and sampled posterior points as spectra.
+    Project the maximum likelihood values and sampled posterior points as 
+    spectra.
 
     :param model:
         The model employed.
@@ -395,8 +401,8 @@ def projection(model, data, theta=None, chain=None, n=100,
         :class:`numpy.ndarray`    
 
     :param extents: [optional]
-        The wavelength extents to plot for each channel in the form of [(min_chan_1,
-        max_chan_1), ..., (min_chan_N, max_chan_N)]
+        The wavelength extents to plot for each channel in the form of 
+        [(min_chan_1, max_chan_1), ..., (min_chan_N, max_chan_N)]
     
     :type extents:
         tuple or None
@@ -497,7 +503,8 @@ def projection(model, data, theta=None, chain=None, n=100,
         # Draw the random samples from the chain
         if n > 0:
             for sampled_flux in sampled_fluxes:
-                ax.plot(observed_spectrum.disp, sampled_flux[k], color="r", zorder=10)
+                ax.plot(observed_spectrum.disp, sampled_flux[k], color="r",
+                    zorder=10)
 
         # Draw the ML spectra
         ax.plot(observed_spectrum.disp, map_flux, color="r", lw=2)
@@ -508,26 +515,29 @@ def projection(model, data, theta=None, chain=None, n=100,
                 observed_spectrum.flux - observed_spectrum.variance**0.5,
                 observed_spectrum.flux + observed_spectrum.variance**0.5,
                 facecolor="#cccccc", edgecolor="#666666", zorder=-1)
-        ax.plot(observed_spectrum.disp, observed_spectrum.flux, color="k", zorder=10)
+        ax.plot(observed_spectrum.disp, observed_spectrum.flux, color="k",
+            zorder=10)
 
-        # By default only show common overlap between the model and spectral data
+        # By default only show common overlap between the model and data
         if extents is None:
             finite_data = np.isfinite(observed_spectrum.flux)
             finite_model = np.isfinite(map_flux)
+            finite_points = (finite_model, finite_data)
 
             x_extent = [
-                np.max([observed_spectrum.disp[indices][0]  for indices in (finite_model, finite_data)]),
-                np.min([observed_spectrum.disp[indices][-1] for indices in (finite_model, finite_data)]),
+                np.max([observed_spectrum.disp[s][0]  for s in finite_points]),
+                np.min([observed_spectrum.disp[s][-1] for s in finite_points]),
             ]
 
             indices = observed_spectrum.disp.searchsorted(x_extent)
-            finite_observed_flux = observed_spectrum.flux[indices[0]:indices[1]]
-            y_extent = [
-                0.9 * np.min(finite_observed_flux[np.isfinite(finite_observed_flux)]),
-                1.1 * np.max(finite_observed_flux[np.isfinite(finite_observed_flux)])
-            ]
+            finite_flux = observed_spectrum.flux[indices[0]:indices[1]]
+            if len(finite_flux) > 0:
+                y_extent = [
+                    0.9 * np.min(finite_flux[np.isfinite(finite_flux)]),
+                    1.1 * np.max(finite_flux[np.isfinite(finite_flux)])
+                ]
+                ax.set_ylim(y_extent)
             ax.set_xlim(x_extent)
-            ax.set_ylim(y_extent)
 
         else:
             ax.set_xlim(extents[k][0])

@@ -7,11 +7,13 @@ from __future__ import division, print_function
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
 __all__ = ["default_output_prefix", "human_readable_digit", "latexify", 
-    "unique_preserved_list", "update_recursively", "wrapper"]
+    "sample_ball", "unique_preserved_list", "update_recursively", "wrapper"]
 
 import collections
 import numpy as np
 import os
+
+from emcee.utils import sample_ball
 
 def update_recursively(original, new):
     """
@@ -65,14 +67,8 @@ def default_output_prefix(filenames):
 
     if isinstance(filenames, (str, )):
         filenames = [filenames]
-
-    if os.path.exists(os.path.commonprefix(filenames)):
-        common_prefix, ext = os.path.splitext(os.path.commonprefix(
-            map(os.path.basename, filenames)))
-    else:
-        common_prefix = os.path.commonprefix(
-            map(os.path.basename, filenames)).rstrip("_-.")
-
+    common_prefix, ext = os.path.splitext(os.path.commonprefix(
+        map(os.path.basename, filenames)))
     return common_prefix if len(common_prefix) > 0 else "sick"
 
 
@@ -99,6 +95,7 @@ def latexify(labels, default_latex_labels=None):
         str or iterable of str objects
     """
 
+    # Check out dat stellar bias.
     common_labels = {
         "teff": "$T_{\\rm eff}$ [K]",
         "feh": "[Fe/H]",
@@ -106,6 +103,7 @@ def latexify(labels, default_latex_labels=None):
         "alpha": "[$\\alpha$/Fe]"
     }
 
+    # Don't worry; I got yo covered.
     if default_latex_labels is not None:
         common_labels.update(default_latex_labels)
     

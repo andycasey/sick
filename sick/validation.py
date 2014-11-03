@@ -21,17 +21,17 @@ def validate(configuration, channels, parameters):
         True
     """
 
-    _validate_channels(configuration, channels, parameters)
-    _validate_settings(configuration, channels, parameters)
-    _validate_normalisation(configuration, channels, parameters)
-    _validate_redshift(configuration, channels, parameters)
-    _validate_convolve(configuration, channels, parameters)
-    _validate_mask(configuration, channels, parameters)
+    _validate_channels(configuration, channels)
+    _validate_settings(configuration, parameters)
+    _validate_normalisation(configuration, channels)
+    _validate_redshift(configuration, channels)
+    _validate_convolve(configuration, channels)
+    _validate_mask(configuration)
 
     return True
 
 
-def _validate_normalisation(configuration, channels, parameters):
+def _validate_normalisation(configuration, channels):
     """
     Validate that the normalisation settings in the model are specified correctly.
 
@@ -45,7 +45,8 @@ def _validate_normalisation(configuration, channels, parameters):
     """
 
     # Normalisation not required
-    if not configuration["normalise"]:
+    if "normalise" not in configuration \
+    or configuration["normalise"] == False:
         return True
 
     if not isinstance(configuration["normalise"], dict):
@@ -63,10 +64,24 @@ def _validate_normalisation(configuration, channels, parameters):
         if "order" not in n_setup.keys():
             raise KeyError("missing order setting for normalisation in "\
                 "channel {0}".format(c))
+
+        if isinstance(n_setup["order"], bool):
+            raise TypeError("order for {} channel must be a positive integer".format(c))
+
+        if (n_setup["order"] % 1) > 0:
+            logger.warn("Setting order for {0} channel as integer ({1}, from {2})"\
+                .format(c, int(n_setup["order"]), n_setup["order"]))
+        try:
+            configuration["normalise"][c]["order"] = int(n_setup["order"])
+        except (TypeError, ValueError):
+            raise TypeError("order for {} channel must be a positive integer".format(c))
+
+        if n_setup["order"] < 0:
+            raise ValueError("order for {} channel must be a positive integer".format(c))
     return True
 
 
-def _validate_settings(configuration, channels, parameters):
+def _validate_settings(configuration, parameters):
     """
     Validate that the settings in the model are specified correctly.
 
@@ -78,16 +93,29 @@ def _validate_settings(configuration, channels, parameters):
         TypeError if an incorrect data type is specified for a normalisation setting.
     """
 
+    if "settings" not in configuration:
+        configuration["settings"] = {}
+
     if "walkers" not in configuration["settings"].keys():
         logger.warn("Number of walkers not set (settings.walkers) in model"\
             " configuration file. Setting as {0}".format(2 * len(parameters)))
         configuration["settings"]["walkers"] = 2 * len(parameters)
 
+
     for key in ("burn", "sample", "walkers"):
-        try: int(configuration["settings"][key])
-        except (ValueError, TypeError) as e:
+        value = configuration["settings"][key]
+        if isinstance(value, bool):
+            raise TypeError("configuration setting settings.{} must be an "\
+                "integer-like type".format(key))
+        if not isinstance(value, int):
             raise TypeError("configuration setting settings.{0} must be"\
                 " an integer-like type".format(key))
+        if 0 >= value:
+            raise ValueError("configuration setting settings.{} must be a "\
+                "positive integer-like type".format(key))
+
+    if (configuration["settings"]["walkers"] % 2) > 0:
+        raise ValueError("number of walkers must be an even number")
 
     if configuration["settings"]["walkers"] < 2*len(parameters):
         raise ValueError("number of walkers must be at least twice the "\
@@ -105,13 +133,16 @@ def _validate_settings(configuration, channels, parameters):
     return True
 
 
-def _validate_redshift(configuration, channels, parameters):
+def _validate_redshift(configuration, channels):
     """
     Validate that the doppler shift settings in the model are specified correctly.
 
     :returns:
         True if the doppler settings for this model are specified correctly.
     """
+
+    if not "redshift" in configuration:
+        return True
 
     # Redshift and can be bool
     if isinstance(configuration["redshift"], bool):
@@ -130,7 +161,7 @@ def _validate_redshift(configuration, channels, parameters):
     return True
 
 
-def _validate_convolve(configuration, channels, parameters):
+def _validate_convolve(configuration, channels):
     """
     Validate that the smoothing settings in the model are specified correctly.
 
@@ -139,7 +170,11 @@ def _validate_convolve(configuration, channels, parameters):
     """ 
 
     # Convolution not required
-    if configuration["convolve"] == False:
+    if "convolve" not in configuration:
+        return True
+
+    # Can be boolean
+    if isinstance(configuration["convolve"], bool):
         return True
 
     if not isinstance(configuration["convolve"], (dict, bool)):
@@ -156,7 +191,7 @@ def _validate_convolve(configuration, channels, parameters):
     return True
 
 
-def _validate_channels(configuration, channels, parameters):
+def _validate_channels(configuration, channels):
     """
     Validate that the channels in the model are specified correctly.
 
@@ -173,13 +208,16 @@ def _validate_channels(configuration, channels, parameters):
         raise KeyError("no channels found in model file")
 
     for channel in channels:
+        if not isinstance(channel, (str, unicode)):
+            raise TypeError("channel must be a string-like object")
+
         if "." in channel:
             raise ValueError("channel name '{0}' cannot contain a full-stop"\
                 " character".format(channel))
     return True
 
 
-def _validate_mask(configuration, channels, parameters):
+def _validate_mask(configuration):
     """
     Validate that the masks in the model are specified correctly.
 
@@ -192,8 +230,12 @@ def _validate_mask(configuration, channels, parameters):
 
     # Masks are optional
     if "mask" not in configuration.keys() \
+    or configuration["mask"] == False \
     or configuration["mask"] is None:
         return True
+
+    if isinstance(configuration["mask"], dict):
+        raise TypeError("mask must be a list-type of regions")
 
     for region in configuration["mask"]:
         assert len(region) == 2, "Masks must be a list of regions (e.g. [start,"\
@@ -201,6 +243,13 @@ def _validate_mask(configuration, channels, parameters):
         if not isinstance(region[0], (int, float)) \
         or not isinstance(region[1], (int, float)):
             raise TypeError("masks must be a float-type")
+
+        if region[0] > region[1]:
+            logger.warn("Masked region [{0}, {1}] has the start region bigger"\
+                " than the end region: {0} > {1}".format(*region))
+        elif region[0] == region[1]:
+            logger.warn("Masked regions {0} and {1} are the same point".format(
+                *region))
 
     return True
 

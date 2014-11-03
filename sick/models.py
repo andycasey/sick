@@ -25,7 +25,6 @@ import pyfits
 import yaml
 from scipy import interpolate, ndimage, optimize as op
 
-import inference
 import utils
 import specutils
 from validation import validate as model_validate
@@ -33,70 +32,6 @@ from validation import validate as model_validate
 logger = logging.getLogger("sick")
 
 _sick_interpolator_ = None
-
-
-def load_model_data(filename, **kwargs):
-    """
-    Load dispersion or flux data from a filename. 
-
-    :param filename:
-        The filename (formatted as FITS, memmap, or ASCII) to load from.
-
-    :type filename:
-        str
-
-    :param kwargs: [optional]
-        Keyword arguments that are passed to the loader function (e.g. 
-        :class:`pyfits.open`, :class:`numpy.memmap`, or :class:`numpy.loadtxt`
-        for FITS, memmap or ASCII formats respectively)
-
-    :returns:
-        An array of data values.
-
-    :type numpy.ndarray:
-    """
-
-    # Load by the filename extension
-    extension = filename.split(os.path.extsep)[-1].lower()
-    if extension == "fits":
-        with pyfits.open(filename, **kwargs) as image:
-            data = image[0].data
-
-    elif extension == "memmap":
-        kwargs.setdefault("mode", "c")
-        kwargs.setdefault("dtype", np.double)
-        data = np.memmap(filename, **kwargs)
-
-    else:
-        data = np.loadtxt(filename, **kwargs)
-    return data
-
-
-def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
-    smoothing_kernels, sampling_rate, mean_dispersion_diffs):
-
-    logger.debug("Caching point {0}: {1}".format(index, 
-        ", ".join(map(os.path.basename, filenames.values()))))
-
-    flux = np.zeros(np.sum(num_pixels))
-    for i, (channel, flux_filename) in enumerate(filenames.iteritems()):
-
-        sj, ej = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
-
-        # Get the flux
-        si, ei = wavelength_indices[channel]
-        channel_flux = load_model_data(flux_filename)
-
-        # Do we need to convolve it first?
-        if channel in smoothing_kernels:
-            sigma = (smoothing_kernels[channel]/(2 * (2*np.log(2))**0.5))\
-                /mean_dispersion_diffs[channel]
-            channel_flux = ndimage.gaussian_filter1d(channel_flux, sigma)
-
-        # Do we need to resample?
-        flux[sj:ej] = channel_flux[si:ei:sampling_rate[channel]]
-
-    return (index, flux)
 
 
 class Model(object):
@@ -1372,7 +1307,7 @@ class Model(object):
         return widths
 
 
-    def infer(self, data, p0, burn=None, sample=None):
+    def infer(self, data, p0=None, theta=None, walkers=None, burn=None, sample=None):
         """
         Set up an EnsembleSampler and sample the parameters given the model and data.
 
@@ -1388,10 +1323,18 @@ class Model(object):
         :type model:
             :class:`sick.models.Model`
 
-        :param p0:
-            The starting point for all the walkers.
+        :param p0: [optional]
+            The starting point for all the walkers. Either `p0` or `theta` must
+            be given.
 
-        :type p0:
+        :type p0: [optional]
+            :class:`numpy.ndarray`
+
+        :param theta: [optional]
+            The point to initialise all the walkers around. Either `p0` or `theta`
+            must be given.
+
+        :ype theta: [optional]
             :class:`numpy.ndarray`
 
         :param lnprob0: [optional]
@@ -1422,14 +1365,28 @@ class Model(object):
             A tuple containing the posteriors, sampler, and general information.
         """
 
-        # Set up MCMC settings and arrays
-        walkers = self.configuration["settings"]["walkers"]
+        if (p0 is None and theta is None) \
+        or (p0 is not None and theta is not None):
+            raise ValueError("either p0 or theta must be given")
+
+        if walkers is None:
+            walkers = self.configuration["settings"]["walkers"]
+
         if burn is None:
             burn = self.configuration["settings"]["burn"]
             logger.info("Burning for {0} steps (from settings.burn)".format(burn))
         if sample is None:
             sample = self.configuration["settings"]["sample"]
             logger.info("Sampling for {0} steps (from settings.sample)".format(sample))
+
+        if p0 is None:
+            # Create p0 from theta
+            widths = self.walker_widths(data, theta)
+            p0 = utils.sample_ball(theta, widths, walkers)
+
+        else:
+            # Ensure the shape is correct
+            assert p0.shape[1] == walkers, "p0 shape does not match that expected"
 
         mean_acceptance_fractions = []
         autocorrelation_time = np.zeros((burn, len(self.parameters)))
@@ -1628,8 +1585,8 @@ class Model(object):
             # Normalise model fluxes to the data?
             if self.configuration["normalise"] \
             and self.configuration["normalise"].get(channel, False):
-                continuum = self._continuum(channel, data[i].disp, model_flux,
-                    **theta)
+                continuum = self._continuum(channel, model_dispersion,
+                    model_flux, **theta)
                 model_flux *= continuum
                 model_continua.append(continuum)
 
@@ -1642,7 +1599,8 @@ class Model(object):
         return model_fluxes
 
 
-# It's ~15% faster if we do things this way..
+# It's ~15%+ faster if we do things this way instead of refactoring to the
+# inference.* functions.
 def _log_prior(theta, parameters, priors):
 
     log_prior = 0
@@ -1785,3 +1743,67 @@ def _log_probability(theta, parameters, priors, *args):
     if np.isinf(prior):
         return prior
     return prior + _log_likelihood(theta, parameters, *args)
+
+
+def load_model_data(filename, **kwargs):
+    """
+    Load dispersion or flux data from a filename. 
+
+    :param filename:
+        The filename (formatted as FITS, memmap, or ASCII) to load from.
+
+    :type filename:
+        str
+
+    :param kwargs: [optional]
+        Keyword arguments that are passed to the loader function (e.g. 
+        :class:`pyfits.open`, :class:`numpy.memmap`, or :class:`numpy.loadtxt`
+        for FITS, memmap or ASCII formats respectively)
+
+    :returns:
+        An array of data values.
+
+    :type numpy.ndarray:
+    """
+
+    # Load by the filename extension
+    extension = filename.split(os.path.extsep)[-1].lower()
+    if extension == "fits":
+        with pyfits.open(filename, **kwargs) as image:
+            data = image[0].data
+
+    elif extension == "memmap":
+        kwargs.setdefault("mode", "c")
+        kwargs.setdefault("dtype", np.double)
+        data = np.memmap(filename, **kwargs)
+
+    else:
+        data = np.loadtxt(filename, **kwargs)
+    return data
+
+
+def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
+    smoothing_kernels, sampling_rate, mean_dispersion_diffs):
+
+    logger.debug("Caching point {0}: {1}".format(index, 
+        ", ".join(map(os.path.basename, filenames.values()))))
+
+    flux = np.zeros(np.sum(num_pixels))
+    for i, (channel, flux_filename) in enumerate(filenames.iteritems()):
+
+        sj, ej = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
+
+        # Get the flux
+        si, ei = wavelength_indices[channel]
+        channel_flux = load_model_data(flux_filename)
+
+        # Do we need to convolve it first?
+        if channel in smoothing_kernels:
+            sigma = (smoothing_kernels[channel]/(2 * (2*np.log(2))**0.5))\
+                /mean_dispersion_diffs[channel]
+            channel_flux = ndimage.gaussian_filter1d(channel_flux, sigma)
+
+        # Do we need to resample?
+        flux[sj:ej] = channel_flux[si:ei:sampling_rate[channel]]
+
+    return (index, flux)

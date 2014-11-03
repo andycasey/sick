@@ -7,7 +7,6 @@ from __future__ import print_function
 import numpy as np
 import sick.utils as utils
 
-
 def test_default_output_format():
     assert utils.default_output_prefix("what.pdf") == "what"
     assert utils.default_output_prefix(["aa", "ab", "ac"]) == "a"
