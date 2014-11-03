@@ -1,6 +1,6 @@
 # coding: utf-8
 
-""" Model class """
+""" Model class and inference functions for sick """
 
 from __future__ import division, print_function
 
@@ -306,6 +306,10 @@ class Model(object):
                 for _ in self.grid_points.dtype.names]))
 
         self.priors = self._default_priors_.copy()
+        # Create default priors for f
+        for channel in self.channels:
+            if "f.{}".format(channel) in self.parameters:
+                self.priors["f.{}".format(channel)] = "uniform(-10,1)"
         self.priors.update(self.configuration["priors"])
 
         return None
@@ -1665,8 +1669,8 @@ def _log_prior(theta, parameters, priors):
 
 
 def _log_likelihood(theta, parameters, channels, model_dispersions,
-    mask, n_grid_parameters, observed_dispersions, observed_fluxes, observed_variances,
-    observed_ivariances):
+    mask, n_grid_parameters, observed_dispersions, observed_fluxes, 
+    observed_variances, observed_ivariances):
 
     global _sick_interpolator_
     try:
