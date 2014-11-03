@@ -79,7 +79,9 @@ class UncachedModelValidationTest(unittest.TestCase):
         # a warning
         self.assertTrue(v._validate_mask, {"mask": [[1, 2], [4, 3]]})
 
+    def test_mask2(self):
         # OK if they are the same point too, but that makes no sense in reality
+        print("OK WE ARE DOING IT\n\n\n\n\n\n\n\n\n")
         self.assertTrue(v._validate_mask, {"mask": [[1, 2], [4, 4]]})
 
 
@@ -172,7 +174,7 @@ class UncachedModelValidationTest(unittest.TestCase):
         config = {"settings": {"walkers": 2, "burn": 10, "sample": 10, "threads": 1}}
         self.assertRaises(ValueError, v._validate_settings, *[config, p])
         
-        config = {"settings": {"walkers": 2 * len(p), "burn": 10, "sample": 10, "threads": 1}}
+        config = {"settings": {"walkers": 2 * len(p), "burn": 10, "sample": 5, "threads": 1}}
         self.assertTrue(v._validate_settings, [config, p])
 
         # Check the burn/sample/walker numbers
@@ -211,9 +213,9 @@ class UncachedModelValidationTest(unittest.TestCase):
 
         # Normalisation not required
         self.assertTrue(f, [{}, None])
+        self.assertTrue(f, [{"normalise": False}, None])
 
         # Type is important
-        self.assertTrue(f, [{"normalise": False}, None])
         self.assertRaises(TypeError, f, *[{"normalise": None}, None])
         self.assertRaises(TypeError, f, *[{"normalise": True}, None])
         self.assertRaises(TypeError, f, *[{"normalise": []}, None])
