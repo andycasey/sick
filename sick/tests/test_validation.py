@@ -10,137 +10,212 @@ import sick.validation as v
 
 class UncachedModelValidationTest(unittest.TestCase):
 
-    def test_channel_names(self):
+    c = {"channels": True}
+    z = ["abc", "def"]
 
-        c = {"channels": True}
-
+    def test_channel_names_str(self):
         # These are normal
-        self.assertTrue(v._validate_channels, [c, ["yes", "#@$)(&*@#$", "ok"], []])
-        self.assertTrue(v._validate_channels, [c, [u"yes", u"ok"], []])
+        self.assertTrue(v._validate_channels, 
+            [self.c, ["yes", "#@$)(&*@#$", "ok"], []])
 
+    def test_channel_names_unicode(self):
+        self.assertTrue(v._validate_channels, [self.c, [u"yes", u"ok"], []])
+
+    def test_channel_with_full_stops(self):
         # Don't allow anything with a . in it.
         bad_channels = ["what.what", "not.not"]
         self.assertRaises(ValueError, v._validate_channels, 
-            *[c, bad_channels])
+            *[self.c, bad_channels])
 
+    def test_channel_name_none(self):
         # Only allow strings or unicodes as names
         self.assertRaises(TypeError, v._validate_channels,
-            *[c, [None, "yes"]])
-        self.assertRaises(TypeError, v._validate_channels,
-            *[c, [{}, "yes"]])
-        self.assertRaises(TypeError, v._validate_channels,
-            *[c, [False, "yes"]])
-        self.assertRaises(TypeError, v._validate_channels,
-            *[c, [True, "yes"]])
-        self.assertRaises(TypeError, v._validate_channels,
-            *[c, [1, "yes"]])
-        self.assertRaises(TypeError, v._validate_channels,
-            *[c, [2.0, "yes"]])
-        self.assertRaises(TypeError, v._validate_channels,
-            *[c, [(), "yes"]])
-        self.assertRaises(TypeError, v._validate_channels,
-            *[c, [[], "yes"]])
+            *[self.c, [None, "yes"]])
 
-        # Channel names must be list-like
+    def test_channel_name_dict(self):
         self.assertRaises(TypeError, v._validate_channels,
-            *[c, None])
+            *[self.c, [{}, "yes"]])
+
+    def test_channel_name_bool1(self):
         self.assertRaises(TypeError, v._validate_channels,
-            *[c, False])
+            *[self.c, [False, "yes"]])
+
+    def test_channel_name_bool2(self):
         self.assertRaises(TypeError, v._validate_channels,
-            *[c, True])
+            *[self.c, [True, "yes"]])
+
+    def test_channel_name_int(self):
         self.assertRaises(TypeError, v._validate_channels,
-            *[c, 1])
+            *[self.c, [1, "yes"]])
+
+    def test_channel_name_float(self):
         self.assertRaises(TypeError, v._validate_channels,
-            *[c, 2.0])
+            *[self.c, [2.0, "yes"]])
+
+    def test_channel_name_tuple(self):
+        self.assertRaises(TypeError, v._validate_channels,
+            *[self.c, [(), "yes"]])
+
+    def test_channel_name_list(self):
+        self.assertRaises(TypeError, v._validate_channels,
+            *[self.c, [[], "yes"]])
+
+    # Channel names must be list-like
+    def test_channels_as_none(self):
+        self.assertRaises(TypeError, v._validate_channels,
+            *[self.c, None])
+
+    def test_channels_as_false(self):
+        self.assertRaises(TypeError, v._validate_channels,
+            *[self.c, False])
+
+    def test_channels_as_true(self):
+        self.assertRaises(TypeError, v._validate_channels,
+            *[self.c, True])
+
+    def test_channels_as_int(self):
+        self.assertRaises(TypeError, v._validate_channels,
+            *[self.c, 1])
+
+    def test_channels_as_float(self):
+        self.assertRaises(TypeError, v._validate_channels,
+            *[self.c, 2.0])
         
 
-    def test_mask(self):
-
-        # Masks are not necessary
+    # Masks are not necessary
+    def test_mask_no_configuration_provided(self):
         self.assertTrue(v._validate_mask, {})
+
+    def test_mask_as_empty_list(self):
         self.assertTrue(v._validate_mask, {"mask": []})
+
+    def test_mask_as_empty_tuple(self):
         self.assertTrue(v._validate_mask, {"mask": ()})
+
+    def test_mask_as_none(self):
         self.assertTrue(v._validate_mask, {"mask": None})
+
+    def test_mask_as_false(self):
         self.assertTrue(v._validate_mask, {"mask": False})
 
-        # When a mask is given though, it must be valid
+    # When a mask is given though, it must be valid
+    def test_mask_as_empty_dict(self):
         self.assertRaises(TypeError, v._validate_mask, {"mask": {}})
+
+    def test_mask_as_bool(self):
         self.assertRaises(TypeError, v._validate_mask, {"mask": True})
+
+    def test_mask_as_int(self):
         self.assertRaises(TypeError, v._validate_mask, {"mask": 3})
+
+    def test_mask_as_list_with_int(self):
         self.assertRaises(TypeError, v._validate_mask, {"mask": [3]})
+
+    def test_mask_as_non_nested_list(self):
         self.assertRaises(TypeError, v._validate_mask, {"mask": [1, 2]})
+
+    def test_mask_as_nested_list_of_nones(self):
         self.assertRaises(TypeError, v._validate_mask, {"mask": [[None, None]]})
 
-        # These are OK:
+    def test_mask_single_region(self):
         self.assertTrue(v._validate_mask, {"mask": [[1, 2]]})
+
+    def test_mask_multiple_regions(self):
         self.assertTrue(v._validate_mask, {"mask": [[1, 2], [3, 4]]})
 
+    def test_mask_backward_region(self):
         # It is OK if they are not upper/lower bounded, too. But we will give
         # a warning
         self.assertTrue(v._validate_mask, {"mask": [[1, 2], [4, 3]]})
 
-    def test_mask2(self):
-        # OK if they are the same point too, but that makes no sense in reality
-        print("OK WE ARE DOING IT\n\n\n\n\n\n\n\n\n")
+    def test_mask_equal_region(self):
         self.assertTrue(v._validate_mask, {"mask": [[1, 2], [4, 4]]})
 
 
-    def test_redshift(self):
-
-        c = ["abc", "def"]
-
+    def test_redshift_no_configuration_provided(self):
         # Redshift is not necessary
-        self.assertTrue(v._validate_redshift, [{}, c])
+        self.assertTrue(v._validate_redshift, [{}, self.z])
 
-        # Must be of correct type (most are)
-        self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": []}, c])
-        self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": None}, c])
-        self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": 0}, c])
-        self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": 1.0}, c])        
+    def test_redshift_as_empty_list(self):
+        self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": []}, self.z])
 
-        # When given, it can be boolean or a dict
-        self.assertTrue(v._validate_redshift, [{"redshift": {}}, c])
-        self.assertTrue(v._validate_redshift, [{"redshift": True}, c])
-        self.assertTrue(v._validate_redshift, [{"redshift": False}, c])
+    def test_redshift_as_none(self):
+        self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": None}, self.z])
 
-        # We can give it for non-existant channels, too, and they will just be
-        # ignored
-        self.assertTrue(v._validate_redshift, [{"redshift": {"nope": True}}, c])
-        self.assertTrue(v._validate_redshift, [{"redshift": {"nope": False}}, c])
+    def test_redshift_as_int(self):
+        self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": 0}, self.z])
 
-        # If we don't give it to all channels, then the ones not specified will
-        # default to False
-        self.assertTrue(v._validate_redshift, [{"redshift": {"abc": True}}, c])
-        self.assertTrue(v._validate_redshift, [{"redshift": {"abc": False}}, c])
+    def test_redshift_as_float(self):
+        self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": 1.0}, self.z])
+
+    # When given, it can be boolean or a dict
+    def test_redshift_as_empty_dict(self):
+        self.assertTrue(v._validate_redshift, [{"redshift": {}}, self.z])
+
+    def test_redshift_as_true(self):
+        self.assertTrue(v._validate_redshift, [{"redshift": True}, self.z])
+
+    def test_redshfit_as_false(self):
+        self.assertTrue(v._validate_redshift, [{"redshift": False}, self.z])
+
+    # We can give it for non-existant channels, too, and they will just be
+    # ignored
+    def test_redshift_with_non_existent_channel1(self):
+        self.assertTrue(v._validate_redshift, [{"redshift": {"nope": True}}, self.z])
+
+    def test_redshift_with_non_existent_channel2(self):
+        self.assertTrue(v._validate_redshift, [{"redshift": {"nope": False}}, self.z])
+
+    # If we don't give it to all channels, then the ones not specified will
+    # default to False
+    def test_redshift_with_single_existent_channel1(self):
+        self.assertTrue(v._validate_redshift, [{"redshift": {"abc": True}}, self.z])
+
+    def test_redshift_with_single_existent_channel2(self):
+        self.assertTrue(v._validate_redshift, [{"redshift": {"abc": False}}, self.z])
         
 
-    def test_convolve(self):
-
-        c = ["abc", "def"]
-
+    def test_convolve_no_configuration_provided(self):
         # Convolution is not necessary
-        self.assertTrue(v._validate_convolve, [{}, c])
+        self.assertTrue(v._validate_convolve, [{}, self.z])
 
-        # Must be of correct type (most are)
-        self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": []}, c])
-        self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": None}, c])
-        self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": 0}, c])
-        self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": 1.0}, c])        
+    def test_convolve_as_empty_list(self):
+        self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": []}, self.z])
 
-        # When given, it can be boolean or a dict
-        self.assertTrue(v._validate_convolve, [{"convolve": {}}, c])
-        self.assertTrue(v._validate_convolve, [{"convolve": True}, c])
-        self.assertTrue(v._validate_convolve, [{"convolve": False}, c])
+    def test_convolve_as_none(self):
+        self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": None}, self.z])
 
-        # We can give it for non-existant channels, too, and they will just be
-        # ignored
-        self.assertTrue(v._validate_convolve, [{"convolve": {"nope": True}}, c])
-        self.assertTrue(v._validate_convolve, [{"convolve": {"nope": False}}, c])
+    def test_convolve_as_int(self):
+        self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": 0}, self.z])
 
-        # If we don't give it to all channels, then the ones not specified will
-        # default to False
-        self.assertTrue(v._validate_convolve, [{"convolve": {"abc": True}}, c])
-        self.assertTrue(v._validate_convolve, [{"convolve": {"abc": False}}, c])
+    def test_convolve_as_float(self):
+        self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": 1.0}, self.z])        
+
+    # When given, it can be boolean or a dict
+    def test_convolve_as_empty_dict(self):
+        self.assertTrue(v._validate_convolve, [{"convolve": {}}, self.z])
+
+    def test_convolve_as_true(self):
+        self.assertTrue(v._validate_convolve, [{"convolve": True}, self.z])
+
+    def test_convolve_as_false(self):
+        self.assertTrue(v._validate_convolve, [{"convolve": False}, self.z])
+
+    # We can give it for non-existant self.zhannels, too, and they will just be
+    # ignored
+    def test_convolve_with_non_existent_channel1(self):
+        self.assertTrue(v._validate_convolve, [{"convolve": {"nope": True}}, self.z])
+
+    def test_convolve_with_non_existent_channel2(self):
+        self.assertTrue(v._validate_convolve, [{"convolve": {"nope": False}}, self.z])
+
+    # If we don't give it to all channels, then the ones not specified will
+    # default to False
+    def test_convolve_with_single_existent_channel1(self):
+        self.assertTrue(v._validate_convolve, [{"convolve": {"abc": True}}, self.z])
+
+    def test_convolve_with_single_existent_channel2(self):
+        self.assertTrue(v._validate_convolve, [{"convolve": {"abc": False}}, self.z])
         
 
     def test_settings(self):

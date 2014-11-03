@@ -88,6 +88,8 @@ class InferenceTest(unittest.TestCase):
         optimised_theta, optimised_r_chi_sq, optimised_info = model.optimise(data)
 
         # Start sampling with the default walker widths for initialisation
+        # Do this in serial, just for fun
+        model.configuration["settings"]["threads"] = 1
         posteriors, sampler, info = model.infer(data, theta=optimised_theta)
 
         # Plot the chains
