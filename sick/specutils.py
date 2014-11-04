@@ -79,8 +79,10 @@ class Spectrum1D(object):
 
     def copy(self):
         """ Creates a copy of the object """
+        variance = self.variance.copy() if self.variance is not None else None
+        headers = self.headers.copy() if self.headers is not None else None
         return self.__class__(self.disp.copy(), self.flux.copy(),
-            variance=self.variance, headers=self.headers)
+            variance=variance, headers=headers)
     
 
     @classmethod
