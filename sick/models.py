@@ -440,7 +440,7 @@ class Model(object):
                 for channel in self.channels:
                     if channel in self.configuration["normalise"]:
                         order = self.configuration["normalise"][channel]["order"]
-                        parameters.extend(["normalise.{0}.c{1}".format(channel, i) \
+                        parameters.extend(["normalise.{0}.b{1}".format(channel, i) \
                             for i in range(order + 1)])
             
             # Redshift parameters
@@ -836,7 +836,7 @@ class Model(object):
         theta.update(dict(zip(self.grid_points.dtype.names, self.grid_points[index])))
         for channel, coefficients in continuum_coefficients.iteritems():
             for j, value in enumerate(coefficients[::-1, index]):
-                theta["normalise.{0}.c{1:.0f}".format(channel, j)] = value
+                theta["normalise.{0}.b{1:.0f}".format(channel, j)] = value
         reduced_chi_sq = chi_sqs[index]/(sum(num_pixels) - len(self.grid_points.dtype.names) - 1)
 
         _default_init_values = {
@@ -1045,7 +1045,7 @@ class Model(object):
     def _continuum(self, channel, dispersion, model_flux, **theta):
         # The normalisation coefficients should be in the theta
         order = self.configuration["normalise"][channel]["order"]
-        coefficients = [theta["normalise.{0}.c{1}".format(channel, i)] \
+        coefficients = [theta["normalise.{0}.b{1}".format(channel, i)] \
             for i in range(order + 1)]
 
         return np.polyval(coefficients, dispersion)
@@ -1758,10 +1758,10 @@ def _log_likelihood(theta, parameters, channels, model_dispersions,
                 model_flux[sm:em] = np.nan
 
         # Continuum normalise
-        if "normalise.{}.c0".format(channel) in theta_dict:
+        if "normalise.{}.b0".format(channel) in theta_dict:
             j, coefficients = 0, []
-            while "normalise.{0}.c{1}".format(channel, j) in theta_dict:
-                coefficients.append(theta_dict["normalise.{0}.c{1}".format(channel, j)])
+            while "normalise.{0}.b{1}".format(channel, j) in theta_dict:
+                coefficients.append(theta_dict["normalise.{0}.b{1}".format(channel, j)])
                 j += 1
 
             continuum = np.polyval(coefficients, observed_dispersions[i])
