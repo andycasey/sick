@@ -15,11 +15,10 @@ class UncachedModelValidationTest(unittest.TestCase):
 
     def test_channel_names_str(self):
         # These are normal
-        self.assertTrue(v._validate_channels, 
-            [self.c, ["yes", "#@$)(&*@#$", "ok"], []])
+        self.assertTrue(v._validate_channels(self.c, ["yes", "#@$)*@#$", "ok"]))
 
     def test_channel_names_unicode(self):
-        self.assertTrue(v._validate_channels, [self.c, [u"yes", u"ok"], []])
+        self.assertTrue(v._validate_channels(self.c, [u"yes", u"ok"]))
 
     def test_channel_with_full_stops(self):
         # Don't allow anything with a . in it.
@@ -81,22 +80,21 @@ class UncachedModelValidationTest(unittest.TestCase):
         self.assertRaises(TypeError, v._validate_channels,
             *[self.c, 2.0])
         
-
     # Masks are not necessary
     def test_mask_no_configuration_provided(self):
-        self.assertTrue(v._validate_mask, {})
+        self.assertTrue(v._validate_mask({}))
 
     def test_mask_as_empty_list(self):
-        self.assertTrue(v._validate_mask, {"mask": []})
+        self.assertTrue(v._validate_mask({"mask": []}))
 
     def test_mask_as_empty_tuple(self):
-        self.assertTrue(v._validate_mask, {"mask": ()})
+        self.assertTrue(v._validate_mask({"mask": ()}))
 
     def test_mask_as_none(self):
-        self.assertTrue(v._validate_mask, {"mask": None})
+        self.assertTrue(v._validate_mask({"mask": None}))
 
     def test_mask_as_false(self):
-        self.assertTrue(v._validate_mask, {"mask": False})
+        self.assertTrue(v._validate_mask({"mask": False}))
 
     # When a mask is given though, it must be valid
     def test_mask_as_empty_dict(self):
@@ -118,23 +116,23 @@ class UncachedModelValidationTest(unittest.TestCase):
         self.assertRaises(TypeError, v._validate_mask, {"mask": [[None, None]]})
 
     def test_mask_single_region(self):
-        self.assertTrue(v._validate_mask, {"mask": [[1, 2]]})
+        self.assertTrue(v._validate_mask({"mask": [[1, 2]]}))
 
     def test_mask_multiple_regions(self):
-        self.assertTrue(v._validate_mask, {"mask": [[1, 2], [3, 4]]})
+        self.assertTrue(v._validate_mask({"mask": [[1, 2], [3, 4]]}))
 
     def test_mask_backward_region(self):
         # It is OK if they are not upper/lower bounded, too. But we will give
         # a warning
-        self.assertTrue(v._validate_mask, {"mask": [[1, 2], [4, 3]]})
+        self.assertTrue(v._validate_mask({"mask": [[1, 2], [4, 3]]}))
 
     def test_mask_equal_region(self):
-        self.assertTrue(v._validate_mask, {"mask": [[1, 2], [4, 4]]})
+        self.assertTrue(v._validate_mask({"mask": [[1, 2], [4, 4]]}))
 
 
     def test_redshift_no_configuration_provided(self):
         # Redshift is not necessary
-        self.assertTrue(v._validate_redshift, [{}, self.z])
+        self.assertTrue(v._validate_redshift({}, self.z))
 
     def test_redshift_as_empty_list(self):
         self.assertRaises(TypeError, v._validate_redshift, *[{"redshift": []}, self.z])
@@ -150,34 +148,34 @@ class UncachedModelValidationTest(unittest.TestCase):
 
     # When given, it can be boolean or a dict
     def test_redshift_as_empty_dict(self):
-        self.assertTrue(v._validate_redshift, [{"redshift": {}}, self.z])
+        self.assertTrue(v._validate_redshift({"redshift": {}}, self.z))
 
     def test_redshift_as_true(self):
-        self.assertTrue(v._validate_redshift, [{"redshift": True}, self.z])
+        self.assertTrue(v._validate_redshift({"redshift": True}, self.z))
 
     def test_redshfit_as_false(self):
-        self.assertTrue(v._validate_redshift, [{"redshift": False}, self.z])
+        self.assertTrue(v._validate_redshift({"redshift": False}, self.z))
 
     # We can give it for non-existant channels, too, and they will just be
     # ignored
     def test_redshift_with_non_existent_channel1(self):
-        self.assertTrue(v._validate_redshift, [{"redshift": {"nope": True}}, self.z])
+        self.assertTrue(v._validate_redshift({"redshift": {"nope": True}}, self.z))
 
     def test_redshift_with_non_existent_channel2(self):
-        self.assertTrue(v._validate_redshift, [{"redshift": {"nope": False}}, self.z])
+        self.assertTrue(v._validate_redshift({"redshift": {"nope": False}}, self.z))
 
     # If we don't give it to all channels, then the ones not specified will
     # default to False
     def test_redshift_with_single_existent_channel1(self):
-        self.assertTrue(v._validate_redshift, [{"redshift": {"abc": True}}, self.z])
+        self.assertTrue(v._validate_redshift({"redshift": {"abc": True}}, self.z))
 
     def test_redshift_with_single_existent_channel2(self):
-        self.assertTrue(v._validate_redshift, [{"redshift": {"abc": False}}, self.z])
+        self.assertTrue(v._validate_redshift({"redshift": {"abc": False}}, self.z))
         
 
     def test_convolve_no_configuration_provided(self):
         # Convolution is not necessary
-        self.assertTrue(v._validate_convolve, [{}, self.z])
+        self.assertTrue(v._validate_convolve({}, self.z))
 
     def test_convolve_as_empty_list(self):
         self.assertRaises(TypeError, v._validate_convolve, *[{"convolve": []}, self.z])
@@ -193,37 +191,132 @@ class UncachedModelValidationTest(unittest.TestCase):
 
     # When given, it can be boolean or a dict
     def test_convolve_as_empty_dict(self):
-        self.assertTrue(v._validate_convolve, [{"convolve": {}}, self.z])
+        self.assertTrue(v._validate_convolve({"convolve": {}}, self.z))
 
     def test_convolve_as_true(self):
-        self.assertTrue(v._validate_convolve, [{"convolve": True}, self.z])
+        self.assertTrue(v._validate_convolve({"convolve": True}, self.z))
 
     def test_convolve_as_false(self):
-        self.assertTrue(v._validate_convolve, [{"convolve": False}, self.z])
+        self.assertTrue(v._validate_convolve({"convolve": False}, self.z))
 
     # We can give it for non-existant self.zhannels, too, and they will just be
     # ignored
     def test_convolve_with_non_existent_channel1(self):
-        self.assertTrue(v._validate_convolve, [{"convolve": {"nope": True}}, self.z])
+        self.assertTrue(v._validate_convolve({"convolve": {"nope": True}}, self.z))
 
     def test_convolve_with_non_existent_channel2(self):
-        self.assertTrue(v._validate_convolve, [{"convolve": {"nope": False}}, self.z])
+        self.assertTrue(v._validate_convolve({"convolve": {"nope": False}}, self.z))
 
     # If we don't give it to all channels, then the ones not specified will
     # default to False
     def test_convolve_with_single_existent_channel1(self):
-        self.assertTrue(v._validate_convolve, [{"convolve": {"abc": True}}, self.z])
+        self.assertTrue(v._validate_convolve({"convolve": {"abc": True}}, self.z))
 
     def test_convolve_with_single_existent_channel2(self):
-        self.assertTrue(v._validate_convolve, [{"convolve": {"abc": False}}, self.z])
+        self.assertTrue(v._validate_convolve({"convolve": {"abc": False}}, self.z))
         
+    # Normalisation not required
+    def test_normalisation_no_configuration_provided(self):
+        self.assertTrue(v._validate_normalisation({}, []))
+
+    def test_normalisation_as_false(self):
+        self.assertTrue(v._validate_normalisation({"normalise": False}, []))
+
+    # Type is important
+    def test_normalisation_as_none(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": None}, []])
+
+    def test_normalisation_as_true(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": True}, []])
+
+    def test_normalisation_as_empty_list(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": []}, []])
+
+    def test_normalisation_as_empty_tuple(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": ()}, []])
+
+    def test_normalisation_as_int(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": 3}, []])
+
+    def test_normalisation_as_float(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": 3.14}, []])
+
+    # We can provide non-existent channels
+    def test_normalisation_with_non_existent_channel(self):
+        self.assertTrue(v._validate_normalisation(
+            {"normalise": {"what": True}}, ["k", "yep"]))
+
+    def test_normalisation_with_single_existent_channel_as_none(self):
+        # But if we provide one that exists, the type is important
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": None}}, ["k", "yep"]])
+
+    def test_normalisation_with_single_existent_channel_as_bool(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": True}}, ["k", "yep"]])
+
+    def test_normalisation_with_single_existent_channel_as_empty_list(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": []}}, ["k", "yep"]])
+
+    def test_normalisation_with_single_existent_channel_as_empty_tuple(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": ()}}, ["k", "yep"]])
+
+    def test_normalisation_with_single_existent_channel_as_int(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": 3}}, ["k", "yep"]])
+
+    def test_normalisation_with_single_existent_channel_as_float(self):
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": 3.14}}, ["k", "yep"]])
+
+    def test_normalisation_with_single_existent_channel_as_empty_dict(self):
+        # And if we provide one that exists, you need to provide some info on it
+        self.assertRaises(KeyError, v._validate_normalisation,
+            *[{"normalise": {"k": {}}}, ["k", "yep"]])
+
+    def test_normalisation_with_single_existent_channel_with_order_as_int(self):
+        # Like the order, which must be an integer-like
+        self.assertTrue(v._validate_normalisation(
+            {"normalise": {"k": {"order": 0}}}, ["k", "yep"]))
+
+    def test_normalisation_with_single_existent_channel_with_order_as_float(self):
+        # This will just raise a warning:
+        self.assertTrue(v._validate_normalisation(
+            {"normalise": {"k": {"order": 3.14}}}, ["k", "yep"]))
+
+        # These are no good:
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": {"order": None}}}, ["k", "yep"]])
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": {"order": True}}}, ["k", "yep"]])
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": {"order": []}}}, ["k", "yep"]])
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": {"order": {}}}}, ["k", "yep"]])
+        self.assertRaises(TypeError, v._validate_normalisation,
+            *[{"normalise": {"k": {"order": ()}}}, ["k", "yep"]])
+
+        # And positive
+        self.assertRaises(ValueError, v._validate_normalisation,
+            *[{"normalise": {"k": {"order": -1}}}, ["k", "yep"]])
+
+
+    def runTest(self):
+        pass
 
     def test_settings(self):
 
         p = ["z.what", "f.what"]
 
-        # You don't need ... anything
-        self.assertTrue(v._validate_settings, [{}, p])
+        self.assertRaises(KeyError, v._validate_settings, *[{}, p])
         
         # But it does have to be the right type
         self.assertRaises(TypeError, v._validate_settings, *[{"settings": None}, ])
@@ -250,7 +343,7 @@ class UncachedModelValidationTest(unittest.TestCase):
         self.assertRaises(ValueError, v._validate_settings, *[config, p])
         
         config = {"settings": {"walkers": 2 * len(p), "burn": 10, "sample": 5, "threads": 1}}
-        self.assertTrue(v._validate_settings, [config, p])
+        self.assertTrue(v._validate_settings(config, p))
 
         # Check the burn/sample/walker numbers
         bad_types = (None, True, False, [], {})
@@ -280,52 +373,3 @@ class UncachedModelValidationTest(unittest.TestCase):
 
         config = {"settings": {"sample": -1, "burn": 10, "walkers": 10, "threads": 1}}
         self.assertRaises(ValueError, v._validate_settings, *[config, p])
-
-
-    def test_normalisation(self):
-
-        f = v._validate_normalisation
-
-        # Normalisation not required
-        self.assertTrue(f, [{}, None])
-        self.assertTrue(f, [{"normalise": False}, None])
-
-        # Type is important
-        self.assertRaises(TypeError, f, *[{"normalise": None}, None])
-        self.assertRaises(TypeError, f, *[{"normalise": True}, None])
-        self.assertRaises(TypeError, f, *[{"normalise": []}, None])
-        self.assertRaises(TypeError, f, *[{"normalise": ()}, None])
-        self.assertRaises(TypeError, f, *[{"normalise": 3}, None])
-        self.assertRaises(TypeError, f, *[{"normalise": 3.14}, None])
-
-        # We can provide non-existent channels
-        c = ["k", "yep"]
-        self.assertTrue(f, [{"normalise": {"what": True}}, c])
-
-        # But if we provide one that exists, the type is important
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": None}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": True}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": []}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": ()}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": 3}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": 3.14}}, c])
-
-        # And if we provide one that exists, you need to provide some info on it
-        self.assertRaises(KeyError, f, *[{"normalise": {"k": {}}}, c])
-
-        # Like the order, which must be an integer-like
-        self.assertTrue(f, [{"normalise": {"k": {"order": 0}}}, c])
-        # This will just raise a warning:
-        self.assertTrue(f, [{"normalise": {"k": {"order": 3.14}}}, c])
-
-        # These are no good:
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": {"order": None}}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": {"order": True}}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": {"order": []}}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": {"order": {}}}}, c])
-        self.assertRaises(TypeError, f, *[{"normalise": {"k": {"order": ()}}}, c])
-
-        # And positive
-        self.assertRaises(ValueError, f, *[{"normalise": {"k": {"order": -1}}}, c])
-        
-        # We should probably require a method specification too, but not now

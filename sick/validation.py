@@ -44,6 +44,7 @@ def _validate_normalisation(configuration, channels):
         ValueError if an incompatible data value is specified for a normalisation setting.
     """
 
+    
     # Normalisation not required
     if "normalise" not in configuration \
     or configuration["normalise"] == False:
@@ -96,11 +97,13 @@ def _validate_settings(configuration, parameters):
     if "settings" not in configuration:
         configuration["settings"] = {}
 
+    if not isinstance(configuration["settings"], dict):
+        raise TypeError("settings must be a dictionary")
+
     if "walkers" not in configuration["settings"].keys():
         logger.warn("Number of walkers not set (settings.walkers) in model"\
             " configuration file. Setting as {0}".format(2 * len(parameters)))
         configuration["settings"]["walkers"] = 2 * len(parameters)
-
 
     for key in ("burn", "sample", "walkers"):
         value = configuration["settings"][key]
@@ -169,6 +172,7 @@ def _validate_convolve(configuration, channels):
         True if the smoothing settings for this model are specified correctly.
     """ 
 
+
     # Convolution not required
     if "convolve" not in configuration:
         return True
@@ -228,6 +232,7 @@ def _validate_mask(configuration):
         TypeError if the masks are not specified correctly.
     """
 
+    
     # Masks are optional
     if "mask" not in configuration.keys() \
     or configuration["mask"] == False \
@@ -238,8 +243,10 @@ def _validate_mask(configuration):
         raise TypeError("mask must be a list-type of regions")
 
     for region in configuration["mask"]:
-        assert len(region) == 2, "Masks must be a list of regions (e.g. [start,"\
-            " end])"
+        if len(region) != 2:
+            raise TypeError("Masks must be a list of regions (e.g. [start,"\
+                " end])")
+        
         if not isinstance(region[0], (int, float)) \
         or not isinstance(region[1], (int, float)):
             raise TypeError("masks must be a float-type")

@@ -71,3 +71,7 @@ class ModelTest(unittest.TestCase):
 
         # Clean up
         map(os.unlink, [dispersion_filename, model_filename])
+
+
+    def runTest(self):
+        pass

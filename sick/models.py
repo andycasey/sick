@@ -26,6 +26,7 @@ import yaml
 from scipy import interpolate, ndimage, optimize as op
 
 import utils
+import inference
 import specutils
 from validation import validate as model_validate
 
@@ -1143,6 +1144,7 @@ class Model(object):
             [s.flux for s in data], [s.variance for s in data],
             [s.ivariance for s in data])
 
+        threads = self.configuration["settings"]["threads"]
         t_init = time()
         def nlp(t):
             # Fill up parameters
@@ -1154,8 +1156,10 @@ class Model(object):
             else:
                 theta = t
 
-            nlp = -_log_probability(theta, *log_prob_args)
-            #nlp = -inference.log_probability(theta, self, data)
+            if self.cached:
+                nlp = -_log_probability(theta, *log_prob_args)
+            else:
+                nlp = -inference.log_probability(theta, self, data)
             return nlp
 
         def finite_nlp(theta):
@@ -1396,21 +1400,21 @@ class Model(object):
         if proposal_scale != 2:
             logger.info("Using non-standard proposal scale of {0:.2f}".format(proposal_scale))
 
-        args = (self.parameters, self.priors, self.channels,
-            [self.dispersion[c] for c in self.channels], self.configuration["mask"],
-            len(self.grid_points.dtype.names), [s.disp for s in data],
-            [s.flux for s in data], [s.variance for s in data],
-            [s.ivariance for s in data])
+        if self.cached:
+            args = (self.parameters, self.priors, self.channels,
+                [self.dispersion[c] for c in self.channels], 
+                self.configuration["mask"], len(self.grid_points.dtype.names),
+                [s.disp for s in data], [s.flux for s in data],
+                [s.variance for s in data], [s.ivariance for s in data])
+            sampler = emcee.EnsembleSampler(walkers, len(self.parameters),
+                _log_probability, args=args, a=proposal_scale,
+                threads=self.configuration["settings"]["threads"])
 
-        sampler = emcee.EnsembleSampler(walkers, len(self.parameters),
-            _log_probability, args=args, a=proposal_scale,
-            threads=self.configuration["settings"]["threads"])
-        """
-        sampler = emcee.EnsembleSampler(walkers, len(self.parameters),
-            inference.log_probability, args=(self, data), a=proposal_scale,
-            threads=self.configuration["settings"]["walkers"])
-        """
-
+        else:
+            sampler = emcee.EnsembleSampler(walkers, len(self.parameters),
+                inference.log_probability, args=(self, data), a=proposal_scale,
+                threads=self.configuration["settings"]["threads"])
+            
         # Start burning
         t_init = time()
         for i, (pos, lnprob, rstate) in enumerate(sampler.sample(p0, iterations=burn)):
