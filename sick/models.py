@@ -1343,13 +1343,19 @@ class Model(object):
 
                 # Evaluate the rule
                 rule = self.configuration["initial_walker_widths"][parameter]
-                try:
-                    widths[i] = eval(rule, env)
-                except (TypeError, ValueError):
-                    logger.exception("Exception in evaluating walker width rule"\
-                        " '{0}'. Ignoring rule.".format(rule))
-                else:
+
+                if isinstance(rule, (float, int)):
+                    widths[i] = rule
                     continue
+                else:
+                    try:
+                        widths[i] = eval(rule, env)
+                    except (TypeError, ValueError):
+                        logger.exception("Exception in evaluating walker width rule"\
+                            " '{0}' for parameter {1}. Ignoring rule.".format(rule,
+                                parameter))
+                    else:
+                        continue
 
         return widths
 
