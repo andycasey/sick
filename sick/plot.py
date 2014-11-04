@@ -403,7 +403,7 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
 
 
 def projection(model, data, theta=None, chain=None, n=100, 
-    extents=None, uncertainties=False, fig=None, figsize=None):
+    extents=None, uncertainties=True, fig=None, figsize=None):
     """
     Project the maximum likelihood values and sampled posterior points as 
     spectra.

@@ -75,10 +75,10 @@ class Model(object):
             "memmap_dtype": "double",
             "threads": 1,
             "optimise": True,
-            "burn": 5000,
+            "burn": 1000,
             "independent_samples_for_convergence": 10,
             "sample_until_converged": True,
-            "sample": 5000,
+            "sample": 1000,
             "proposal_scale": 2,
             "check_convergence_frequency": 1000,
             "rescale_interpolator": False,
@@ -114,11 +114,7 @@ class Model(object):
                 self.configuration["settings"]["sample_until_converged"] = True
                 break
 
-        self._memmap_dtype = {
-            "double": np.double,
-            "float": float,
-            "int": int
-        }[self.configuration["settings"]["memmap_dtype"]]
+        self._memmap_dtype = self.configuration["settings"]["memmap_dtype"]
 
         # Regardless of whether the model is cached or not, the dispersion is specified in
         # the same way: channels -> <channel_name> -> dispersion_filename
@@ -1420,7 +1416,9 @@ class Model(object):
             logger.info("Burning for {0} steps (from settings.burn)".format(burn))
         if sample is None:
             sample = self.configuration["settings"]["sample"]
-            logger.info("Sampling for {0} steps (from settings.sample)".format(sample))
+            logger.info("Sampling for{0} {1} steps (from settings.sample)".format(
+                ["", " [at least]"][self.configuration["settings"]["sample_until_converged"]],
+                sample))
 
         if p0 is None:
             # Create p0 from theta
@@ -1461,7 +1459,7 @@ class Model(object):
             
             # Announce progress
             logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f},"\
-                " maximum log probability in last step was {2:.3e}".format(i + 1,
+                " highest log probability in last step was {2:.3e}".format(i + 1,
                 mean_acceptance_fractions[-1], np.max(sampler.lnprobability[:, i])))
             if mean_acceptance_fractions[-1] in (0, 1):
                 raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(
@@ -1486,7 +1484,7 @@ class Model(object):
 
                 # Announce progress
                 logger.info(u"Sampler has finished step {0:.0f} with <a_f> = "\
-                    "{1:.3f}, maximum log probability in last step was {2:.3e}"\
+                    "{1:.3f}, highest log probability in last step was {2:.3e}"\
                     .format(j, mean_acceptance_fractions[-1], 
                         np.max(sampler.lnprobability[:, j - burn])))
                 if mean_acceptance_fractions[-1] in (0, 1):
@@ -1767,12 +1765,9 @@ def _log_likelihood(theta, parameters, channels, model_dispersions,
             additive_variance = 0.
             signal_inverse_variance = observed_ivariances[i]
 
-        #signal_likelihood = -0.5 * ((observed_fluxes[i] - model_flux)**2 \
-        #    * signal_inverse_variance - np.log(signal_inverse_variance))
-
         signal_likelihood = -0.5 * ((observed_fluxes[i] - model_flux)**2 \
-            * signal_inverse_variance)
-
+            * signal_inverse_variance - np.log(signal_inverse_variance))
+        
         # Are we modelling the outliers as well?
         if "Pb" in theta_dict:
             outlier_inverse_variance = 1.0/(theta_dict["Vb"] + observed_variances[i] \

@@ -69,6 +69,7 @@ def default_output_prefix(filenames):
         filenames = [filenames]
     common_prefix, ext = os.path.splitext(os.path.commonprefix(
         map(os.path.basename, filenames)))
+    common_prefix = common_prefix.rstrip("_-") # Stairway to heaven.
     return common_prefix if len(common_prefix) > 0 else "sick"
 
 

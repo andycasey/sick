@@ -308,6 +308,8 @@ def solve(args):
         
         # Determine an initial point
         initial_theta, initial_r_chi_sq = model.initial_theta(spectra)
+        logger.info("Initial theta point with reduced chi_sq = {0:.2f} is {1}"\
+            .format(initial_r_chi_sq, model._dictify_theta(initial_theta)))
 
         # Save metadata about the initial point
         metadata["initial_theta"] = model._dictify_theta(initial_theta)
@@ -469,7 +471,7 @@ def solve(args):
                 logger.info("Created figure {0}".format(autocorrelation_filename))
 
                 # Plot some spectra
-                pp_spectra_plot_filename = output("ml-spectra.{0}".format(args.plot_format))
+                pp_spectra_plot_filename = output("projected-spectra.{0}".format(args.plot_format))
                 fig = sick.plot.projection(model, spectra, chain=sampler.chain)
                 fig.savefig(pp_spectra_plot_filename)
                 logger.info("Created figure {0}".format(pp_spectra_plot_filename))
