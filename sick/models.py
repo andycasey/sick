@@ -1318,7 +1318,8 @@ class Model(object):
             "__builtins__": None,
             "normal": np.random.normal,
             "uniform": np.random.uniform,
-            "abs": abs
+            "abs": abs,
+            "np": np
         }
 
         # Default stretch size is small.
