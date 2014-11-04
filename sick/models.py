@@ -1329,9 +1329,15 @@ class Model(object):
             # this parameter
             if parameter in self.configuration.get("initial_walker_widths", {}):
                 
+                channel = parameter.split(".")[1]
+                observed_channel = data[self.channels.index(channel)]
+
                 # Copy the environment and update with the value
                 env = base_env.copy()
                 env["x"] = value
+                env["mean_flux"] = np.nanmean(observed_channel.flux)
+                env["mean_variance"] = np.nanmean(observed_channel.variance)
+                env["mean_dispersion"] = np.nanmean(observed_channel.disp)
 
                 # Evaluate the rule
                 rule = self.configuration["initial_walker_widths"][parameter]
