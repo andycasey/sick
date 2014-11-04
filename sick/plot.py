@@ -286,10 +286,24 @@ def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
         The acceptance fractions figure.
     """
 
+
+    factor = 2.0
+    lbdim = 0.2 * factor
+    trdim = 0.2 * factor
+    whspace = 0.10
+    dimy = lbdim + factor + trdim
+    dimx = lbdim + factor + trdim
+
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
+
+    lm = lbdim / dimx
+    bm = lbdim / dimy
+    trm = (lbdim + factor) / dimy
+    fig.subplots_adjust(left=lm, bottom=bm, right=trm, top=trm,
+        wspace=whspace, hspace=whspace)
 
     ax.plot(mean_acceptance_fractions, color="k", lw=2)
 
@@ -310,7 +324,7 @@ def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
 
 def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
     """
-    Plot the autocorrelation for each parameter of a sampler chain.
+    Plot the autocorrelation function for each parameter of a sampler chain.
 
     :param chain:
         The sampled parameter values.
@@ -344,10 +358,23 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
         tuple or None
     """
 
+    factor = 2.0
+    lbdim = 0.2 * factor
+    trdim = 0.2 * factor
+    whspace = 0.10
+    dimy = lbdim + factor + trdim
+    dimx = lbdim + factor + trdim
+
     if fig is None:
         fig, ax = plt.subplots(figsize=figsize)
     else:
         ax = fig.axes[0]
+
+    lm = lbdim / dimx
+    bm = lbdim / dimy
+    trm = (lbdim + factor) / dimy
+    fig.subplots_adjust(left=lm, bottom=bm, right=trm, top=trm,
+        wspace=whspace, hspace=whspace)
 
     # Calculate the autocorrelation function for each parameter
     num_parameters = chain.shape[2]
@@ -360,9 +387,15 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
         else:
             ax.plot(rho, "k", lw=2)
 
+    ax.xaxis.set_major_locator(MaxNLocator(5))
+    [l.set_rotation(45) for l in ax.get_xticklabels()]
+    
+    ax.set_yticks([-0.5, 0, 0.5, 1.0])
+    [l.set_rotation(45) for l in ax.get_yticklabels()]
+
     ax.axhline(0, color="k")
     ax.set_xlim(0, limit if limit is not None else chain.shape[1]/2)
-    ax.set_ylim(-1, 1)
+    ax.set_ylim(-0.5, 1)
     ax.set_ylabel("$\\rho$")
     ax.set_xlabel("Step")
 
@@ -370,7 +403,7 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
 
 
 def projection(model, data, theta=None, chain=None, n=100, 
-    extents=None, uncertainties=True, fig=None, figsize=None):
+    extents=None, uncertainties=False, fig=None, figsize=None):
     """
     Project the maximum likelihood values and sampled posterior points as 
     spectra.

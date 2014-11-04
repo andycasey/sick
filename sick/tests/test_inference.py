@@ -85,18 +85,17 @@ class InferenceTest(unittest.TestCase):
             ["sick-spectrum-{0}.fits".format(c) for c in self.model.channels])
 
         # Now let's solve for the model parameters
-        optimised_theta, optimised_r_chi_sq, optimised_info = model.optimise(data)
+        optimised_theta, optimised_r_chi_sq, optimised_info = model.optimise(
+            data, fixed=["z.{}".format(c) for c in model.channels])
 
-        # Start sampling with the default walker widths for initialisation
-        # Do this in serial, just for fun
-        model.configuration["settings"]["threads"] = 1
         posteriors, sampler, info = model.infer(data, theta=optimised_theta)
 
         # Plot the chains
         fig = sick.plot.chains(info["chain"],
-            labels=sick.utils.latexify(model.parameters), burn_in=1000,
+            labels=sick.utils.latexify(model.parameters),
+            burn_in=model.configuration["settings"]["burn"],
             truths=[truth[p] for p in model.parameters])
-        fig.savefig("chains.pdf")
+        fig.savefig("chains-api.pdf")
 
         # Make a corner plot with just the parameters of interest
         psi_len = len(model.grid_points.dtype.names)
@@ -105,27 +104,27 @@ class InferenceTest(unittest.TestCase):
             labels=sick.utils.latexify(model.grid_points.dtype.names), 
             truths=[truth[p] for p in model.parameters[:psi_len]],
             quantiles=[.16, .50, .84], verbose=False)
-        fig.savefig("inference.pdf")
+        fig.savefig("inference-api.pdf")
 
         # Make a corner plot with *all* of the model parameters
         fig = sick.plot.corner(sampler.chain.reshape(-1, len(model.parameters)),
             labels=sick.utils.latexify(model.parameters), 
             truths=[truth[p] for p in model.parameters],
             quantiles=[.16, .50, .84], verbose=False)
-        fig.savefig("inference-all.pdf")
+        fig.savefig("inference-all-api.pdf")
 
         # Make a projection plot
         fig = sick.plot.projection(model, data, chain=sampler.chain)
-        fig.savefig("projection.pdf")
+        fig.savefig("projection-api.pdf")
 
         # Make an auto-correlation plot
         fig = sick.plot.autocorrelation(sampler.chain)
-        fig.savefig("autocorrelation.pdf")
+        fig.savefig("autocorrelation-api.pdf")
 
         # Make a mean acceptance fraction plot
         fig = sick.plot.acceptance_fractions(info["mean_acceptance_fractions"],
             burn_in=model.configuration["settings"]["burn"])
-        fig.savefig("acceptance.pdf")
+        fig.savefig("acceptance-api.pdf")
 
 
     def test_cli(self):
@@ -149,7 +148,9 @@ class InferenceTest(unittest.TestCase):
 
         # Remove the plots we produced
         filenames = ["chains.pdf", "inference.pdf", "acceptance.pdf",
-            "inference-all.pdf", "projection.pdf", "autocorrelation.pdf"]
+            "inference-all.pdf", "projection.pdf", "autocorrelation.pdf",
+            "chains-api.pdf", "inference-api.pdf", "acceptance-api.pdf",
+            "inference-all-api.pdf", "projection-api.pdf", "autocorrelation-api.pdf"]
         filenames.extend(glob("sick-spectrum-blue*"))
 
         # Remove the model filenames

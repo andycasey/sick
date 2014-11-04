@@ -389,8 +389,8 @@ def solve(args):
                 "final_mean_acceptance_fraction": info["mean_acceptance_fractions"][-1],
                 "model_configuration": model.configuration
             })
-            for channel, length in info["autocorrelation_lengths"].iteritems():
-                metadata["acor_{}".format(channel)] = length
+            for channel, length in info["autocorrelation_times"].iteritems():
+                metadata["tau_{}".format(channel)] = length
 
             walkers = model.configuration["settings"]["walkers"]
             chain_length = info["chain"].shape[0] * info["chain"].shape[1]

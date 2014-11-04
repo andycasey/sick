@@ -30,6 +30,8 @@ import inference
 import specutils
 from validation import validate as model_validate
 
+import matplotlib.pyplot as plt
+
 logger = logging.getLogger("sick")
 
 _sick_interpolator_ = None
@@ -74,8 +76,9 @@ class Model(object):
             "threads": 1,
             "optimise": True,
             "burn": 5000,
+            "independent_samples_for_convergence": 10,
             "sample_until_converged": True,
-            "sample": 10000,
+            "sample": 5000,
             "proposal_scale": 2,
             "check_convergence_frequency": 1000,
             "rescale_interpolator": False,
@@ -97,8 +100,25 @@ class Model(object):
         
         # Load the model filename
         with open(filename, "r") as fp:
-            self.configuration = utils.update_recursively(
-                self._default_configuration_.copy(), parse(fp))
+            content = parse(fp)
+
+        self.configuration = utils.update_recursively(
+            self._default_configuration_.copy(), content)
+
+        assert_naive_behaviour = False
+        for key in ("walkers", "sample", "burn"):
+            if key not in content.get("settings", {}):
+                logger.info("Sampler will continue until ~{0:.0f} independent "\
+                    "samples have been made.".format(
+                        self.configuration["settings"]["independent_samples_for_convergence"]))
+                self.configuration["settings"]["sample_until_converged"] = True
+                break
+
+        self._memmap_dtype = {
+            "double": np.double,
+            "float": float,
+            "int": int
+        }[self.configuration["settings"]["memmap_dtype"]]
 
         # Regardless of whether the model is cached or not, the dispersion is specified in
         # the same way: channels -> <channel_name> -> dispersion_filename
@@ -109,7 +129,9 @@ class Model(object):
             self.dispersion = {}
             for channel, dispersion_filename in self.configuration["cached_channels"].iteritems():
                 if channel not in ("points_filename", "flux_filename"):
-                    self.dispersion[channel] = load_model_data(dispersion_filename["dispersion_filename"])
+                    self.dispersion[channel] = load_model_data(
+                        dispersion_filename["dispersion_filename"],
+                        dtype=self._memmap_dtype)
 
             # Grid points must be pickled data so that the parameter names are known
             with open(self.configuration["cached_channels"]["points_filename"], "rb") as fp:
@@ -130,7 +152,8 @@ class Model(object):
                 
                 logger.debug("Loading cached flux")
                 fluxes = load_model_data(
-                    self.configuration["cached_channels"]["flux_filename"]).reshape((num_points, -1))
+                    self.configuration["cached_channels"]["flux_filename"],
+                    dtype=self._memmap_dtype).reshape((num_points, -1))
 
             else:
                 # We are expecting flux filenames in each channel (this is less efficient)
@@ -141,7 +164,9 @@ class Model(object):
                         logger.warn("Missing flux filename for {0} channel".format(channel))
                         missing_flux_filenames.append(channel)
                         continue
-                    fluxes.append(load_model_data(self.configuration["cached_channels"][channel]["flux_filename"]).reshape((num_points, -1)))
+                    fluxes.append(load_model_data(
+                        self.configuration["cached_channels"][channel]["flux_filename"],
+                        dtype=self._memmap_dtype).reshape((num_points, -1)))
 
                 fluxes = fluxes[0] if len(fluxes) == 1 else np.hstack(fluxes)
 
@@ -176,7 +201,9 @@ class Model(object):
             self.dispersion = {}
             for channel, dispersion_filename in self.configuration["channels"].iteritems():
                 if channel not in ("points_filename", "flux_filename"):
-                    self.dispersion[channel] = load_model_data(dispersion_filename["dispersion_filename"])
+                    self.dispersion[channel] = load_model_data(
+                        dispersion_filename["dispersion_filename"],
+                        dtype=self._memmap_dtype)
 
             
             self.grid_points = None
@@ -209,7 +236,8 @@ class Model(object):
                         self.channels[0], len(self.grid_points), channel, len(points)))
                        
                 # Check the first model flux to ensure it's the same length as the dispersion array
-                first_point_flux = load_model_data(matched_filenames[0])
+                first_point_flux = load_model_data(matched_filenames[0],
+                    dtype=self._memmap_dtype)
                 if len(first_point_flux) != len(self.dispersion[channel]):
                     raise ValueError("number of dispersion ({0}) and flux ({1}) points in {2} "
                         "channel do not match".format(len(self.dispersion[channel]),
@@ -460,8 +488,8 @@ class Model(object):
 
 
     def cache(self, grid_points_filename, flux_filename, dispersion_filenames=None,
-        wavelengths=None, smoothing_kernels=None, sampling_rate=None, clobber=False,
-        threads=1, verbose=False):
+        wavelengths=None, smoothing_kernels=None, sampling_rate=None, 
+        memmap_dtype=None, clobber=False, threads=1, verbose=False):
         """
         Cache the model for faster read access at runtime.
 
@@ -505,6 +533,10 @@ class Model(object):
 
         :type sampling_rate:
             dict
+
+        :param memmap_dtype: [optional]
+            The parameter type to use for caching the grid. If not provided, the
+            dtype will be taking from the configuration (settings.mammap_dtype).
 
         :param clobber: [optional]
             Clobber existing grid point, dispersion and flux filenames if they exist.
@@ -572,6 +604,9 @@ class Model(object):
         if smoothing_kernels is None:
             smoothing_kernels = {}
 
+        if memmap_dtype is None:
+            memmap_dtype = self.configuration["settings"]["memmap_dtype"]
+
         if verbose:
             current_level = logger.getEffectiveLevel()
             logger.setLevel(logging.DEBUG)
@@ -602,7 +637,7 @@ class Model(object):
             pickle.dump(self.grid_points, fp)
 
         # Create empty memmap
-        fluxes = np.memmap(flux_filename, dtype=np.double, mode="w+",
+        fluxes = np.memmap(flux_filename, dtype=memmap_dtype, mode="w+",
             shape=(n_points, np.sum(n_pixels)))
 
         processes = []
@@ -624,12 +659,12 @@ class Model(object):
             if threads > 1:
                 processes.append(pool.apply_async(_cache_model_point,
                     args=(i, filenames, n_pixels, wavelength_indices, smoothing_kernels,
-                        sampling_rate, mean_dispersion_diffs)))
+                        sampling_rate, mean_dispersion_diffs,)))
 
             else:
                 index, flux = _cache_model_point(i, filenames, n_pixels,
                     wavelength_indices, smoothing_kernels, sampling_rate,
-                    mean_dispersion_diffs)
+                    mean_dispersion_diffs, memmap_dtype)
                 fluxes[index, :] = flux
 
         if threads > 1:
@@ -648,7 +683,8 @@ class Model(object):
             for channel, dispersion_filename in dispersion_filenames.iteritems():
                 si, ei = wavelength_indices[channel]
 
-                disp = np.memmap(dispersion_filename, dtype=np.double, mode="w+",
+                disp = np.memmap(dispersion_filename, dtype=memmap_dtype,
+                    mode="w+",
                     shape=self.dispersion[channel][si:ei:sampling_rate[channel]].shape)
                 disp[:] = np.ascontiguousarray(self.dispersion[channel][si:ei:sampling_rate[channel]],
                     dtype=np.double)
@@ -706,7 +742,9 @@ class Model(object):
         """
 
         # Single flux file assumed
-        intensities = load_model_data(self.configuration["cached_channels"]["flux_filename"])\
+        intensities = load_model_data(
+            self.configuration["cached_channels"]["flux_filename"],
+            dtype=self._memmap_dtype)\
             .reshape((self.grid_points.size, -1))
 
         readable_point = lambda x: ", ".join(["{0} = {1:.2f}".format(p, v) \
@@ -899,7 +937,8 @@ class Model(object):
                 p[indices, :], fluxes[indices, :], point.T).flatten()    
         else:
             fluxes = load_model_data(
-                self.configuration["cached_channels"]["flux_filename"]).reshape(size, -1)
+                self.configuration["cached_channels"]["flux_filename"],
+                dtype=self._memmap_dtype).reshape(size, -1)
             interpolated_flux = interpolate.griddata(
                 p[indices, :], fluxes[indices, :], point.T).flatten()    
             del fluxes
@@ -1434,53 +1473,68 @@ class Model(object):
         logger.info("Resetting chain...")
         sampler.reset()
 
-        converged = None
+        total_steps, production_steps = burn, 0
+        converged, lnprob, rstate = None, None, None
+        max_parameter_len = max(map(len, self.parameters))
+        independent = self.configuration["settings"]["independent_samples_for_convergence"]
         while True:
+
             logger.info("Sampling posterior for {0} steps...".format(sample))
-            for j, state in enumerate(sampler.sample(pos, iterations=sample)):
+            for j, (pos, lnprob, rstate) in enumerate(sampler.sample(pos, 
+                lnprob0=lnprob, rstate0=rstate, iterations=sample), start=total_steps):
                 mean_acceptance_fractions.append(np.mean(sampler.acceptance_fraction))
 
                 # Announce progress
-                logger.info(u"Sampler has finished step {0:.0f} with <a_f> = {1:.3f},"\
-                    " maximum log probability in last step was {2:.3e}".format(j + i + 2,
-                    mean_acceptance_fractions[-1], np.max(sampler.lnprobability[:, j])))
+                logger.info(u"Sampler has finished step {0:.0f} with <a_f> = "\
+                    "{1:.3f}, maximum log probability in last step was {2:.3e}"\
+                    .format(j, mean_acceptance_fractions[-1], 
+                        np.max(sampler.lnprobability[:, j - burn])))
                 if mean_acceptance_fractions[-1] in (0, 1):
-                    raise RuntimeError("mean acceptance fraction is {0:.0f}!".format(
-                        mean_acceptance_fractions[i]))
+                    raise RuntimeError("mean acceptance fraction is {0:.0f}!"\
+                        .format(mean_acceptance_fractions[-1]))
+
+            total_steps += sample
+            production_steps = total_steps - burn
 
             # Estimate auto-correlation times for all parameters.
-            logger.info("Auto-correlation lengths:")
-            acor_lengths = []
-            max_parameter_len = max(map(len, self.parameters))
-            for i, parameter in enumerate(self.parameters):
-                try:
-                    acor_time = acor.acor(np.mean(sampler.chain[:, :, i], axis=0))
-                except:
-                    logger.exception("Error in calculating auto-correlation length "\
-                        "for parameter {}:".format(parameter))
-                    acor_time = [np.inf]
+            logger.info("Auto-correlation times from {0} production steps:"\
+                .format(production_steps))
+            try:
+                acor_times = sampler.acor
 
-                is_ok = ["", "[OK]"][sample >= 100 * acor_time[0]]
-                logger.info("  acor({0}): {1:.2f}   {2}".format(
-                    parameter.rjust(max_parameter_len), acor_time[0], is_ok))
-                acor_lengths.append(acor_time[0])
+            except RuntimeError:
+                logger.exception("Auto-correlation times could not be calculated")
+                acor_times = [np.inf] * len(self.parameters)
+
+            for k, (p, a_time) in enumerate(zip(self.parameters, acor_times)):
+                is_ok = ["", "[OK]"][production_steps >= independent * a_time]
+                logger.info("  tau({0}): {1:6.1f} (~{2:3.0f} independent samples)"\
+                    " {3}".format(
+                    p.rjust(max_parameter_len), a_time, production_steps/a_time,
+                        is_ok))
+
+            # Judge convergence.
+            logger.info("Checking for convergence...")
+            converged = (production_steps >= independent * max(acor_times))
+            if converged:
+                logger.info("Achievement unlocked: convergence.")
+                break
 
             else:
-                # Judge convergence.
-                logger.info("Checking for convergence...")
-                converged = (sample >= 100 * max(acor_lengths))
-
-                if converged:
-                    logger.info("Achievement unlocked: convergence.")
-                    break
-
+                if self.configuration["settings"]["sample_until_converged"]:
+                    sample = self.configuration["settings"]["check_convergence_frequency"]
+                    logger.info("Convergence not achieved. Sampling for another"\
+                        " {0} steps".format(sample))
+                    continue
                 else:
-                    logger.warn("Convergence may not be achieved.")
-                    break
+                    logger.warn("Convergence may not be achieved!")
+
+                break
                     
         # Concatenate the existing chain and lnprobability with the posterior samples
         chain = np.concatenate([chain, sampler.chain], axis=1)
-        lnprobability = np.concatenate([lnprobability, sampler.lnprobability], axis=1)
+        lnprobability = np.concatenate([lnprobability, sampler.lnprobability],
+            axis=1)
 
         # Get the ML theta and calculate chi-sq values
         ml_index = np.argmax(lnprobability.reshape(-1))
@@ -1492,23 +1546,27 @@ class Model(object):
         for parameter_name, ml_value, (map_value, quantile_84, quantile_16) \
         in zip(self.parameters, ml_values, 
             map(lambda v: (v[2], v[2]-v[1], v[0]-v[1]),
-                zip(*np.percentile(sampler.chain.reshape(-1, len(self.parameters)), [16, 50, 84], axis=0)))):
+                zip(*np.percentile(sampler.chain.reshape(-1, len(self.parameters)),
+                    [16, 50, 84], axis=0)))):
             posteriors[parameter_name] = (ml_value, quantile_84, quantile_16)
 
             # Transform redshift posteriors to velocity posteriors
             if parameter_name[:2] == "z.":
-                posteriors["v_rad." + parameter_name[2:]] = list(np.array(posteriors[parameter_name]) * 299792458e-3)
+                posteriors["v_rad." + parameter_name[2:]] = \
+                    list(np.array(posteriors[parameter_name]) * 299792.458)
 
-        # Send back additional information
         info = {
             "chain": chain,
             "lnprobability": lnprobability,
+            "walkers": walkers,
+            "burn_steps": burn,
+            "production_steps": production_steps,
             "converged": converged,
             "mean_acceptance_fractions": np.array(mean_acceptance_fractions),
             "time_elapsed": time() - t_init,
             "chi_sq": chi_sq,
             "reduced_chi_sq": r_chi_sq,
-            "autocorrelation_lengths": dict(zip(self.parameters, acor_lengths))
+            "autocorrelation_times": dict(zip(self.parameters, acor_times))
         }
         return (posteriors, sampler, info)
 
@@ -1709,8 +1767,11 @@ def _log_likelihood(theta, parameters, channels, model_dispersions,
             additive_variance = 0.
             signal_inverse_variance = observed_ivariances[i]
 
+        #signal_likelihood = -0.5 * ((observed_fluxes[i] - model_flux)**2 \
+        #    * signal_inverse_variance - np.log(signal_inverse_variance))
+
         signal_likelihood = -0.5 * ((observed_fluxes[i] - model_flux)**2 \
-            * signal_inverse_variance - np.log(signal_inverse_variance))
+            * signal_inverse_variance)
 
         # Are we modelling the outliers as well?
         if "Pb" in theta_dict:
@@ -1778,7 +1839,6 @@ def load_model_data(filename, **kwargs):
 
     elif extension == "memmap":
         kwargs.setdefault("mode", "c")
-        kwargs.setdefault("dtype", np.double)
         data = np.memmap(filename, **kwargs)
 
     else:
@@ -1787,7 +1847,7 @@ def load_model_data(filename, **kwargs):
 
 
 def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
-    smoothing_kernels, sampling_rate, mean_dispersion_diffs):
+    smoothing_kernels, sampling_rate, mean_dispersion_diffs, memmap_dtype):
 
     logger.debug("Caching point {0}: {1}".format(index, 
         ", ".join(map(os.path.basename, filenames.values()))))
@@ -1799,7 +1859,7 @@ def _cache_model_point(index, filenames, num_pixels, wavelength_indices,
 
         # Get the flux
         si, ei = wavelength_indices[channel]
-        channel_flux = load_model_data(flux_filename)
+        channel_flux = load_model_data(flux_filename, dtype=memmap_dtype)
 
         # Do we need to convolve it first?
         if channel in smoothing_kernels:

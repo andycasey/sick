@@ -124,7 +124,8 @@ def _validate_settings(configuration, parameters):
         raise ValueError("number of walkers must be at least twice the "\
             "number of model parameters")
 
-    if configuration["settings"]["burn"] > configuration["settings"]["sample"]:
+    if configuration["settings"]["burn"] > configuration["settings"]["sample"] \
+    and not configuration["settings"].get("sample_until_converged", False):
         logger.warn("Number of burn-in steps exceeds the production quantity.")
 
     if "threads" in configuration["settings"] \
@@ -246,7 +247,7 @@ def _validate_mask(configuration):
         if len(region) != 2:
             raise TypeError("Masks must be a list of regions (e.g. [start,"\
                 " end])")
-        
+
         if not isinstance(region[0], (int, float)) \
         or not isinstance(region[1], (int, float)):
             raise TypeError("masks must be a float-type")
