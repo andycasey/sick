@@ -737,6 +737,17 @@ class Model(object):
             (dict, float)
         """
 
+        if "initial_theta" in self.configuration:
+            missing_parameters = set(self.parameters).difference(self.configuration["initial_theta"].keys())
+            if len(missing_parameters) > 0:
+                raise KeyError("missing parameter(s) {} for initial_theta".format(", ".join(missing_parameters)))
+                    
+            logger.info("Using initial theta from model configuration: {0}".format(self.configuration["initial_theta"]))
+            full_output = kwargs.pop("full_output", False)
+            if full_output:
+                return (self.configuration["initial_theta"], np.nan, [])
+            return self.configuration["initial_theta"], np.nan
+
         # Single flux file assumed
         intensities = load_model_data(
             self.configuration["cached_channels"]["flux_filename"],
@@ -759,7 +770,10 @@ class Model(object):
             dispersion = self.dispersion[channel]
             si, ei = map(int, map(sum, [num_pixels[:i], num_pixels[:i+1]]))
             logger.debug("Points {0} -> {1} for {2} channel".format(si, ei, channel))
-            continuum_order = self.configuration["normalise"].get(channel, {"order": -1})["order"]
+            if isinstance(self.configuration["normalise"], dict):
+                continuum_order = self.configuration["normalise"].get(channel, {"order": -1})["order"]
+            else:
+                continuum_order = -1
             
             # Any redshift to model?
             if self.configuration["redshift"] == True \
@@ -1481,6 +1495,7 @@ class Model(object):
 
         total_steps, production_steps = burn, 0
         converged, lnprob, rstate = None, None, None
+        max_steps = self.configuration["settings"].get("maximum_steps", -1)
         max_parameter_len = max(map(len, self.parameters))
         independent = self.configuration["settings"]["independent_samples_for_convergence"]
         while True:
@@ -1524,6 +1539,10 @@ class Model(object):
             converged = (production_steps >= independent * max(acor_times))
             if converged:
                 logger.info("Achievement unlocked: convergence.")
+                break
+
+            elif max_steps > 0 and j > max_steps:
+                logger.info("Maximum number of steps made!")
                 break
 
             else:
