@@ -76,7 +76,7 @@ class Model(object):
             "threads": 1,
             "optimise": True,
             "burn": 1000,
-            "independent_samples_for_convergence": 10,
+            "effective_samples_for_convergence": 10,
             "sample_until_converged": True,
             "sample": 1000,
             "proposal_scale": 2,
@@ -108,9 +108,9 @@ class Model(object):
         assert_naive_behaviour = False
         for key in ("walkers", "sample", "burn"):
             if key not in content.get("settings", {}):
-                logger.info("Sampler will continue until ~{0:.0f} independent "\
+                logger.info("Sampler will continue until ~{0:.0f} effective "\
                     "samples have been made.".format(
-                        self.configuration["settings"]["independent_samples_for_convergence"]))
+                        self.configuration["settings"]["effective_samples_for_convergence"]))
                 self.configuration["settings"]["sample_until_converged"] = True
                 break
 
@@ -1497,7 +1497,7 @@ class Model(object):
         converged, lnprob, rstate = None, None, None
         max_steps = self.configuration["settings"].get("maximum_steps", -1)
         max_parameter_len = max(map(len, self.parameters))
-        independent = self.configuration["settings"]["independent_samples_for_convergence"]
+        effective = self.configuration["settings"]["effective_samples_for_convergence"]
         while True:
 
             logger.info("Sampling posterior for {0} steps...".format(sample))
@@ -1528,15 +1528,15 @@ class Model(object):
                 acor_times = [np.inf] * len(self.parameters)
 
             for k, (p, a_time) in enumerate(zip(self.parameters, acor_times)):
-                is_ok = ["", "[OK]"][production_steps >= independent * a_time]
-                logger.info("  tau({0}): {1:6.1f} (~{2:3.0f} independent samples)"\
+                is_ok = ["", "[OK]"][production_steps >= effective * a_time]
+                logger.info("  tau({0}): {1:6.1f} (~{2:3.0f} effective samples)"\
                     " {3}".format(
                     p.rjust(max_parameter_len), a_time, production_steps/a_time,
                         is_ok))
 
             # Judge convergence.
             logger.info("Checking for convergence...")
-            converged = (production_steps >= independent * max(acor_times))
+            converged = (production_steps >= effective * max(acor_times))
             if converged:
                 logger.info("Achievement unlocked: convergence.")
                 break
