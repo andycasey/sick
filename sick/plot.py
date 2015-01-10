@@ -402,8 +402,8 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
     return fig
 
 
-def projection(model, data, theta=None, chain=None, n=100, 
-    extents=None, uncertainties=True, fig=None, figsize=None):
+def projection(model, data, theta=None, chain=None, n=100, extents=None, 
+    uncertainties=True, title=None, fig=None, figsize=None):
     """
     Project the maximum likelihood values and sampled posterior points as 
     spectra.
@@ -439,6 +439,18 @@ def projection(model, data, theta=None, chain=None, n=100,
     
     :type extents:
         tuple or None
+
+    :param uncertainties: [optional]
+        Show uncertainty of the data points.
+
+    :type uncertainties:
+        bool
+
+    :param title: [optional]
+        Title to set for the top axes.
+
+    :type title:
+        str
 
     :param fig: [optional]
         Overplot onto the provided figure object.
@@ -586,6 +598,9 @@ def projection(model, data, theta=None, chain=None, n=100,
         ax.xaxis.set_major_locator(MaxNLocator(5))
         ax.yaxis.set_major_locator(MaxNLocator(5))
         [l.set_rotation(45) for l in ax.get_yticklabels()]
+
+    if title is not None and isinstance(title, (str, unicode)):
+        axes[0].set_title(title)
 
     return fig
 

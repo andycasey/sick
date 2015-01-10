@@ -219,6 +219,141 @@ def _parse_and_load_spectra(args):
     return sources
 
 
+def estimate(args):
+    """
+    Return a point estimate of the model parameters theta given the data.
+    """
+
+    # Make some checks
+    _check_analysis_args(args)
+
+    # Load the model and the data
+    model = sick.models.Model(args.model)
+    all_spectra = _parse_and_load_spectra(args)
+
+    # Display some information about the model
+    logger.info("Model information: {0}".format(model))
+    logger.info("Configuration:")
+    map(logger.info, yaml.dump(model.configuration).split("\n"))
+
+    # Define headers that we want in the results filename 
+    default_headers = ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS",
+        "LONG_OBS", "MAGNITUDE","NAME", "OBJECT", "RO_GAIN", "RO_NOISE", "UTEND",
+        "UTDATE", "UTSTART", )
+    default_metadata = {
+        "model": model.hash, 
+        "input_filenames": ", ".join(args.spectrum_filenames),
+        "sick_version": sick.__version__,
+    }
+
+    if args.read_from_filename:
+        with open(args.spectrum_filenames[0], "r") as fp:
+            all_filenames = map(str.strip, fp.readlines())
+
+    # For each source, solve
+    for i, spectra in enumerate(all_spectra, start=1):
+
+        # Force spectra as a list
+        if not isinstance(spectra, (list, tuple)):
+            spectra = [spectra]
+
+        logger.info("Starting on object #{0} (RA {1}, DEC {2} -- {3})".format(i,
+            spectra[0].headers.get("RA", "None"),
+            spectra[0].headers.get("DEC", "None"),
+            spectra[0].headers.get("OBJECT", "Unknown")))
+
+        # Create metadata and put header information in
+        if args.skip > i - 1:
+            logger.info("Skipping object #{0}".format(i))
+            continue
+
+        if args.number_to_solve != "all" and i > (int(args.number_to_solve) + args.skip):
+            logger.info("We have analysed {0} spectra. Exiting..".format(args.number_to_solve))
+            break
+
+        # If there are many spectra to analyse, include the run ID in the output filenames.
+        # Update filename prefix if we are reading from a file
+        if args.read_from_filename:
+            filename_prefix = sick.utils.default_output_prefix(all_filenames[i].split())
+
+        else:
+            filename_prefix = args.filename_prefix
+
+        if len(all_spectra) > 1 and not args.read_from_filename:
+            output = lambda x: os.path.join(args.output_dir,
+                "-".join([filename_prefix, str(i), x]))
+        else:
+            output = lambda x: os.path.join(args.output_dir,
+                "-".join([filename_prefix, x]))
+
+        # Does a solution already exist for this star? If so are we authorised to clobber it?
+        if os.path.exists(output("estimate.json")):
+            if not args.clobber:
+                logger.info("Skipping object #{0} as a results file already exists"\
+                    " ({1}) and we have been asked not to clobber it".format(i,
+                        output("estimate.json")))
+                continue
+            else:
+                logger.warn("Overwriting existing file {0}".format(output("estimate.json")))
+
+        metadata = {}
+        header_columns = []
+        for header in default_headers:
+            if header not in spectra[0].headers: continue
+            header_columns.append(header)
+            metadata[header] = spectra[0].headers[header]
+
+        metadata.update({"run_id": i})
+        metadata.update(default_metadata)
+        
+        # Determine an initial point
+        try:
+            initial_theta, initial_r_chi_sq = model.initial_theta(spectra)
+
+        except:
+            logger.exception("Failed to get initial point")
+            if args.debug: raise
+            continue
+
+        logger.info("Initial theta point with reduced chi_sq = {0:.2f} is {1}"\
+            .format(initial_r_chi_sq, model._dictify_theta(initial_theta)))
+
+
+        metadata.update(dict(zip(
+            ["mean_snr_{}".format(c) for c in model.channels],
+            [np.nanmean(s.flux/(s.variance**0.5)) for s in spectra])))
+
+        metadata.update({
+            "reduced_chi_sq": initial_r_chi_sq,
+            "model_configuration": model.configuration
+        })
+
+        # Produce a plot projecting the initial value
+        if args.plotting:
+            projected_filename = output("projected-initial-theta.{}".format(
+                args.plot_format))
+
+            # Show physical parameters in the title?
+            title = ", ".join(["{0} = {1:.2f}".format(p, v)
+                for p, v in zip(model.grid_points.dtype.names, initial_theta)])
+
+            fig = sick.plot.projection(model, spectra, theta=initial_theta,
+                title=title)
+            fig.savefig(projected_filename)
+            logger.info("Created figure {}".format(projected_filename))
+            plt.close("all")
+
+        # Write the point estimate to disk
+        logger.info("Saving point estimate to {0}".format(output("estimate.json")))
+        with open(output("estimate.json"), "wb+") as fp:
+            json.dump(metadata, fp, indent=2)
+
+        logger.info("Finished with source {0}".format(i))
+
+    logger.info("Fin.")
+
+
+
 def solve(args):
     """ 
     Calculate posterior distributions for model parameters given the data.
@@ -279,7 +414,7 @@ def solve(args):
         else:
             filename_prefix = args.filename_prefix
 
-        if len(all_spectra) > 1:
+        if len(all_spectra) > 1 and not args.read_from_filename:
             output = lambda x: os.path.join(args.output_dir,
                 "-".join([filename_prefix, str(i), x]))
         else:
@@ -307,7 +442,15 @@ def solve(args):
         metadata.update(default_metadata)
         
         # Determine an initial point
-        initial_theta, initial_r_chi_sq = model.initial_theta(spectra)
+        try:
+            initial_theta, initial_r_chi_sq = model.initial_theta(spectra)
+
+        except:
+            logger.exception("Failed to get initial point")
+            if args.debug: raise
+            continue
+
+
         logger.info("Initial theta point with reduced chi_sq = {0:.2f} is {1}"\
             .format(initial_r_chi_sq, model._dictify_theta(initial_theta)))
 
@@ -604,6 +747,41 @@ def parser(input_args=None):
             "fault) to see what pre-cached models are available.", default="list")
     download_parser.set_defaults(func=download)
 
+    # Create parser for the estimate command
+    estimate_parser = subparsers.add_parser("estimate", parents=[parent_parser],
+        help="Compute a point estimate of the model parameters, given the data.")
+    estimate_parser.add_argument("model", type=str,
+        help="The model filename in YAML- or JSON-style formatting.")
+    estimate_parser.add_argument("-r", action="store_true", dest="read_from_filename",
+        default=False, help="Read input spectra from a single filename.")
+    estimate_parser.add_argument("spectrum_filenames", nargs="+",
+        help="Filenames of (observed) spectroscopic data.")
+    estimate_parser.add_argument("-o", "--output-dir", dest="output_dir", nargs="?",
+        type=str, default=os.getcwd(), help="Directory for output files.")
+    estimate_parser.add_argument("--filename-prefix", "-p", dest="filename_prefix",
+        type=str, help="The filename prefix to use for the output files.")
+    estimate_parser.add_argument("--multi-sources", dest="multiple_sources",
+        action="store_true", default=False, help="Each spectrum is considered "\
+        "a different source.")
+    estimate_parser.add_argument("--multi-plexing", dest="multiplexing",
+        action="store_true", default=False, help="Specify that each FITS file "\
+        "contains a single channel of spectrum for many stars. Multiplexing "\
+        "implies --multi-sources to be true.")
+    estimate_parser.add_argument("-n", "--number-to-solve", dest="number_to_solve",
+        default="all", help="Specify the number of sources to solve. This is "\
+        "only applicable when --multi-sources or --multi-plexing is used. The "\
+        "default is to solve for %(default)s sources.")
+    estimate_parser.add_argument("-s", "--skip", dest="skip", action="store", 
+        type=int, default=0, help="Number of sources to skip. This is only "\
+        "applicable when --multi-sources or --multi-plexing is used. Default: "\
+        "%(default)s)")
+    estimate_parser.add_argument("--no-plots", dest="plotting", action="store_false",
+        default=True, help="Disable plotting.")
+    estimate_parser.add_argument("--plot-format", "-pf", dest="plot_format", 
+        action="store", type=str, default="pdf", help="Format for output plots"\
+        " (default: %(default)s)")
+    estimate_parser.set_defaults(func=estimate)
+
     # Create parser for the solve command
     solve_parser = subparsers.add_parser("solve", parents=[parent_parser],
         help="Compute posterior probability distributions for the model "\
@@ -689,7 +867,7 @@ def parser(input_args=None):
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
     # Create a default filename prefix based on the input filename arguments
-    if args.command.lower() in ("solve", "optimise", "resume") \
+    if args.command.lower() in ("solve", "estimate", "optimise", "resume") \
     and args.filename_prefix is None:
         args.filename_prefix = sick.utils.default_output_prefix(args.spectrum_filenames)
 
