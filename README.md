@@ -21,13 +21,13 @@ Guides, detailed examples, and documentation for ``sick`` can be found [here](ht
 
 Attribution
 -----------
-Please cite ``Casey (2014, submitted)`` if you find this code useful in your research. The BibTeX entry for the paper is:
+Please cite ``Casey (2015, submitted)`` if you find this code useful in your research. The BibTeX entry for the paper is:
 
     @article{sick,
        author = {{Casey}, A.~R.},
         title = {sick: the spectroscopic inference crank},
       journal = {submitted},
-         year = 2014,
+         year = 2015,
     }
     
 This code relies on the excellent [``emcee``](https://github.com/dfm/emcee) package, which you should also cite. If you use any pre-cached models available through the ``sick download`` command then please ensure you cite the appropriate works that originally published the spectra.
@@ -42,5 +42,5 @@ Contributions are warmly welcomed. To contribute to the code base please [fork t
 
 License
 -------
-Copyright 2014, Andrew R. Casey. ``sick`` is free software released under the MIT License. See the ``LICENSE`` file for more details.
+Copyright 2015, Andrew R. Casey. ``sick`` is free software released under the MIT License. See the ``LICENSE`` file for more details.
 
