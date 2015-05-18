@@ -1,4 +1,5 @@
-# coding: utf-8
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 """ Convenient plotting functions """
 
@@ -10,13 +11,14 @@ __author__ = ("Triangle.py (corner) was written by Dan Foreman-Mackey, and "
 
 __all__ = ["chains", "corner", "projection"]
 
+import random
 import logging
 import numpy as np
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
-import acor
+import emcee
 from triangle import corner
 
 import specutils
@@ -232,6 +234,8 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     trm = (lbdim + height) / dimy
     fig.subplots_adjust(left=lm, bottom=bm, right=trm, top=trm,
         wspace=whspace, hspace=whspace)
+    if K == 1:
+        axes = [axes]
 
     for k, ax in enumerate(axes):
 
@@ -319,10 +323,13 @@ def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
 
     ax.set_xlabel("Step")
     ax.set_ylabel("$\langle{}a_f\\rangle$")
+    fig.tight_layout()
+
     return fig
 
 
-def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
+def autocorrelation(chain, index=0, burn_in=None, limit=None, fig=None, 
+    figsize=None):
     """
     Plot the autocorrelation function for each parameter of a sampler chain.
 
@@ -380,12 +387,15 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
     num_parameters = chain.shape[2]
     for i in xrange(num_parameters):
         try:
-            rho = acor.function(np.mean(chain[:, index:, i], axis=0))
+            rho = emcee.autocorr.function(np.mean(chain[:, index:, i], axis=0))
         except RuntimeError:
             logger.exception("Error in calculating auto-correlation function "\
                 "for parameter index {}".format(i))
         else:
-            ax.plot(rho, "k", lw=2)
+            ax.plot(rho, "k", lw=1)
+
+    if burn_in:
+        ax.axvline(burn_in, linestyle=":", color="k")
 
     ax.xaxis.set_major_locator(MaxNLocator(5))
     [l.set_rotation(45) for l in ax.get_xticklabels()]
@@ -394,15 +404,134 @@ def autocorrelation(chain, index=0, limit=None, fig=None, figsize=None):
     [l.set_rotation(45) for l in ax.get_yticklabels()]
 
     ax.axhline(0, color="k")
-    ax.set_xlim(0, limit if limit is not None else chain.shape[1]/2)
-    ax.set_ylim(-0.5, 1)
-    ax.set_ylabel("$\\rho$")
-    ax.set_xlabel("Step")
+    ax.set_xlim(0, limit if limit is not None else chain.shape[1] - index)
+    ax.set_xlabel("$\\tau$")
+    ax.set_ylabel("Auto-correlation")
+
+    fig.tight_layout()
 
     return fig
 
 
-def projection(model, data, theta=None, chain=None, n=100, extents=None, 
+def spectrum(data, model_flux=None, **kwargs):
+
+    diag = 0.015
+
+    if not isinstance(data, (tuple, list)):
+        data = [data]
+
+    data = sorted(data, key=lambda s: s.disp[0])
+    if model_flux is None: model_flux = [None] * len(data)
+
+    N = len(data)
+    figsize = kwargs.pop("figsize", (20, 5))
+    fig, axes = plt.subplots(1, N, figsize=figsize)
+    if N == 1: axes = [axes]
+
+    for i, (ax, obs, mod) in enumerate(zip(axes, data, model_flux)):
+        ax.plot(obs.disp, obs.flux, c="k")
+        ax.fill_between(obs.disp,
+            obs.flux - obs.variance**0.5,
+            obs.flux + obs.variance**0.5,
+            facecolor="#cccccc", edgecolor="#666666", zorder=-1)
+
+        if mod is not None:
+            ax.plot(obs.disp, mod, c='r', zorder=100)
+
+        ax.set_xlim(obs.disp[0], obs.disp[-1])
+        ax.xaxis.set_major_locator(MaxNLocator(5))
+
+        if i == 0:
+            ax.set_ylabel("Flux")
+            ax.yaxis.set_major_locator(MaxNLocator(5))
+
+        if N > 1:
+            if i > 0:
+                # Put LHS break marks in.
+                kwargs = dict(transform=ax.transAxes, color="k", clip_on=False)
+                ax.plot((-diag, +diag), (  - diag,   + diag), **kwargs)
+                ax.plot((-diag, +diag), (1 - diag, 1 + diag), **kwargs)
+
+            if i != N - 1:
+                # Put RHS break marks in.
+                kwargs = dict(transform=ax.transAxes, color="k", clip_on=False)
+                ax.plot((1 - diag, 1 + diag), (1 - diag, 1 + diag), **kwargs) 
+                ax.plot((1 - diag, 1 + diag), (  - diag,   + diag), **kwargs)
+
+            # Control spines depending on which axes it is
+            if i == 0:
+                ax.yaxis.tick_left() 
+                ax.spines["right"].set_visible(False)
+
+            elif i > 0 and i != N - 1:
+                ax.yaxis.set_tick_params(size=0)
+                ax.tick_params(labelleft='off')
+                ax.spines["left"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+
+            else:
+                ax.yaxis.tick_right()
+                ax.tick_params(labelleft='off')
+                ax.spines["left"].set_visible(False)
+
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_axis_off()
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.text(0.5, 0.05, "Wavelength (${\\rm \AA{}}$)", rotation='horizontal',
+        horizontalalignment='center', verticalalignment='center')
+    fig.tight_layout()
+    fig.subplots_adjust(wspace=0.02, bottom=0.15)
+
+    return fig
+
+
+def projection(data, model, theta=None, chains=None, n=100, **kwargs):
+
+    # Projections can be made either by providing a theta, or providing chains
+    # and n
+    if not isinstance(data, (tuple, list)):
+        data = [data]
+
+    if theta is None and chains is None:
+        raise ValueError("at least theta or chains must not be None")
+
+    if theta is not None and chains is not None:
+        raise ValueError("only theta or chains must not be None (not both)")
+
+    if chains is not None and 0 > n:
+        raise ValueError("n must be a positive integer when chains are given")
+
+
+    if theta is not None:
+        # Generate flux at theta.
+        model_flux = model(data=data, theta=theta)
+        fig = spectrum(data, model_flux=model_flux)
+
+    else:
+        # Draw thetas from the chains.
+        fig = spectrum(data, **kwargs)
+
+        thetas = chains.reshape(-1, len(model.parameters))[
+            np.random.randint(np.multiply(*chains.shape[:2]), size=n)]
+
+        for i, theta in enumerate(thetas):
+            model_fluxes = model(data=data, theta=theta)
+            for ax, observed, model_flux in zip(fig.axes, data, model_fluxes):
+                ax.plot(observed.disp, model_flux, c="#666666", alpha=0.5)
+
+        # Draw the MAP theta.
+        map_theta = np.percentile(chains.reshape(-1, len(model.parameters)), 50,
+            axis=0)
+        model_fluxes = model(data=data, theta=map_theta)
+        for ax, observed, model_flux in zip(fig.axes, data, model_fluxes):
+            ax.plot(observed.disp, model_flux, c="r", lw=2)
+
+    return fig
+
+
+
+def old_projection(model, data, theta=None, chain=None, n=100, extents=None, 
     uncertainties=True, title=None, fig=None, figsize=None):
     """
     Project the maximum likelihood values and sampled posterior points as 

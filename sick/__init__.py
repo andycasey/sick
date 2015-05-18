@@ -1,37 +1,39 @@
-# coding: utf-8
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 """ sick, the spectroscopic inference crank """
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
-__version__ = "0.10.53"
+__version__ = "0.2.0"
 
-__all__ = ["Model", "models", "plot", "specutils", "utils"]
+__all__ = ("models", "plot", "specutils", "utils")
 
 import os
 import logging
-import warnings
 from numpy import RankWarning
+from warnings import simplefilter
 
 # It pains me to have to do this.
 if not os.environ.get("DISPLAY", False):
-    import matplotlib
-    matplotlib.use("Agg")
+    from matplotlib import use
+    use("Agg")
 
-# sick modules, bro.
-import models
-import plot
-import specutils
-import utils
-from models import Model
+import models, plot, specutils
 
 # Here I set the default logging level to WARN because -- unless explicitly told
 # otherwise -- we don't want the logger to display everything when the API is 
 # being used. When the command-line interface is used we will overwrite this
 # configuration and set the level to INFO or DEBUG, depending on specified
 # verbosity.
-logging.basicConfig(level=logging.WARN, 
+
+# For the moment we will DEBUG ALL THE THINGS.
+logging.basicConfig(level=logging.DEBUG, 
     format="%(asctime)s [%(levelname)s] %(message)s")
+
+# TODO: Set as warn.
+#logging.basicConfig(level=logging.WARN, 
+#    format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sick")
 
 # Suppress "polyfit may be poorly conditioned" messages
-warnings.simplefilter("ignore", RankWarning)
+simplefilter("ignore", RankWarning)

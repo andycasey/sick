@@ -15,13 +15,13 @@ except ImportError:
 major, minor1, minor2, release, serial =  sys.version_info
 open_kwargs = {"encoding": "utf-8"} if major >= 3 else {}
 
-def readfile(filename):
+def rf(filename):
     with open(filename, **open_kwargs) as fp:
         contents = fp.read()
     return contents
 
 version_regex = re.compile("__version__ = \"(.*?)\"")
-contents = readfile(os.path.join(
+contents = rf(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "sick", "__init__.py"))
 
@@ -31,14 +31,21 @@ setup(name="sick",
     version=version,
     author="Andrew R. Casey",
     author_email="arc@ast.cam.ac.uk",
-    packages=["sick", "sick.tests"],
+    packages=[
+        "sick",
+        "sick.models",
+        "sick.clis",
+        "sick.specutils"],#"sick.tests"],
     url="http://www.github.com/andycasey/sick/",
     license="MIT",
     description="Infer astrophysical parameters from spectra",
-    long_description=readfile(os.path.join(os.path.dirname(__file__), "README.md")),
-    install_requires=readfile(
-        os.path.join(os.path.dirname(__file__), "requirements.txt")).split("\n"),
+    long_description=rf(os.path.join(os.path.dirname(__file__), "README.md")),
+    install_requires=rf(
+        os.path.join(os.path.dirname(__file__), "requirements.md")).split("\n"),
     entry_points={
-        "console_scripts": ["sick = sick.cli:main"]
+        "console_scripts": [
+            "sick-models = sick.clis.models:main",
+            "sick = sick.clis.run:main"
+        ]
     }
 )
