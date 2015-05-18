@@ -70,7 +70,7 @@ def log_prior(theta, model):
             log_prior += f(value)
 
     logging.debug("Returning log prior of {0:.2e} for parameters: {1}".format(
-        log_prior, ", ".join(["{0} = {1:.2e}".format(name, value) \
+        log_prior, ", ".join(["{0} = {1:+.2e}".format(name, value) \
             for name, value in zip(model.parameters, theta)])))
     return log_prior
 
@@ -107,8 +107,7 @@ def log_likelihood(theta, model, data):
 
     theta_dict = dict(zip(model.parameters, theta))
     try:
-        model_fluxes, model_continua = model(data=data,
-            full_output=True, **theta_dict)
+        model_fluxes = model(data=data, **theta_dict)
     except ValueError:
         return -np.inf
 
@@ -124,8 +123,11 @@ def log_likelihood(theta, model, data):
             additional_noise = 0.
             signal_inverse_variance = observed_spectrum.ivariance
 
+        #signal_likelihood = -0.5 * ((observed_spectrum.flux - model_flux)**2 \
+        #    * signal_inverse_variance - np.log(signal_inverse_variance))
+
         signal_likelihood = -0.5 * ((observed_spectrum.flux - model_flux)**2 \
-            * signal_inverse_variance - np.log(signal_inverse_variance))
+            * signal_inverse_variance)
 
         # Are we modelling the outliers as well?
         if "Pb" in theta_dict:
@@ -145,12 +147,15 @@ def log_likelihood(theta, model, data):
             likelihood += np.sum(signal_likelihood[finite])
         num_finite_pixels += finite.sum()
 
-    if likelihood == 0:
+    if num_finite_pixels < 15120:
+        raise a
+
+    if num_finite_pixels == 0:
         return -np.inf
 
     logger.debug("Returning log-likelihood of {0:.2e} with {1:.0f} pixels for "\
         "parameters: {2}".format(likelihood, num_finite_pixels, 
-            ", ".join(["{0} = {1:.2e}".format(name, value) \
+            ", ".join(["{0} = {1:+.2e}".format(name, value) \
                 for name, value in theta_dict.iteritems()])))  
     return likelihood
 

@@ -471,7 +471,7 @@ def solve(args):
         if model.configuration["settings"]["optimise"]:
             optimised_theta, optimised_r_chi_sq, info = model.optimise(
                 spectra, initial_theta=initial_theta, 
-                fixed=["z.{}".format(c) for c in model.channels])
+                fixed=["z"] + ["z.{}".format(c) for c in model.channels])
 
             logger.info("Optimised theta is {0}".format(model._dictify_theta(optimised_theta)))
             walker_theta = optimised_theta

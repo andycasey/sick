@@ -16,6 +16,8 @@ import os
 import numpy as np
 import pyfits
 
+import scipy.sparse
+
 logger = logging.getLogger(__name__.split(".")[0])
 
 
@@ -261,7 +263,6 @@ def cross_correlate_multiple(template_dispersion, template_fluxes,
 
     observed_flux = np.interp(dispersion, observed_spectrum.disp,
         observed_spectrum.flux, left=np.nan, right=np.nan)
-
     non_finite = ~np.isfinite(observed_flux)
     observed_flux[non_finite] = np.interp(dispersion[non_finite],
         dispersion[~non_finite], observed_flux[~non_finite])
@@ -316,8 +317,11 @@ def cross_correlate_multiple(template_dispersion, template_fluxes,
         ccf -= ccf.min()
         ccf *= (h/ccf.max())
 
-        best = z_array[ccf.argmax()]    
-        err = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.35482)**2
+        best = z_array[ccf.argmax()]
+        try:
+            err = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.35482)**2
+        except ValueError:
+            err = np.nan
 
         z[i] = best
         z_err[i] = err
@@ -414,3 +418,162 @@ def cross_correlate(template, observed):
     z_err = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.35482)**2
 
     return (z_best, z_err, h)
+
+
+def rebinner(lam0, lam, resolution):
+    resol0 = 100000
+    assert (resolution<resol0)
+    
+    fwhms = lam/resolution
+    fwhms0 = lam/resol0
+    
+    sigs = (fwhms**2-fwhms0**2)/2.65
+    thresh = 5 # 5 sigma
+    l0 = len(lam0)
+    l = len(lam)
+    xs= []
+    ys= []
+    vals= []
+    for i in range(len(lam)):
+        curlam = lam[i]
+        cursig = sigs[i]
+        curl0= curlam  - thresh*cursig
+        curl1= curlam  + thresh*cursig
+        left = np.searchsorted(lam0, curl0)
+        right = np.searchsorted(lam0, curl1)
+        curx = np.arange(left, right + 1)
+        curvals = scipy.stats.norm.pdf(lam0[curx], curlam, cursig)
+        curvals = curvals/curvals.sum()
+        ys.append(i + curx * 0)
+        xs.append(curx)
+        vals.append(curvals)
+    xs= np.concatenate(xs)
+    ys= np.concatenate(ys)
+    vals= np.concatenate(vals)
+    
+    mat = scipy.sparse.coo_matrix((vals,(xs,ys)), shape=(len(lam0),len(lam)))
+    mat = mat.tocsc()
+    return mat
+
+
+def resample_and_convolve(old_dispersion, new_dispersion, new_resolution,
+    old_resolution=100000):
+
+    assert old_resolution > new_resolution
+
+    fwhms_new = new_dispersion/new_resolution
+    fwhms_old = new_dispersion/old_resolution
+
+    threshold = 5 # +/- how many sigmas
+    sigmas = (fwhms_new**2 - fwhms_old**2)/(2 * np.sqrt(2 * np.log(2)))
+
+    values = []
+    x_indices = []
+    y_indices = []
+
+    for i, (current_lambda, current_sigma) \
+    in enumerate(zip(new_dispersion, sigmas)):
+
+        pos_left  = current_lambda - threshold * current_sigma
+        pos_right = current_lambda + threshold * current_sigma
+
+        left, right = np.clip(
+            np.searchsorted(old_dispersion, [pos_left, pos_right]) + [0, 1],
+            0, old_dispersion.size - 1)
+
+        current_indices = np.arange(left, right)
+        current_values = stats.norm.pdf(old_dispersion[current_indices], 
+            current_lambda, current_sigma)
+        current_values /= current_values.sum()
+
+        values.append(current_values)
+        y_indices.append(i * np.ones(current_indices.size, dtype=int))
+        x_indices.append(current_indices)
+
+    x_indices, y_indices, values = map(np.concatenate,
+        [x_indices, y_indices, values])
+    
+    return scipy.sparse.coo_matrix((values, (x_indices, y_indices)),
+        shape=(old_dispersion.size, new_dispersion.size)).tocsc()
+ 
+
+
+
+def fast_resample(old_dispersion, new_dispersion):
+
+    indices = np.digitize(new_dispersion, old_dispersion)
+    mat = scipy.sparse.lil_matrix(
+        (new_dispersion.size, old_dispersion.size), dtype=float)
+    for i in range(indices.size - 1):
+        divisor = np.ptp(indices[i:i + 2])
+        value = 1./divisor if divisor > 0 else np.nan
+        mat[i, indices[i]:indices[i + 1]] = value
+    return mat.T
+
+    # scipy.sparse.csc_matrix((data, (model_dispersion, obs_dispersion)),
+    #    shape=(old_dispersion.size, new_dispersion.size))
+
+
+    #[model_dispersion[indices[i]:indices[i+1]] for i in range(indices.size - 1)]
+
+
+def resample(old_dispersion, new_dispersion):
+    """
+    Resample a spectrum to a new dispersion map while conserving total flux.
+
+    :param old_dispersion:
+        The original dispersion array.
+
+    :type old_dispersion:
+        :class:`numpy.array`
+
+    :param new_dispersion:
+        The new dispersion array to resample onto.
+
+    :type new_dispersion:
+        :class:`numpy.array`
+    """
+
+    data = []
+    old_px_indices = []
+    new_px_indices = []
+    for i, new_wl_i in enumerate(new_dispersion):
+
+        # These indices should span just over the new wavelength pixel.
+        indices = np.unique(np.clip(
+            old_dispersion.searchsorted(new_dispersion[i:i + 2], side="left") \
+                + [-1, +1], 0, old_dispersion.size - 1))
+        N = np.ptp(indices)
+
+        if N == 0:
+            # 'Fake' pixel.
+            data.append(np.nan)
+            new_px_indices.append(i)
+            old_px_indices.extend(indices)
+            continue
+
+        # Sanity checks.
+        assert (old_dispersion[indices[0]] <= new_wl_i \
+            or indices[0] == 0)
+        assert (new_wl_i <= old_dispersion[indices[1]] \
+            or indices[1] == old_dispersion.size - 1)
+
+        fractions = np.ones(N)
+
+        # Edges are handled as fractions between rebinned pixels.
+        _ = np.clip(i + 1, 0, new_dispersion.size - 1)
+        lhs = old_dispersion[indices[0]:indices[0] + 2]
+        rhs = old_dispersion[indices[-1] - 1:indices[-1] + 1]
+        fractions[0]  = (lhs[1] - new_dispersion[i])/np.ptp(lhs)
+        fractions[-1] = (new_dispersion[_] - rhs[0])/np.ptp(rhs)
+
+        # Being binned to a single pixel. Prevent overflow from fringe cases.
+        fractions = np.clip(fractions, 0, 1)
+        fractions /= fractions.sum()
+
+        data.extend(fractions) 
+        new_px_indices.extend([i] * N) # Mark the new pixel indices affected.
+        old_px_indices.extend(np.arange(*indices)) # And the old pixel indices.
+
+    return scipy.sparse.csc_matrix((data, (old_px_indices, new_px_indices)),
+        shape=(old_dispersion.size, new_dispersion.size))

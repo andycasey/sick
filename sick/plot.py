@@ -482,11 +482,11 @@ def projection(model, data, theta=None, chain=None, n=100, extents=None,
 
     K = len(data)
 
-    factor = 3.0
+    factor = 2.0
     lbdim = 0.5 * factor
     trdim = 0.2 * factor
     whspace = 0.10
-    width = np.max([len(each.disp) for each in data])/150.
+    width = np.max([len(each.disp) for each in data])/500.
     height = factor*K + factor * (K - 1.) * whspace
     dimy = lbdim + height + trdim
     dimx = lbdim + width + trdim
@@ -549,10 +549,10 @@ def projection(model, data, theta=None, chain=None, n=100, extents=None,
         if n > 0:
             for sampled_flux in sampled_fluxes:
                 ax.plot(observed_spectrum.disp, sampled_flux[k], color="r",
-                    zorder=10)
+                    alpha=0.5, zorder=90)
 
         # Draw the ML spectra
-        ax.plot(observed_spectrum.disp, map_flux, color="r", lw=2)
+        ax.plot(observed_spectrum.disp, map_flux, color="r", lw=2, zorder=100)
 
         # Plot the data
         if uncertainties:
@@ -576,12 +576,14 @@ def projection(model, data, theta=None, chain=None, n=100, extents=None,
 
             indices = observed_spectrum.disp.searchsorted(x_extent)
             finite_flux = observed_spectrum.flux[indices[0]:indices[1]]
+
             if len(finite_flux) > 0:
-                y_extent = [
-                    0.9 * np.min(finite_flux[np.isfinite(finite_flux)]),
-                    1.1 * np.max(finite_flux[np.isfinite(finite_flux)])
-                ]
-                ax.set_ylim(y_extent)
+                #y_extent = [
+                #    0.9 * np.min(finite_flux[np.isfinite(finite_flux)]),
+                #    1.1 * np.max(finite_flux[np.isfinite(finite_flux)])
+                #]
+                ax.set_ylim([0.9, 1.1] * np.percentile(finite_flux[np.isfinite(finite_flux)], [0.5, 99.5]))
+
             ax.set_xlim(x_extent)
 
         else:
@@ -598,6 +600,7 @@ def projection(model, data, theta=None, chain=None, n=100, extents=None,
         ax.xaxis.set_major_locator(MaxNLocator(5))
         ax.yaxis.set_major_locator(MaxNLocator(5))
         [l.set_rotation(45) for l in ax.get_yticklabels()]
+
 
     if title is not None and isinstance(title, (str, unicode)):
         axes[0].set_title(title)
