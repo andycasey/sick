@@ -18,9 +18,6 @@ from .. import specutils
 
 logger = logging.getLogger("sick")
 
-_generate_wavelengths_ = None
-_generate_intensities_ = None
-
 class InterpolationModel(Model):
 
     def _initialise_approximator(self, closest_theta=None,
@@ -76,7 +73,8 @@ class InterpolationModel(Model):
         mask *= self._model_mask()
 
         # Slice small part of the intensities grid.
-        intensities = np.memmap(self._configuration["model_grid"]["intensities"],
+        intensities = np.memmap(
+            self._configuration["model_grid"]["intensities"],
             dtype="float32", mode="c", shape=(N, self.wavelengths.size))
         subset = np.copy(intensities[grid_indices, :])
         subset[:, ~mask] = np.nan

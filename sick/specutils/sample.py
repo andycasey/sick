@@ -54,7 +54,7 @@ def resample_and_convolve(old_wavelengths, new_wavelengths, new_resolution,
         shape=(M, N))
 
 
-def _slow_resample(old_wavelengths, new_wavelengths):
+def resample(old_wavelengths, new_wavelengths):
     """
     Resample a spectrum to a new wavelengths map while conserving total flux.
 
@@ -116,7 +116,7 @@ def _slow_resample(old_wavelengths, new_wavelengths):
         shape=(old_wavelengths.size, new_wavelengths.size))
 
 
-def resample(old_wavelengths, new_wavelengths):
+def _fast_resample(old_wavelengths, new_wavelengths):
 
     # Map which pixels go to which index, assuming that the from_wavelengths
     # scale is linear.

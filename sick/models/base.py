@@ -259,10 +259,22 @@ class BaseModel(object):
 
         return matched_channel_names
 
+    @property
+    def _faux_data(self):
+
+        data = []
+        for i, pixels in enumerate(self.meta["channel_sizes"]):
+            si = np.sum(self.meta["channel_sizes"][:i])
+
+            data.append(specutils.Spectrum1D(disp=self.wavelengths[si:si+pixels],
+                flux=np.ones(pixels) * np.nan))
+
+        return data
+
 
     def _format_data(self, data):
         return sorted(data if isinstance(data, (list, tuple)) \
-            else [data], lambda x: x.disp[0])
+            else [data], key=lambda x: x.disp[0])
 
     def _apply_data_mask(self, data):
         """
@@ -341,7 +353,7 @@ class BaseModel(object):
                         for _ in ("resolution_{}", "f_{}", "z_{}")]))
                 
                 ignore_parameters.extend(["continuum_{0}_{1}".format(channel, i)\
-                    for i in self._configuration["model"]["continuum"][channel]])
+                    for i in range(self._configuration["model"]["continuum"][channel])])
 
         if ignore_parameters:
             logger.warn("Ignoring the following model parameters because there "

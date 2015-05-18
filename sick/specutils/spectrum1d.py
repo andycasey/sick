@@ -59,15 +59,15 @@ class Spectrum1D(object):
         
         self.disp = disp
         self.flux = flux
-        self.variance = variance
+        if variance is None:
+            self.variance = self.flux.copy()
+        else:
+            self.variance = np.array(variance)
 
         unphysical_flux = 0 >= flux
         self.flux[unphysical_flux] = np.nan
         self.variance[unphysical_flux] = np.nan
 
-        if self.variance is None:
-            # Assumed to be Poisson
-            self.variance = self.flux.copy()
         self.ivariance = 1.0/self.variance
         if headers is not None:
             self.headers = headers

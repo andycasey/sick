@@ -17,7 +17,7 @@ c = speed_of_light.to("km/s").value
 
 def cross_correlate(observed, template_dispersion, template_fluxes,
     rebin="template", wavelength_range=None, continuum_degree=-1,
-    apodize=0.10, rescale=True, full_output=False):
+    apodize=0.10, rescale=False, full_output=False):
     """
     Cross-correlate the observed spectrum against template fluxes.
     """
@@ -42,13 +42,15 @@ def cross_correlate(observed, template_dispersion, template_fluxes,
         template_flux = template_fluxes \
             * resample(template_dispersion, observed.disp)
         observed_flux = observed.flux.copy()
+        observed_ivar = observed.ivariance.copy()
 
     elif rebin.lower() == "observed":
         # Put the observed fluxes onto the template dispersion map.
         dispersion = template_dispersion
         template_flux = template_fluxes
-        observed_flux = observed.flux.copy() \
-            * resample(observed.disp, template_dispersion)
+        mat = resample(observed.disp, template_dispersion)
+        observed_flux = observed.flux.copy() * mat
+        observed_ivar = observed.ivariance.copy() * mat
         
     else:
         raise ValueError("rebin must be either `template` or `observed`")
@@ -65,19 +67,32 @@ def cross_correlate(observed, template_dispersion, template_fluxes,
         template_flux = template_flux[indices[0]:indices[1]]
         observed_flux = observed_flux[indices[0]:indices[1]]
 
+    N_templates = template_fluxes.shape[0]
+
+    # Clip out the non-finite edges, if they exist.
+    _ = np.where(np.isfinite(template_flux[0] * observed_flux))[0]
+    l_idx, u_idx = _[0], _[-1]
+
+    dispersion = dispersion[l_idx:u_idx]
+    observed_flux = observed_flux[l_idx:u_idx]
+    observed_ivar = observed_ivar[l_idx:u_idx]
+    template_flux = template_flux[:, l_idx:u_idx]
+
+
     # Ensure an even number of points.
-    N = dispersion.size
+    N = u_idx - l_idx
     N = N - 1 if N % 2 > 0 else N
     dispersion = dispersion[:N]
     observed_flux = observed_flux[:N]
+    observed_ivar = observed_ivar[:N]
     template_flux = template_flux[:, :N]
-
-    N_templates = template_fluxes.shape[0]
 
     # Interpolate over non-finite pixels.
     finite = np.isfinite(observed_flux)
-    observed_flux[~finite] = np.interp(dispersion[~finite],
-        dispersion[finite], observed_flux[finite])
+    observed_flux[~finite] = np.interp(dispersion[~finite], dispersion[finite],
+        observed_flux[finite])
+    finite = np.isfinite(observed_ivar)
+    observed_flux[~finite] = 1e-8
 
     # Continuum.
     if continuum_degree >= 0:

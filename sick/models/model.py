@@ -66,14 +66,15 @@ class Model(BaseModel):
             [np.nanmedian(spec.flux/(spec.variance**0.5)) for spec in data]))
         median_snr.pop(None, None) # Remove unmatched data spectra
 
-        matched_channel_with_peak_snr = max(median_snr, key=median_snr.get)
+        ccf_channel = self._configuration.get("settings", {}).get("ccf_channel",
+            max(median_snr, key=median_snr.get))
+        logger.debug("Channel with peak SNR is {0}".format(ccf_channel))
 
         # Are there *any* continuum parameters in any matched channel?
         any_continuum_parameters = any(map(lambda s: s.startswith("continuum_"),
             set(self.parameters).difference(ignore_parameters)))
 
-        # [TODO]: Data CCF mask.
-        # [TODO]: Model CCF mask.
+        # [TODO]: Model mask.
 
         theta = {} # Dictionary for the estimated model parameters.
         best_grid_index = None
@@ -87,7 +88,7 @@ class Model(BaseModel):
             #   and this channel is the highest S/N.
             if "z_{}".format(matched_channel) in self.parameters \
             or ((any_continuum_parameters or "z" in self.parameters) \
-            and matched_channel == matched_channel_with_peak_snr):
+            and matched_channel == ccf_channel):
 
                 # Get the continuum degree for this channel.
                 continuum_degree = self._configuration["model"].get("continuum",
@@ -97,39 +98,44 @@ class Model(BaseModel):
                     "degree of {1}".format(matched_channel, continuum_degree))
 
                 # Get model wavelength indices that match the data.
-                idx = np.clip(self.wavelengths.searchsorted(
-                    [spectrum.disp[0], spectrum.disp[-1]]) + [0, 1],
+                idx = np.clip(self.wavelengths[self._model_mask()].searchsorted(
+                    [spectrum.disp[0], spectrum.disp[-1]]),
                     0, self.wavelengths.size)
 
                 # Do the cross-correlation for this channel.
                 # TODO: apply CCF mask.
+
                 v, v_err, R = spectrum.cross_correlate(
-                    (self.wavelengths[idx[0]:idx[1]],
-                    intensities[:, idx[0]:idx[1]]),
+                    (self.wavelengths[self._model_mask()][idx[0]:idx[1]],
+                    intensities[:, self._model_mask()][:, idx[0]:idx[1]]),
                     continuum_degree=continuum_degree)
 
+                # Apply limits:
+                #lower, upper = -500, 500
+                #R[~((upper > v) * (v > lower))] = np.nan
+
                 # Identify the best point by the CCF peak.
-                best = np.argmax(R)
+                best = np.nanargmax(R)
 
                 # Now, why did we do CCF in this channel? Which model parameters
                 # should be updated?
                 if "z_{}".format(matched_channel) in self.parameters:
                     theta["z_{}".format(matched_channel)] = v[best] / c
-                else: 
-                    # Update astrophysical parameters.
-                    theta.update(dict(zip(grid_points.dtype.names,
-                        grid_points[best])))
-                    best_grid_index = best
-
+                elif "z" in self.parameters: 
                     # If there is a global redshift, update it.
-                    if "z" in self.parameters:
-                        theta["z"] = v[best] / c
+                    theta["z"] = v[best] / c
 
                     # Continuum parameters will be updated later, so that each
                     # channel is checked to see if it has the highest S/N,
                     # otherwise we might be trying to calculate continuum
                     # parameters when we haven't done CCF on the highest S/N
                     # spectra yet.
+
+                if matched_channel == ccf_channel:
+                    # Update astrophysical parameters.
+                    theta.update(dict(zip(grid_points.dtype.names,
+                        grid_points[best])))
+                    best_grid_index = best
 
         # If there are continuum parameters, calculate them from the best point.
         if any_continuum_parameters:
@@ -154,7 +160,7 @@ class Model(BaseModel):
                 z = theta.get("z_{}".format(matched_channel), theta.get("z", 0))
 
                 best_intensities \
-                    = np.copy(intensities[best_grid_index, idx[0]:idx[1]])
+                    = np.copy(intensities[best_grid_index, idx[0]:idx[1]]).flatten()
 
                 # Apply model mask.
                 model_mask = self._model_mask(self.wavelengths[idx[0]:idx[1]])
@@ -169,7 +175,7 @@ class Model(BaseModel):
 
                 coefficients = np.polyfit(
                     spectrum.disp[finite], continuum[finite], continuum_degree,
-                    w=1.0/spectrum.variance[finite])
+                    w=spectrum.ivariance[finite])
 
                 # They go into theta backwards. such that coefficients[-1] is
                 # continuum_{name}_0
@@ -295,6 +301,30 @@ class Model(BaseModel):
         for k, v in _be_positive.items():
             if v < 1:
                 raise ValueError("{} must be a positive integer".format(k))
+
+        # Get the inference keyword arguments.
+        infer_kwargs = self._configuration.get("infer", {}).copy()
+        infer_kwargs.update(kwargs)
+
+        """
+        fixed = infer_kwargs.pop("fixed", {})
+        if fixed:
+            # Remove non-parameters from the 'fixed' keywords.
+            keys = set(fixed).intersection(parameters)
+            # If the 'fixed' value is provided, use that. Otherwise if it is
+            # None then use the initial_theta value.
+            fixed = dict(zip(keys, 
+                [(fixed[k], initial_theta.get(k, None))[fixed[k] is None] \
+                    for k in keys]))
+
+            logger.info("Fixing keyword arguments (these will not be inferred)"\
+                ": {}".format(fixed))
+
+        # Remove fixed parameters from the parameters to be optimised
+        #parameters = list(set(parameters).difference(fixed))
+        parameters = [p for p in parameters if p not in fixed]
+        """
+
 
         # Initial proposal could be:
         #   - an array (N_walkers, N_dimensions)
@@ -655,8 +685,15 @@ class Model(BaseModel):
         if not isinstance(theta, dict):
             theta = dict(zip(self.parameters, theta))
 
-        model_wavelengths, model_intensities, model_variances \
-            = self._approximate_intensities(theta, data, debug=debug, **kwargs)
+        if "__intensities" in kwargs:
+            logger.debug("Using __intensities")
+            model_wavelengths = self.wavelengths
+            model_intensities = kwargs.pop("__intensities")
+            model_variances = 0
+
+        else:
+            model_wavelengths, model_intensities, model_variances \
+                = self._approximate_intensities(theta, data, debug=debug, **kwargs)
 
         model_fluxes = []
         model_flux_variances = []
@@ -686,6 +723,7 @@ class Model(BaseModel):
 
                 channel_fluxes = model_intensities * matrix
                 channel_variance = model_variances * matrix
+
 
             else:
                 t = time()

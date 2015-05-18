@@ -93,9 +93,9 @@ def create(output_prefix, grid_flux_filename, wavelength_filenames,
     channel_wavelengths = np.array(map(load_simple_data, wavelength_filenames))
 
     # Sort the channels by starting wavelength.
-    channel_indices = np.argsort([each.min() for each in channel_wavelengths])
-    channel_names = np.array(grid_flux_tbl.colnames)[str_columns][channel_indices]
-    channel_wavelengths = channel_wavelengths[channel_indices]
+    c_indices = np.argsort([each.min() for each in channel_wavelengths])
+    channel_names = np.array(grid_flux_tbl.colnames)[str_columns][c_indices]
+    channel_wavelengths = channel_wavelengths[c_indices]
     channel_sizes = [len(_) for _ in channel_wavelengths]
     num_pixels = sum(channel_sizes)
 
