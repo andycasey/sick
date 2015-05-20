@@ -155,6 +155,30 @@ def parser(input_args=None):
     return args
 
 
+def _announce_theta(theta):
+    """
+    Announce theta values to the log.
+    """
+
+    c = 299792.458 # km/s
+    is_a_redshift = lambda p: p == "z" or p[:2] == "z_"
+
+    for parameter, value in theta.items():
+        if isinstance(value, (int, float)):
+            message = "\t{0}: {1:.3f}".format(parameter, value)
+            if is_a_redshift(parameter):
+                message += " [{0:.1f} km/s]".format(value * c)
+
+        else:
+            # (MAP, u_pos, u_neg)
+            message = "\t{0}: {1:.3f} ({2:+.3f}, {3:+.3f})".format(parameter,
+                value[0], value[1], value[2])
+            if is_a_redshift(parameter):
+                message += " [{0:.1f} ({1:+.1f}, {2:+.1f}) km/s]".format(
+                    parameter, value[0] * c, value[1] * c, value[2] * c)
+        logger.info(message)
+
+
 def _prefix(args, f):
     return os.path.join(args.output_dir, "-".join([args.filename_prefix, f]))
 
@@ -261,7 +285,7 @@ def estimate(args, **kwargs):
         raise
 
     logger.info("Estimated model parameters are:")
-    map(logger.info, ["\t{0}: {1:.3f}".format(p, v) for p, v in theta.items()])
+    _announce_theta(theta)
     logger.info("With a chi-sq value of {0:.1f} (reduced {1:.1f}; DOF {2:.1f})"\
         .format(chisq, chisq/dof, dof))
 
@@ -285,6 +309,7 @@ def estimate(args, **kwargs):
     # Write the result to file.
     _write_output(_prefix(args, "estimate.yaml"), metadata)
     return None
+
 
 
 def optimise(args, **kwargs):
@@ -327,7 +352,7 @@ def optimise(args, **kwargs):
     }
 
     logger.info("Optimised model parameters are:")
-    map(logger.info, ["\t{0}: {1:.3f}".format(p, v) for p, v in theta.items()])
+    _announce_theta(theta)
     logger.info("With a chi-sq value of {0:.1f} (reduced {1:.1f}; DOF {2:.1f})"\
         .format(chisq, chisq/dof, dof))
 
@@ -384,9 +409,8 @@ def infer(args):
     }
 
     logger.info("Inferred parameters are:")
-    map(logger.info, ["\t{0}: {1:.3f} ({2:+.3f}, {3:+.3f})".format(
-        p, v[0], v[1], v[2]) for p, v in theta.items()])
-
+    _announce_theta(theta)
+    
     # Write the results to file.
     _write_output(_prefix(args, "inferred.yaml"), metadata)
 
