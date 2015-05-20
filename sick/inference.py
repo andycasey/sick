@@ -34,8 +34,8 @@ def ln_likelihood(theta, model, data, debug=False):
     try:
         # Setting debug to True means it will re-raise any exceptions when
         # trying to approximate spectra from the grid.
-        model_fluxes, model_variances, channels = model(theta, data, debug=True,
-            full_output=True)
+        model_fluxes, model_variances, channels, continua = model(theta, data,
+            debug=True, full_output=True, __return_continuum=True)
     
     except:
         logger.exception("Returning -inf for {} because the model data couldn't"
@@ -47,29 +47,29 @@ def ln_likelihood(theta, model, data, debug=False):
     # mixture model?
 
     ln_likelihood, sum_pixels = 0, 0
-    for channel, spectrum, model_flux, model_variance \
-    in zip(channels, data, model_fluxes, model_variances):
-        if channel is None: continue # no finite model fluxes
+    for channel, spectrum, model_flux, model_variance, continuum \
+    in zip(channels, data, model_fluxes, model_variances, continua):
+        if channel is None: # no finite model fluxes
+            continue 
 
-        # Is there underestimated variance?
-        variance = spectrum.variance #+ model_variances
-        #logger.info("hallo {0:.2f} {1:.2f}".format(np.nanmean(spectrum.variance), np.nanmean(model_variances)))
+        variance = spectrum.variance + continuum * model_variance
+        # TODO Is there underestimated variance?
         ln_f = theta.get("f", theta.get("f_{}".format(channel), None))
         if ln_f is not None:
             variance += model_flux**2 * np.exp(2.0 * ln_f)
-            inv_var = 1.0/variance
-            noise_model = -np.log(inv_var)
+            ivar = 1.0/variance
 
         else:
-            inv_var, noise_model = 1.0/variance, 0
+            ivar = 1.0/variance
 
         # TODO: outlier modelling
 
         # Calculate likelihoods
-        likelihoods = (model_flux - spectrum.flux)**2* inv_var - noise_model
+        likelihoods = -0.5 * (model_flux - spectrum.flux)**2 * ivar \
+            - 0.5 * np.log(variance)
         pixels = np.isfinite(likelihoods)
 
-        ln_likelihood += -0.5 * np.sum(likelihoods[pixels])
+        ln_likelihood += np.sum(likelihoods[pixels])
         sum_pixels += pixels.sum()
 
     if sum_pixels == 0:
@@ -115,11 +115,13 @@ def ln_prior(theta, model):
     return ln_prior
 
 
-def ln_probability(theta, parameters, model, data, debug=False):
-
-    theta_dict = dict(zip(parameters, theta))
-
+def _ln_probability(theta_dict, model, data, debug):
     prior = ln_prior(theta_dict, model)
     if not np.isfinite(prior):
         return -np.inf
     return prior + ln_likelihood(theta_dict, model, data, debug=debug)
+
+
+def ln_probability(theta, parameters, model, data, debug=False):
+    theta_dict = dict(zip(parameters, theta))
+    return _ln_probability(theta_dict, model, data, debug)
