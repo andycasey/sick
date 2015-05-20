@@ -14,7 +14,10 @@ def Model(filename, **kwargs):
 
     model = BaseModel(filename, **kwargs)
 
-    is_CannonModel = "cannon_coefficients" in model._configuration["model_grid"]
+    _ = model._configuration["model_grid"]
+    is_CannonModel = "cannon_data" in _ \
+        or _.get("model_type", "").lower() == "cannon"
+    
     klass = CannonModel if is_CannonModel else InterpolationModel
-
+    
     return klass(filename, **kwargs)

@@ -353,7 +353,7 @@ class BaseModel(object):
                         for _ in ("resolution_{}", "f_{}", "z_{}")]))
                 
                 ignore_parameters.extend(["continuum_{0}_{1}".format(channel, i)\
-                    for i in range(self._configuration["model"]["continuum"][channel])])
+                    for i in range(self._configuration["model"]["continuum"][channel] + 1)])
 
         if ignore_parameters:
             logger.warn("Ignoring the following model parameters because there "

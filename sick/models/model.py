@@ -25,6 +25,9 @@ logger = logging.getLogger("sick")
 class Model(BaseModel):
 
     def estimate(self, data, full_output=False, **kwargs):
+        return self._estimate(data, full_output, **kwargs)
+
+    def _estimate(self, data, full_output=False, **kwargs):
         """
         Estimate the model parameters, given the data.
         """
@@ -211,6 +214,7 @@ class Model(BaseModel):
                         "Vo": max([np.nanmedian(s.variance) for s in data]),
                     })
 
+        logger.info("Initial estimate: {}".format(theta))
         # Having full_output = True means return the best spectra estimate.
         if full_output:
 
@@ -572,10 +576,10 @@ class Model(BaseModel):
 
         # Create the spectrum approximator/interpolator.
         # TODO: Allow rescale command for the approximator.
-        closest_theta = [initial_theta[p] for p in self.grid_points.dtype.names]
+        closest_point = [initial_theta[p] for p in self.grid_points.dtype.names]
         subset_bounds = self._initialise_approximator(
-            closest_theta=closest_theta, 
-            wavelengths_required=wavelengths_required)
+            closest_point=closest_point, 
+            wavelengths_required=wavelengths_required, **kwargs)
         
         # Get the optimisation keyword arguments.
         op_kwargs = self._configuration.get("optimise", {}).copy()
@@ -654,13 +658,18 @@ class Model(BaseModel):
         x_opt = op.minimise(nlp, p0, **op_kwargs)
 
         # Put the result into a usable form.
-        x_opt_theta = OrderedDict(zip(parameters, x_opt))
+        x_opt_theta_unscaled = OrderedDict(zip(parameters, x_opt))
         # TODO: MAKE SURE THE x_opt_theta IS IN THE SAME ORDER AS MODEL.pARAMETERS
+        x_opt_theta_unscaled.update(fixed)
+
+        if hasattr(self, "_cannon_offsets"):
+            x_opt[:self._cannon_offsets.size] += self._cannon_offsets
+        x_opt_theta = OrderedDict(zip(parameters, x_opt))
         x_opt_theta.update(fixed)
 
         if full_output:
             # Create model fluxes and calculate some metric.
-            chi_sq, dof, model_fluxes = self._chi_sq(x_opt_theta, data)
+            chi_sq, dof, model_fluxes = self._chi_sq(x_opt_theta_unscaled, data)
 
             # Remove any pre-calculated binning matrices.
             if calculate_binning_matrices:
@@ -695,6 +704,7 @@ class Model(BaseModel):
             model_wavelengths, model_intensities, model_variances \
                 = self._approximate_intensities(theta, data, debug=debug, **kwargs)
 
+        continua = []
         model_fluxes = []
         model_flux_variances = []
 
@@ -702,6 +712,7 @@ class Model(BaseModel):
         for i, (channel, spectrum) in enumerate(zip(matched_channels, data)):
             if channel is None:
                 _ = np.nan * np.ones(spectrum.disp.size)
+                continua.append(1.0)
                 model_fluxes.append(_)
                 model_flux_variances.append(_)
                 continue
@@ -736,7 +747,7 @@ class Model(BaseModel):
                         channel_fluxes = np.interp(spectrum.disp,
                             model_wavelengths * (1 + z), model_intensities,
                             left=np.nan, right=np.nan)
-                        if model_variances != 0:
+                        if isinstance(model_variances, (np.ndarray, )):
                             channel_variance = np.interp(spectrum.disp,
                                 model_wavelengths * (1 + z), model_variances,
                                 left=np.nan, right=np.nan)
@@ -768,13 +779,22 @@ class Model(BaseModel):
                 i += 1
 
             if coeffs:
-                channel_fluxes *= np.polyval(coeffs[::-1], spectrum.disp)
+                continuum = np.polyval(coeffs[::-1], spectrum.disp)
+            else:
+                continuum = 1.0
 
+            channel_fluxes *= continuum
+
+            continua.append(continuum)
             model_fluxes.append(channel_fluxes)
             model_flux_variances.append(channel_variance)
 
         # TODO check channel fluxes are not zero at the edges.
         if kwargs.pop("full_output", False):
+            # TODO do we need full_output AND return continuum?
+            if kwargs.pop("__return_continuum", False):
+                return (model_fluxes, model_flux_variances, matched_channels,
+                    continua)
             return (model_fluxes, model_flux_variances, matched_channels)
 
         return model_fluxes

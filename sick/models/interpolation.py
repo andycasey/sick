@@ -20,7 +20,7 @@ logger = logging.getLogger("sick")
 
 class InterpolationModel(Model):
 
-    def _initialise_approximator(self, closest_theta=None,
+    def _initialise_approximator(self, closest_point=None,
         wavelengths_required=None, rescale=True):
         """
         Initialise a spectrum interpolator.
@@ -35,8 +35,8 @@ class InterpolationModel(Model):
         dtype = [(name, '<f8') for name in self.grid_points.dtype.names]
         grid_points = self.grid_points.astype(dtype).view(float).reshape(N, -1)
 
-        # If closest_theta is given then we will slice a small part of the grid.
-        if closest_theta is not None:
+        # If closest_point is given then we will slice a small part of the grid.
+        if closest_point is not None:
 
             default = 1.0
             grid_subset = self._configuration.get("settings", 
@@ -51,7 +51,7 @@ class InterpolationModel(Model):
                 grid_subset))
 
             # Use closest N points.
-            distance = np.sum(np.abs(grid_points - closest_theta)/
+            distance = np.sum(np.abs(grid_points - closest_point)/
                 np.ptp(grid_points, axis=0), axis=1)
             grid_indices = np.argsort(distance)[:grid_subset]
 
