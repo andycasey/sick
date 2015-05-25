@@ -55,12 +55,14 @@ class Model(BaseModel):
                 ignore_parameters))
 
         # Load the intensities
+        t = time()
         s = self.grid_points.size/num_model_comparisons # step size
         grid_points = self.grid_points[::s]
         intensities = np.memmap(
             self._configuration["model_grid"]["intensities"], dtype="float32",
             mode="r", shape=(self.grid_points.size, self.wavelengths.size))[::s]
-
+        logger.debug("Took {:.0f} seconds to load and slice intensities".format(
+            time() - t))
         # Which matched, data channel has the highest S/N?
         # (This channel will be used to estimate astrophysical parameters)
         data, pixels_affected = self._apply_data_mask(data)
@@ -100,16 +102,16 @@ class Model(BaseModel):
                     "degree of {1}".format(matched_channel, continuum_degree))
 
                 # Get model wavelength indices that match the data.
-                idx = np.clip(self.wavelengths[self._model_mask()].searchsorted(
-                    [spectrum.disp[0], spectrum.disp[-1]]),
-                    0, self.wavelengths.size)
+                # get the points that are in the mask, and within the spectrum
+                # limits
 
-                # Do the cross-correlation for this channel.
-                # TODO: apply CCF mask.
+                # TODO: Make this CCF not model mask.
+                idx = np.where(self._model_mask() \
+                    * (self.wavelengths >= spectrum.disp[0]) \
+                    * (spectrum.disp[-1] >= self.wavelengths))[0]
 
                 v, v_err, R = spectrum.cross_correlate(
-                    (self.wavelengths[self._model_mask()][idx[0]:idx[1]],
-                    intensities[:, self._model_mask()][:, idx[0]:idx[1]]),
+                    (self.wavelengths[idx], intensities[:, idx]),
                     continuum_degree=continuum_degree)
 
                 # Apply limits:
@@ -202,7 +204,16 @@ class Model(BaseModel):
                 if parameter == "resolution" \
                 or parameter.startswith("resolution_"):
 
-                    theta.update({ parameter: np.inf })
+                    if parameter.startswith("resolution_"):
+                        spectra = [data[matched_channels.index(
+                            parameter.split("_")[1])]]
+                    else:
+                        spectra = [s for s in data if s is not None]
+
+                    R = [s.disp.mean()/np.diff(s.disp).mean() for s in spectra]
+
+                    # Assume oversampling rate of ~5.
+                    theta.update({ parameter: np.median(R)/5.})
 
                 elif parameter == "f" or parameter.startswith("f_"):
                     theta.update({ parameter: -10.0 }) # Not overestimated.
@@ -336,10 +347,10 @@ class Model(BaseModel):
         logger.info("Creating sampler with {0} walkers and {1} threads".format(
             walkers, threads))
         debug = kwargs.get("debug", False)
-        sampler = emcee.EnsembleSampler(walkers, len(self.parameters),
-            inference.ln_probability, args=(parameters, self, data, debug), a=a,
-            threads=threads)
-        
+        sampler = emcee.EnsembleSampler(walkers, len(parameters),
+            inference.ln_probability, a=a, args=(parameters, self, data, debug),
+            kwargs={"matched_channels": matched_channels}, threads=threads)
+
         # Burn in.
         sampler, burn_acceptance_fractions, pos, lnprob, rstate, burn_elapsed \
             = self._sample(sampler, initial_proposal, burn, descr="burn-in")
@@ -403,7 +414,8 @@ class Model(BaseModel):
         chains = chains[:, :, indices]
 
         # Remove the convolution functions.
-        self._destroy_convolution_functions()
+        if not kwargs.get("__keep_convolution_functions", False):
+            self._destroy_convolution_functions()
 
         if full_output:
             metadata = {
@@ -440,7 +452,6 @@ class Model(BaseModel):
                 raise RuntimeError("mean acceptance fraction is {0:.0f}".format(
                     mean_acceptance_fraction[i]))
 
-            """
             if i % 100 == 0 and i > 0:
                 # Do autocorrelation time.
                 try:
@@ -457,7 +468,7 @@ class Model(BaseModel):
                     print(effective_samples)
                     print("MINIMUM NUMBER OF EFFECTIVE SAMPLES {0:.0f}".format(
                         effective_samples.min()))
-            """
+            
 
         elapsed = time() - t_init
         logger.debug("Sampling{0} took {1:.1f} seconds".format(
@@ -518,7 +529,7 @@ class Model(BaseModel):
         fast_binning = self._configuration.get("settings", {}).get(
             "fast_binning", 1)
 
-        logger.info("Creating convolution functions (fast_binning = {}".format(
+        logger.info("Creating convolution functions (fast_binning = {})".format(
             fast_binning))
 
         convolution_functions = []
@@ -534,7 +545,7 @@ class Model(BaseModel):
 
             # Option 1.
             # Create static binning matrices for each channel.
-            if not redshift_parameters and not resolution_parameters:
+            if not redshift and not resolution:
                 logger.debug("Creating static matrix for channel {0} because "\
                     "no redshift or resolution parameters were found".format(
                         channel))
@@ -563,13 +574,28 @@ class Model(BaseModel):
 
                     # [TODO] Account for the existing spectral resolution of the
                     # grid.
-                    R_scale = spectrum.disp.mean() \
-                        / (2.35482 * np.diff(spectrum.disp).mean())
-                    convolution_function = lambda w, f, z, R, *a: \
-                        np.interp(w, generate.wavelengths[-1] * (1 + z),
-                            gaussian_filter1d(f, max(0, R_scale/R),
-                                mode="constant", cval=np.nan),
-                            left=np.nan, right=np.nan)
+                    if resolution:
+                        R_scale = spectrum.disp.mean() \
+                            / (2.35482 * np.diff(spectrum.disp).mean())
+                        """
+                        convolution_function = lambda w, f, z, R, *a: \
+                            np.interp(w, generate.wavelengths[-1] * (1 + z),
+                                gaussian_filter1d(f, max(0, R_scale/R),
+                                    mode="constant", cval=np.nan),
+                                left=np.nan, right=np.nan)
+                        """
+                        def convolution_function(w, f, z, R, *a):
+                            if R > 0:
+                                _ = gaussian_filter1d(f, R_scale/R)
+                            else:
+                                _ = f
+                            return np.interp(w, generate.wavelengths[-1] * (1 + z),
+                                _, left=np.nan, right=np.nan)
+
+                    else:
+                        convolution_function = lambda w, f, z, *a: \
+                            np.interp(w, generate.wavelengths[-1] * (1 + z), f,
+                                left=np.nan, right=np.nan)
 
                 else:
                     if redshift and not resolution:
@@ -732,7 +758,7 @@ class Model(BaseModel):
             logger.debug("Using __intensities")
             model_wavelengths = self.wavelengths
             model_intensities = kwargs.pop("__intensities")
-            model_variances = 0
+            model_variances = np.zeros_like(model_wavelengths)
 
         else:
             model_wavelengths, model_intensities, model_variances \
@@ -758,11 +784,11 @@ class Model(BaseModel):
             # Get the redshift and resolution.
             z = theta.get("z", theta.get("z_{}".format(channel), 0))
             resolution = theta.get("resolution", theta.get("resolution_{}"\
-                .format(channel), None))
+                .format(channel), 0))
 
-            if no_precomputed_binning:f
+            if no_precomputed_binning:
                 # TODO: Come back to this..
-                if resolution:
+                if resolution > 0:
                     matrix = specutils.sample.resample_and_convolve(
                         self.wavelengths * (1 + z), spectrum.disp,
                         resolution)
@@ -776,14 +802,20 @@ class Model(BaseModel):
 
 
             else:
+
                 # Get the pre-calculated convolution function.
                 # (This will always be a callable)
                 convolution_function = generate.binning_matrices[-1][i]
 
                 channel_fluxes = convolution_function(
-                    spectrum.disp, model_intensities, z, R)
+                    spectrum.disp, model_intensities, z, resolution)
                 channel_variance = convolution_function(
-                    spectrum.disp, model_variances, z, R)
+                    spectrum.disp, model_variances, z, resolution)
+
+                if not np.any(np.isfinite(channel_fluxes)) \
+                and np.any(np.isfinite(model_intensities)):
+                    raise a
+
 
             # Apply continuum if it is present.
             i, coeff = 0, []
@@ -794,6 +826,8 @@ class Model(BaseModel):
             continuum = np.polyval(coeff[::-1], spectrum.disp) if coeff else 1.
 
             channel_fluxes *= continuum
+
+
 
             continua.append(continuum)
             model_fluxes.append(channel_fluxes)

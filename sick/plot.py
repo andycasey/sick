@@ -502,30 +502,31 @@ def projection(data, model, theta=None, chains=None, n=100, **kwargs):
     if chains is not None and 0 > n:
         raise ValueError("n must be a positive integer when chains are given")
 
-
+    parameters = kwargs.get("parameters", None)
+    dictify = lambda t: dict(zip(parameters, t)) if parameters else t
     if theta is not None:
         # Generate flux at theta.
-        model_flux = model(data=data, theta=theta)
+        model_flux = model(data=data, theta=dictify(theta))
         fig = spectrum(data, model_flux=model_flux)
 
     else:
         # Draw thetas from the chains.
         fig = spectrum(data, **kwargs)
 
-        thetas = chains.reshape(-1, len(model.parameters))[
+        thetas = chains.reshape(-1, chains.shape[2])[
             np.random.randint(np.multiply(*chains.shape[:2]), size=n)]
 
         for i, theta in enumerate(thetas):
-            model_fluxes = model(data=data, theta=theta)
+            model_fluxes = model(data=data, theta=dictify(theta))
             for ax, observed, model_flux in zip(fig.axes, data, model_fluxes):
-                ax.plot(observed.disp, model_flux, c="#666666", alpha=0.5)
+                ax.plot(observed.disp, model_flux, c="r", alpha=0.5)
 
         # Draw the MAP theta.
-        map_theta = np.percentile(chains.reshape(-1, len(model.parameters)), 50,
+        map_theta = np.percentile(chains.reshape(-1, chains.shape[2]), 50,
             axis=0)
-        model_fluxes = model(data=data, theta=map_theta)
+        model_fluxes = model(data=data, theta=dictify(map_theta))
         for ax, observed, model_flux in zip(fig.axes, data, model_fluxes):
-            ax.plot(observed.disp, model_flux, c="r", lw=2)
+            ax.plot(observed.disp, model_flux, c="#CE0909", lw=1)
 
     return fig
 

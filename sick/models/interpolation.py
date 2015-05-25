@@ -119,7 +119,7 @@ class InterpolationModel(Model):
             # happens for the initial_theta estimate.
             model_wavelengths = self.wavelengths
             model_intensities = kwargs.pop("__intensities")
-            model_variances = 0
+            model_variances = np.zeros_like(model_wavelengths)
 
         else:
             # Generate intensities at the astrophysical point.   
@@ -131,7 +131,7 @@ class InterpolationModel(Model):
                 func = generate.intensities[-1]
                 model_intensities = func(*[theta.get(p, np.nan) \
                     for p in self.grid_points.dtype.names]).flatten()
-                model_variances = 0
+                model_variances = np.zeros_like(model_wavelengths)
 
             except:
                 if debug: raise

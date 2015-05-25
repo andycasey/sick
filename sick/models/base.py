@@ -544,6 +544,10 @@ class BaseModel(object):
                 0, self.wavelengths.size - 1)
             wavelength_indices.append(indices)
             old_wavelengths = self.wavelengths[indices[0]:indices[1]]
+            logger.debug("Casting {0} channel from [{1:.0f}, {2:.0f}] to "\
+                "[{3:.0f}, {4:.0f}]".format(name,
+                    old_wavelengths[0], old_wavelengths[-1],
+                    new_wavelengths[0], new_wavelengths[-1]))
 
             if spectral_resolution is None \
             or not np.isfinite(spectral_resolution):
@@ -588,6 +592,14 @@ class BaseModel(object):
                 idx = sum(channel_sizes[:j])
                 cast_intensities[i, idx:idx + size] = \
                     np.copy(intensities[i, indices[0]:indices[1]]) * matrix
+
+        """
+        for j, (size, matrix, indices) \
+        in enumerate(zip(channel_sizes, matrices, wavelength_indices)):
+            idx = sum(channel_sizes[:j])
+            cast_intensities[:, idx:idx + size] = \
+                intensities[:, indices[0]:indices[1]] * matrix
+        """
 
         cast_intensities.flush()
         del cast_intensities

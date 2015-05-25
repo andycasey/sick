@@ -399,7 +399,8 @@ def infer(args):
     try:
         theta, chains, lnprobability, acceptance_fractions, sampler, info_dict \
             = model.infer(data, initial_proposal=optimised_theta, 
-                full_output=True, debug=args.debug, **kwargs)
+                full_output=True, debug=args.debug, 
+                __keep_convolution_functions=True,**kwargs)
 
     except:
         logger.exception("Failed to infer model parameters")
@@ -469,9 +470,8 @@ def infer(args):
             .format(_))
 
         if len(model.parameters) > N:
-            fig = sick.plot.corner(chains[:, burn:, :].reshape(
-                -1, len(model.parameters)), labels=labels,
-                truths=truths)
+            fig = sick.plot.corner(chains[:, burn:, :].reshape(-1, len(theta)),
+                labels=labels, truths=truths)
             _ = _prefix(args, "corner-all.{}".format(args.plot_format))
             fig.savefig(_)
             logger.info("Saved corner plot (all parameters) to {}".format(_))
@@ -479,11 +479,14 @@ def infer(args):
         # Projections.
         # Note here we need to scale the chains back to redshift so the data
         # are generated properly.
-        fig = sick.plot.projection(
-            data, model, chains=chains[:, burn:, :]/info_dict["scales"])
+        fig = sick.plot.projection(data, model, 
+            chains=chains[:, burn:, :]/info_dict["scales"],
+            parameters=theta.keys())
         _ = _prefix(args, "projection.{}".format(args.plot_format))
         fig.savefig(_)
         logger.info("Saved projection plot to {}".format(_))
+
+    model._destroy_convolution_functions()
 
     return None
 
