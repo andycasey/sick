@@ -373,6 +373,46 @@ class BaseModel(object):
         return (matched_channels, missing_channels, ignore_parameters)
 
 
+    def _initial_proposal_distribution(self, parameters, theta, size,
+        default_std=1e-4):
+        """
+        Generate an initial proposal distribution around the point theta.
+        """
+
+        missing_parameters = set(parameters).difference(theta)
+        if missing_parameters:
+            raise ValueError("cannot create initial proposal distribution "\
+                "because the following parameters are missing: {}".format(
+                    ", ".join(missing_parameters)))
+
+        std = np.ones(len(parameters), dtype=float)
+        
+        initial_proposal_stds \
+            = self._configuration.get("initial_proposal_stds", {})
+
+        p0 = np.array([theta[p] for p in parameters])
+        std = np.array(map(float, [initial_proposal_stds.get(p, default_std) \
+            for p in parameters]))
+
+        return np.vstack([p0 + std * np.random.normal(size=len(p0)) \
+            for i in range(size)])
+
+
+    def _chi_sq(self, theta, data, **kwargs):
+
+        chi_sq, dof = 0, -1
+        model_fluxes = self(theta, data, **kwargs)
+
+        for spectrum, model_flux in zip(data, model_fluxes):
+            chi_sqi = (spectrum.flux - model_flux)**2 / spectrum.variance
+            finite = np.isfinite(chi_sqi)
+
+            chi_sq += chi_sqi[finite].sum()
+            dof += finite.sum()
+
+        return (chi_sq, dof, model_fluxes)
+
+
     def cast(self, new_model_name, new_channels, output_dir=None, clobber=False,
         **kwargs):
         """
