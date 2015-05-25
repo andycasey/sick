@@ -265,14 +265,11 @@ class BaseModel(object):
 
     @property
     def _faux_data(self):
-
         data = []
-        for i, pixels in enumerate(self.meta["channel_sizes"]):
+        for i, px in enumerate(self.meta["channel_sizes"]):
             si = np.sum(self.meta["channel_sizes"][:i])
-
-            data.append(specutils.Spectrum1D(disp=self.wavelengths[si:si+pixels],
-                flux=np.ones(pixels) * np.nan))
-
+            data.append(specutils.Spectrum1D(disp=self.wavelengths[si:si+px],
+                flux=np.ones(px) * np.nan))
         return data
 
 
