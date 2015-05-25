@@ -300,31 +300,8 @@ class CannonModel(Model):
         # Apply data masks now so we don't have to do it on the fly.
         masked_data, pixels_affected = self._apply_data_mask(data)
 
-        # Pre-create binning matrix factories.
-        calculate_binning_matrices = (not self._configuration.get("settings",
-            {}).get("fast_binning", True)) \
-            or any([p == "z" or p.startswith("z_") for p in fixed])
-        if calculate_binning_matrices:
-            logger.debug("Creating box factories...")
-            matrix_factories = []
-            for channel, spectrum in zip(matched_channels, data):
-                if channel is None:
-                    matrix_factories.append(None)
-                    continue
-
-                # Should it be a BlurryBoxFactory or a BoxFactory?
-                klass = specutils.sample._BlurryBoxFactory if any([p.startswith(
-                    "resolution_") or p == "resolution" for p in parameters]) else \
-                    specutils.sample._BoxFactory
-
-                # If z is fixed then adjust the wavelengths.
-                #fixed_z = fixed.get("z", fixed.get("z_{}".format(channel), 0))
-                # TODO: provide 'old_resolution' metadata.
-                matrix_factories.append(
-                    klass(spectrum.disp, generate.wavelengths[-1]))
-
-            # Make the binning factories globally accessible.
-            generate.binning_matrices.append(matrix_factories)
+        # Prepare the convolution functions.
+        self._create_convolution_functions(matched_channels, data, parameters)
 
         logger.info("Optimising parameters: {0}".format(", ".join(parameters)))
         logger.info("Optimisation keywords: {0}".format(op_kwargs))
@@ -420,10 +397,8 @@ class CannonModel(Model):
             chi_sq, dof, model_fluxes = self._chi_sq(result, data)
             result = (result, chi_sq, dof, model_fluxes)
 
-        # Remove any pre-calculated binning matrices.
-        if calculate_binning_matrices:
-            logger.debug("Removed pre-calculated binning matrices")
-            generate.binning_matrices.pop(-1)
+        # Remove any prepared convolution functions.
+        self._destroy_convolution_functions()
 
         return result
 

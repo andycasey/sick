@@ -14,6 +14,7 @@ from collections import OrderedDict
 import numpy as np
 import emcee
 from astropy.constants import c as speed_of_light
+from scipy.ndimage import gaussian_filter1d
 
 import generate
 from base import BaseModel
@@ -24,10 +25,8 @@ logger = logging.getLogger("sick")
 
 class Model(BaseModel):
 
-    def estimate(self, data, full_output=False, **kwargs):
-        return self._estimate(data, full_output, **kwargs)
 
-    def _estimate(self, data, full_output=False, **kwargs):
+    def estimate(self, data, full_output=False, **kwargs):
         """
         Estimate the model parameters, given the data.
         """
@@ -365,66 +364,8 @@ class Model(BaseModel):
                     "(N_parameters, N_walkers) ({0}, {1})".format(walkers,
                         len(parameters)))
 
-        """
-        # Pre-create binning matrices if redshift and resolution are not to be
-        # optimised.
-        create_binning_matrices = not any([p.startswith("resolution_") or \
-            p.startswith("z_") or p in ("z", "resolution") for p in parameters])
-
-        if create_binning_matrices:
-            logger.debug("Creating rebinning matrices prior to inference")
-
-            # Create binning matrices for each channel.
-            matrices = []
-            for channel, spectrum in zip(matched_channels, data):
-                if channel is None: 
-                    matrices.append(None)
-                    continue
-
-                z = 0 #fixed.get("z", fixed.get("z_{}".format(channel), 0))
-                
-                resolution = None #fixed.get("resolution", fixed.get("resolution_{}"\
-                #    .format(channel), None))
-
-                # TODO: this may be unnecessarily expensive when two channels
-                #       have wavelengths very far from each other.
-                #       (consider splicing to the wavelengths for this channel)
-                if resolution is None:
-                    matrices.append(specutils.sample.resample(
-                        generate.wavelengths[-1] * (1. + z),
-                        spectrum.disp))
-
-                else:
-                    # TODO: get old_resolution from metadata
-                    matrices.append(specutils.sample.resample_and_convolve(
-                        generate.wavelengths[-1] * (1. + z),
-                        spectrum.disp, new_resolution=resolution))
-
-            # Make the binning matrices accessible globally.
-            generate.binning_matrices.append(matrices)
-        """
-        calculate_binning_matrices = not self._configuration.get("settings",
-            {}).get("fast_binning", True)
-        if calculate_binning_matrices:
-            logger.info("Creating box factories...")
-            matrix_factories = []
-            for channel, spectrum in zip(matched_channels, data):
-                if channel is None:
-                    matrix_factories.append(None)
-                    continue
-
-                # Should it be a BlurryBoxFactory or a BoxFactory?
-                klass = specutils.sample._BlurryBoxFactory \
-                    if any([p.startswith("resolution_") or p == "resolution" \
-                        for p in parameters]) \
-                    else specutils.sample._BoxFactory
-
-                # TODO: provide 'old_resolution' metadata.
-                matrix_factories.append(
-                    klass(spectrum.disp, generate.wavelengths[-1]))
-
-            # Make the binning factories globally accessible.
-            generate.binning_matrices.append(matrix_factories)
+        # Prepare the convolution functions.
+        self._create_convolution_functions(matched_channels, data, parameters)
 
         # Check for non-standard proposal scales.
         if a != 2.0:
@@ -500,10 +441,8 @@ class Model(BaseModel):
             for p in self.parameters if p in parameters])
         chains = chains[:, :, indices]
 
-        # Remove any pre-calculated binning matrices.
-        if calculate_binning_matrices:
-            logger.debug("Removed pre-calculated binning matrices")
-            generate.binning_matrices.pop(-1)
+        # Remove the convolution functions.
+        self._destroy_convolution_functions()
 
         if full_output:
             metadata = {
@@ -566,6 +505,149 @@ class Model(BaseModel):
         return (sampler, mean_acceptance_fraction, pos, lnprob, rstate, elapsed)
 
 
+    def _create_convolution_functions(self, matched_channels, data, free_parameters):
+        """
+        Pre-create binning matrix factories. The following options need to be
+        followed on a per-matched channel basis.
+
+        Options here are:
+
+        1) If we have no redshift or resolution parameters to solve for, then
+           we can just produce a matrix that will be multiplied in.
+           Inputs: none
+           Outputs: matrix
+
+        If fast_binning is turned on:
+
+        2) Provide the wavelengths, redshift, resolution (single value) and
+           flux. Returns the convolved, interpolated flux.
+           Inputs: flux, wavelengths (e.g., redshift), resolution
+           Outputs: normalised flux.
+
+        If fast_binning is turned off:
+
+        3) If we *just* have redshift parameters to solve for, then we can
+           produce a _BoxFactory that will take a redshift z and return
+           the matrix
+           [This function will have a LRU cacher and should be removed after]
+           Inputs: redshift
+           Outputs: matrix
+
+        4) If we have redshift parameters and resolution parameters, then we
+           can produce a _BlurryBoxFactory that will take a redshift z and
+           Resolution (or resolution coefficients!) and return a binning matrix
+           [This function will have a LRU cacher and should be removed after]
+           Inputs: redshift, Resolution parameter(s)
+           Outputs: matrix
+
+        5) If we *just* have resolution parameters to solve for, then we 
+           can produce a _BlurryBoxFactory as well, because by default z=0.
+           [This function will have a LRU cacher and should be removed after]
+           Inputs: resolution parameter(s)
+           Outputs: matrix
+
+
+        Because these options require different input/outputs, and the LRU
+        cachers need to remain wrapped around simple functions, we may need a
+
+        Consistent lambda function:
+        lambda(obs_wavelength, obs_flux, z=0, *R)
+        """
+
+        fast_binning = self._configuration.get("settings", {}).get(
+            "fast_binning", 1)
+
+        logger.info("Creating convolution functions (fast_binning = {}".format(
+            fast_binning))
+
+        convolution_functions = []
+        for channel, spectrum in zip(matched_channels, data):
+            if channel is None:
+                convolution_functions.append(None)
+                continue
+
+            # Any redshift or resolution parameters?
+            redshift = "z" in free_parameters \
+                or "z_{}".format(channel) in free_parameters
+            resolution = "resolution_{}".format(channel) in free_parameters
+
+            # Option 1.
+            # Create static binning matrices for each channel.
+            if not redshift_parameters and not resolution_parameters:
+                logger.debug("Creating static matrix for channel {0} because "\
+                    "no redshift or resolution parameters were found".format(
+                        channel))
+
+                # Create the binning matrix based on the globally-scoped array
+                # of wavelengths.
+                matrix = specutils.sample.resample(generate.wavelengths[-1],
+                    spectrum.disp)
+
+                # Wrap in a lambda function to be consistent with other options.
+                convolution_function = lambda w, f, *a: np.dot(f, matrix)
+
+            else:
+
+                # If fast_binning is turned on (default):
+                if fast_binning:
+                    
+                    # Option 2: Convolve with single kernel & interpolate.
+                    # [TODO] should w.mean()/R be squared?
+                    # px_sigma ~= ((w.mean()/R) / 2.35482)/np.diff(w).mean()
+                    # px_scale = ((w.mean()/R) / 2.35)/np.diff(w).mean()
+                    # px_scale = R_scale / R
+
+                    logger.debug("Creating simple convolution & interpolating "\
+                        "function for channel {0}".format(channel))
+
+                    # [TODO] Account for the existing spectral resolution of the
+                    # grid.
+                    R_scale = spectrum.disp.mean() \
+                        / (2.35482 * np.diff(spectrum.disp).mean())
+                    convolution_function = lambda w, f, z, R, *a: \
+                        np.interp(w, generate.wavelengths[-1] * (1 + z),
+                            gaussian_filter1d(f, max(0, R_scale/R),
+                                mode="constant", cval=np.nan),
+                            left=np.nan, right=np.nan)
+
+                else:
+                    if redshift and not resolution:
+                        # Option 3: Produce a _BoxFactory
+                        logger.debug("Producing a Box Factory for convolution "\
+                            "in channel {}".format(channel))
+
+                        matrix = specutils.sample._BoxFactory(
+                            spectrum.disp, generate.wavelengths[-1])
+
+                        # Wrap in a lambda function to be consistent.
+                        convolution_function = lambda w, f, z, *a: f * matrix(z)
+
+                    else:
+                        # Could be redshift and resolution, or just resolution.
+                        # Options 4 and 5: Produce a _BlurryBoxFactory
+                        logger.debug("Producing a Blurry Box Factory for "\
+                            "convolution in channel {}".format(channel))
+
+                        matrix = specutils.sample._BlurryBoxFactory(
+                            spectrum.disp, generate.wavelengths[-1])
+
+                        # Wrap in a lambda function to be consistent.
+                        convolution_function \
+                            = lambda w, f, z, R, *a: f * matrix(R, z)
+
+            # Append this channel's convolution function.
+            convolution_functions.append(convolution_function)
+
+        # Put the convolution functions into the global scope.
+        generate.binning_matrices.append(convolution_functions)
+        return True
+
+
+    def _destroy_convolution_functions(self):
+        logger.info("Removing run-time convolution functions.")
+        _ = generate.binning_matrices.pop(-1)
+        return True
+
 
     def optimise(self, data, initial_theta=None, full_output=False, **kwargs):
         """
@@ -593,7 +675,6 @@ class Model(BaseModel):
                 [spectrum.disp[0] * (1 - z), spectrum.disp[-1] * (1 - z)])
 
         # Create the spectrum approximator/interpolator.
-        # TODO: Allow rescale command for the approximator.
         closest_point = [initial_theta[p] for p in self.grid_points.dtype.names]
         subset_bounds = self._initialise_approximator(
             closest_point=closest_point, 
@@ -630,31 +711,8 @@ class Model(BaseModel):
         # Apply data masks now so we don't have to do it on the fly.
         masked_data, pixels_affected = self._apply_data_mask(data)
 
-        # Pre-create binning matrix factories.
-        calculate_binning_matrices = (not self._configuration.get("settings",
-            {}).get("fast_binning", True)) \
-            or any([p == "z" or p.startswith("z_") for p in fixed])
-        if calculate_binning_matrices:
-            logger.debug("Creating box factories...")
-            matrix_factories = []
-            for channel, spectrum in zip(matched_channels, data):
-                if channel is None:
-                    matrix_factories.append(None)
-                    continue
-
-                # Should it be a BlurryBoxFactory or a BoxFactory?
-                klass = specutils.sample._BlurryBoxFactory if any([p.startswith(
-                    "resolution_") or p == "resolution" for p in parameters]) else \
-                    specutils.sample._BoxFactory
-
-                # If z is fixed then adjust the wavelengths.
-                #fixed_z = fixed.get("z", fixed.get("z_{}".format(channel), 0))
-                # TODO: provide 'old_resolution' metadata.
-                matrix_factories.append(
-                    klass(spectrum.disp, generate.wavelengths[-1]))
-
-            # Make the binning factories globally accessible.
-            generate.binning_matrices.append(matrix_factories)
+        # Prepare the convolution functions.
+        self._create_convolution_functions(matched_channels, data, parameters)
 
         logger.info("Optimising parameters: {0}".format(", ".join(parameters)))
         logger.info("Optimisation keywords: {0}".format(op_kwargs))
@@ -690,17 +748,13 @@ class Model(BaseModel):
             # Create model fluxes and calculate some metric.
             chi_sq, dof, model_fluxes = self._chi_sq(x_opt_theta_unscaled, data)
 
-            # Remove any pre-calculated binning matrices.
-            if calculate_binning_matrices:
-                logger.debug("Removed pre-calculated binning matrices")
-                generate.binning_matrices.pop(-1)
-
+            # Remove any prepared convolution functions.
+            self._destroy_convolution_functions()
+    
             return (x_opt_theta, chi_sq, dof, model_fluxes)
 
-        # Remove any pre-calculated binning matrices.
-        if calculate_binning_matrices:
-            logger.debug("Removed pre-calculated binning matrices")
-            generate.binning_matrices.pop(-1)
+        # Remove any prepared convolution functions.
+        self._destroy_convolution_functions()
 
         return x_opt_theta
 
@@ -731,6 +785,7 @@ class Model(BaseModel):
         if matched_channels is None:
             matched_channels, _, __ = self._match_channels_to_data(data)
         
+        no_precomputed_binning = kwargs.get("__no_precomputed_binning", False)
         for i, (channel, spectrum) in enumerate(zip(matched_channels, data)):
             if channel is None:
                 _ = np.nan * np.ones(spectrum.disp.size)
@@ -744,7 +799,8 @@ class Model(BaseModel):
             resolution = theta.get("resolution", theta.get("resolution_{}"\
                 .format(channel), None))
 
-            if kwargs.get("__no_precomputed_binning", False):
+            if no_precomputed_binning:f
+                # TODO: Come back to this..
                 if resolution:
                     matrix = specutils.sample.resample_and_convolve(
                         self.wavelengths * (1 + z), spectrum.disp,
@@ -759,51 +815,22 @@ class Model(BaseModel):
 
 
             else:
-                t = time()
-                # Get the pre-calculated rebinning matrix.
-                try:
-                    matrix = generate.binning_matrices[-1][i]
+                # Get the pre-calculated convolution function.
+                # (This will always be a callable)
+                convolution_function = generate.binning_matrices[-1][i]
 
-                except TypeError:
-                    if resolution is None:
-                        channel_fluxes = np.interp(spectrum.disp,
-                            model_wavelengths * (1 + z), model_intensities,
-                            left=np.nan, right=np.nan)
-                        if isinstance(model_variances, (np.ndarray, )):
-                            channel_variance = np.interp(spectrum.disp,
-                                model_wavelengths * (1 + z), model_variances,
-                                left=np.nan, right=np.nan)
-                        else:
-                            channel_variance = np.zeros_like(channel_fluxes)
-
-                    else:
-                        logger.exception("Could not find binning matrices")
-                        raise
-
-                else:
-                    try:
-                        # If it's a callable, provide all possible quantities
-                        # and it will ignore those that it does not need.
-                        matrix = matrix(resolution=resolution, z=-z)
-                    except TypeError:
-                        None
-
-                    else:
-                        channel_fluxes = model_intensities * matrix
-                        channel_variance = model_variances * matrix
-
-                #print(resolution, z, time() - t)
+                channel_fluxes = convolution_function(
+                    spectrum.disp, model_intensities, z, R)
+                channel_variance = convolution_function(
+                    spectrum.disp, model_variances, z, R)
 
             # Apply continuum if it is present.
-            i, coeffs = 0, []
+            i, coeff = 0, []
             while theta.get("continuum_{0}_{1}".format(channel, i), None):
-                coeffs.append(theta["continuum_{0}_{1}".format(channel, i)])
+                coeff.append(theta["continuum_{0}_{1}".format(channel, i)])
                 i += 1
 
-            if coeffs:
-                continuum = np.polyval(coeffs[::-1], spectrum.disp)
-            else:
-                continuum = 1.0
+            continuum = np.polyval(coeff[::-1], spectrum.disp) if coeff else 1.
 
             channel_fluxes *= continuum
 

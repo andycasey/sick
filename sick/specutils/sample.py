@@ -24,13 +24,14 @@ def resample_and_convolve(old_wavelengths, new_wavelengths, new_resolution,
     threshold_pixels = threshold/np.diff(old_wavelengths).max()
 
     # Calculate the width of the kernel at each point.
+    # [TODO] should this actually be squared???
     fwhms = (new_wavelengths/new_resolution)**2
     if np.isfinite(old_resolution):
         assert old_resolution > new_resolution
         fwhms -= (new_wavelengths/old_resolution)**2
 
     # 2.355 ~= 2 * sqrt(2*log(2))
-    sigmas = fwhms/2.3548200450309493
+    sigmas = np.sqrt(fwhms)/2.3548200450309493
     N_kernel_pixels = int(np.ceil(sigmas[-1] * threshold_pixels))
     integer_offsets = old_wavelengths.searchsorted(new_wavelengths)
 
@@ -320,7 +321,7 @@ class _BlurryBoxFactory(object):
             fwhms -= (wavelengths/self.from_resolution)**2
 
         # 2.355 ~= 2 * sqrt(2*log(2))
-        sigmas = fwhms/2.3548200450309493
+        sigmas = np.sqrt(fwhms)/2.3548200450309493
         N_kernel_pixels = int(np.ceil(sigmas[-1] * self._threshold_pixels))
         integer_offsets = self.from_wavelengths.searchsorted(wavelengths)
 
