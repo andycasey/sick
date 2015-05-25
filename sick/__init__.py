@@ -13,13 +13,6 @@ import logging
 from numpy import RankWarning
 from warnings import simplefilter
 
-# It pains me to have to do this.
-if not os.environ.get("DISPLAY", False):
-    from matplotlib import use
-    use("Agg")
-
-import models, plot, specutils
-
 # Here I set the default logging level to WARN because -- unless explicitly told
 # otherwise -- we don't want the logger to display everything when the API is 
 # being used. When the command-line interface is used we will overwrite this
@@ -37,3 +30,13 @@ logger = logging.getLogger("sick")
 
 # Suppress "polyfit may be poorly conditioned" messages
 simplefilter("ignore", RankWarning)
+
+# It pains me to have to do this.
+if not os.environ.get("DISPLAY", False):
+    logger.info("Disabling DISPLAY and forcing Matplotlib to use 'Agg' backend")
+    from matplotlib import use
+    use("Agg")
+    from matplotlib.pyplot import ioff
+    ioff()
+
+import models, plot, specutils

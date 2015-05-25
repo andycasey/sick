@@ -43,10 +43,7 @@ class CannonModel(Model):
 
         if "cannon_data" in model_grid:
             # Pre-trained model. Load the relevant information.
-            with open(model_grid["cannon_data"], "rb") as fp:
-                self._cannon_coefficients, self._cannon_scatter, \
-                self._cannon_label_vector, self._cannon_offsets, \
-                self._cannon_grid_indices = pickle.load(fp)
+            self._load_trained_model(model_grid["cannon_data"])
 
         else:
             # Create the cannon_label_vector.
@@ -54,6 +51,18 @@ class CannonModel(Model):
                 model_grid["cannon_label_vector_description"])
 
         return None
+
+
+    def _load_trained_model(self, filename):
+
+        logger.info("Loading model from {}".format(filename))
+        with open(filename, "rb") as fp:
+            trained_model = pickle.load(fp)
+
+        self._cannon_coefficients, self._cannon_scatter, \
+        self._cannon_label_vector, self._cannon_offsets, \
+        self._cannon_grid_indices = trained_model
+        return trained_model
 
 
     def train_global(self, label_vector_description=None, N=None, limits=None,
@@ -378,6 +387,8 @@ class CannonModel(Model):
                     observed_variances)
 
             except:
+                logger.exception("Could not determine labels:")
+                raise
                 if debug: raise
                 return np.inf
 
@@ -389,7 +400,8 @@ class CannonModel(Model):
 
             # Make the log-probability call.
             # Note: The inference._ln_probability call takes a dictionary.
-            return -inference._ln_probability(theta, self, data, debug)
+            return -inference._ln_probability(theta, self, data, debug,
+                matched_channels=matched_channels)
 
         # Do the optimisation.
         p0 = np.array([initial_theta[p] for p in parameters])
@@ -474,12 +486,38 @@ class CannonModel(Model):
                 raise WTFError("you want a local Cannon model but you haven't "\
                     "given me a point to train from.")
 
-            coefficients, scatter, lv, offsets, grid_indices \
-                = self.train_local(closest_point, mask=mask, **kwargs)
+            # Do we have a local Cannon store, where we have already trained on
+            # this point?
+            local_store_filename = "_".join(map(str, closest_point)) + ".pkl"
+            local_store_folder = self._configuration["model_grid"].get(
+                "cannon_store_local", None)
+            if local_store_folder is not None \
+            and os.path.exists(os.path.join(local_store_folder, local_store_filename)):
+
+                # Load that filename.
+                coefficients, scatter, lv, offsets, grid_indices \
+                    = self._load_trained_model(os.path.join(local_store_folder,
+                        local_store_filename))
+
+            else:
+                # Locally train.
+                coefficients, scatter, lv, offsets, grid_indices \
+                    = self.train_local(closest_point, mask=mask, **kwargs)
+
+                if local_store_folder is not None:
+                    # Save it
+                    local_store_path = os.path.join(local_store_folder,
+                        local_store_filename)
+                    logger.info("Saving locally trained Cannon model to {}"\
+                        .format(local_store_path))
+                    with open(local_store_path, "wb") as fp:
+                        pickle.dump((coefficients, scatter, lv, offsets,
+                            grid_indices), fp, -1)
+
 
         cannoniser = lambda pt: np.dot(self._cannon_coefficients,
             _build_label_vector_rows(self._cannon_label_vector,
-                -self._cannon_offsets + pt).T).flatten()
+                pt - self._cannon_offsets.copy()).T).flatten()
 
         generate.init()
         generate.wavelengths.append(self.wavelengths)
@@ -606,9 +644,13 @@ class CannonModel(Model):
 
         # p0 contains all coefficients, but we need only the linear terms for
         # the initial estimate
-        p0 = initial_vector_labels[1 + np.array([i for i, vector_terms \
+        _ = np.array([i for i, vector_terms \
             in enumerate(self._cannon_label_vector) if len(vector_terms) == 1 \
-            and vector_terms[0][1] == 1])]
+            and vector_terms[0][1] == 1])
+        if len(_) == 0:
+            raise ValueError("no linear terms in Cannon model")
+
+        p0 = initial_vector_labels[1 + _]
 
         # Create the function.
         def f(coefficients, *labels):
@@ -617,9 +659,11 @@ class CannonModel(Model):
 
         # Optimise the curve to solve for the parameters and covariance.
         full_output = kwargs.pop("full_output", False)
+        kwds = kwargs.copy()
+        kwds.setdefault("maxfev", 10000)
         labels, covariance = op.curve_fit(f, self._cannon_coefficients[finite],
             normalised_flux[finite], p0=p0, sigma=1.0/np.sqrt(Cinv),
-            absolute_sigma=True, **kwargs)
+            absolute_sigma=True, **kwds)
 
         # Since we might not have solved for every parameter, let's return a 
         # dictionary. Don't forget to apply the offsets to the inferred labels.

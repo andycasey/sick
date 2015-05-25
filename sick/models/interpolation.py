@@ -21,15 +21,18 @@ logger = logging.getLogger("sick")
 class InterpolationModel(Model):
 
     def _initialise_approximator(self, closest_point=None,
-        wavelengths_required=None, rescale=True):
+        wavelengths_required=None, rescale=True, **kwargs):
         """
         Initialise a spectrum interpolator.
         """
 
-        if self._initialised:
+        if self._initialised and not kwargs.get("force", False):
             logger.debug("Ignoring call to re-initialise approximator because "
                 "we already have.")
             return self._subset_bounds
+
+
+        logger.info("Initialising approximator near {0}".format(closest_point))
 
         N = self.grid_points.size
         dtype = [(name, '<f8') for name in self.grid_points.dtype.names]

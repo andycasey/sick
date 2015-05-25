@@ -137,8 +137,7 @@ def create(output_prefix, grid_flux_filename, wavelength_filenames,
     intensities_memmap = np.memmap(output_prefix + "-intensities.memmap",
         shape=(grid_points.size, num_pixels), dtype="float32",
         mode="w+")
-    intensities_memmap.flush()
-
+    
     n = len(grid_flux_tbl)
     for i, row in enumerate(grid_flux_tbl):
         logger.debug("Loading point {0}/{1} into the intensities map"\

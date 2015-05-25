@@ -55,7 +55,7 @@ def parser(input_args=None):
     aggregate_parser = subparsers.add_parser(
         "aggregate", parents=[parent_parser],
         help="Aggregate many result files into a single tabular FITS file.")
-    aggregate_parser.add_argument("output_filename", type=str,
+    aggregate_parser.add_argument("output_filename", type=str, nargs=1,
         help="Output filename to aggregate results into.")
     aggregate_parser.add_argument("result_filenames", nargs="+",
         help="The YAML result filenames to combine.")
@@ -143,6 +143,7 @@ def parser(input_args=None):
     
         # Check plot formats.
         if args.plotting:
+
             import matplotlib.pyplot as plt
             fig = plt.figure()
             available = fig.canvas.get_supported_filetypes().keys()
@@ -152,6 +153,9 @@ def parser(input_args=None):
                 raise ValueError("plotting format {0} is unavailable: Options "\
                     "are: {1}".format(
                         args.plot_format.lower(), ", ".join(available)))
+    else:
+        args.filename_prefix = ""
+
     return args
 
 
@@ -175,20 +179,20 @@ def _announce_theta(theta):
                 value[0], value[1], value[2])
             if is_a_redshift(parameter):
                 message += " [{0:.1f} ({1:+.1f}, {2:+.1f}) km/s]".format(
-                    parameter, value[0] * c, value[1] * c, value[2] * c)
+                    value[0] * c, value[1] * c, value[2] * c)
         logger.info(message)
 
 
-def _prefix(args, f):
-    return os.path.join(args.output_dir, "-".join([args.filename_prefix, f]))
+def _prefix(args, f, char="-"):
+    return os.path.join(args.output_dir, char.join([args.filename_prefix, f]))
 
 
-def _ok_to_clobber(args, filenames):
+def _ok_to_clobber(args, filenames, char="-"):
 
     if args.clobber:
         return True
 
-    paths = [_prefix(args, _) for _ in filenames]
+    paths = [_prefix(args, _, char=char) for _ in filenames]
     exists = map(os.path.exists, paths)
     if any(exists):
         raise IOError("expected output filename(s) already exist and we have "
@@ -485,11 +489,112 @@ def infer(args):
 
 
 def aggregate(args):
+    """
+    Aggregate the results from multiple analyses into a single file.
+    """
+
+    _ok_to_clobber(args, [args.output_filename[0]], "")
+    logger.debug("Aggregating to {}".format(args.output_filename[0]))
+
+    from astropy.table import Table
+
+    # What header keys should be passed to the final table?
+    header_keys = ["RA", "DEC", "NAME", "OBJECT", "MAGNITUDE",
+        "UTSTART", "UTEND", "UTDATE"]
+
+    def load_result_file(filename, debug):
+        with open(filename, "r") as fp:
+            try:
+                result = yaml.load(fp)
+            
+            except:
+                logger.exception("Could not read results filename: {}".format(
+                    filename))
+                if debug: raise
+
+            else:
+                logger.debug("Successfully loaded results from {}".format(
+                    filename))
+        return result
+
+    # Load the first set of results to get the parameter names.
+    first_results = load_result_file(args.result_filenames[0], True)
+    parameters = set(first_results["estimated"]["theta"].keys() \
+        + first_results.get("optimised", {}).get("theta", {}).keys() \
+        + first_results.get("inferred", {}).get("theta", {}).keys())
+
+    # Grab headers that exist.
+    header_keys = [k for k in header_keys if k in first_results["headers"]]
+
+    def default_values(stage):
+        keys = "chi_sq dof r_chi_sq".split()
+        default = dict(zip(["{0}_{1}".format(stage, key) for key in keys],
+            [np.nan] * len(keys)))
+        default["theta"] = dict(zip(
+            ["{0}_{1}".format(stage, parameter) for parameter in parameters],
+            [np.nan] * len(parameters)))
+        return default
+
+    def extract_values(result, stage, parameter_prefixes=None):
+        _ = {
+            "{}_chi_sq".format(stage): result.get("chi_sq", np.nan),
+            "{}_dof".format(stage): result.get("dof", np.nan),
+            "{}_r_chi_sq".format(stage): result.get("r_chi_sq", np.nan)
+        }
+        _.update(dict(zip(
+            ["{0}_{1}".format(stage, parameter) for parameter in parameters],
+            [result["theta"].get(param, np.nan) for param in parameters])))
+
+        if parameter_prefixes is not None:
+            for prefix in parameter_prefixes:
+                _.update(dict(zip(
+                    ["_".join([stage, prefix, parameter]) \
+                        for parameter in parameters],
+                    [result.get("{0}_{1}".format(prefix, parameter), np.nan) \
+                        for parameter in parameters])))
+        return _
+
+    rows = []
+    columns = [] + header_keys + ["model", "sick_version", "results_filename"]
+    for i, filename in enumerate(args.result_filenames):
+
+        result = load_result_file(filename, debug=args.debug)
+        logger.debug("Loaded results from {}".format(filename))
+
+        # Header information.
+        row = dict(zip(header_keys,
+            [result["headers"].get(k, None) for k in header_keys]))
+        row.update({
+            "model": result["model"],
+            "sick_version": result["sick_version"],
+            "results_filename": filename,
+        })
+        
+        # Include estimated values (which should always be present)
+        estimated = extract_values(result["estimated"], "estimated")
+        row.update(estimated)
+        
+        # Include optimised values, if they exist.
+        optimised = extract_values(
+            result.get("optimised", default_values("optimised")), "optimised")
+        row.update(optimised)
+
+        # Include inferred values, if they exist.
+        inferred = extract_values(
+            result.get("inferred", default_values("inferred")), "inferred",
+            parameter_prefixes=["u_pos", "u_neg", "n_eff"])
+        row.update(inferred)
+        rows.append(row)
+
+    for each in (estimated, optimised, inferred):
+        columns += sorted(each.keys())
+
+    table = Table(rows=rows, names=columns)
+    table.write(args.output_filename[0], overwrite=args.clobber)
+    logger.info("Results from {0} files aggregated and saved to {1}".format(
+        len(args.result_filenames), args.output_filename[0]))
 
 
-    raise NotImplementedError
-
-    
 def main():
     """ Parse arguments and execute the correct sub-parser. """
 

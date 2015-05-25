@@ -211,7 +211,7 @@ class Model(BaseModel):
                 elif parameter in ("Po", "Vo"):
                     theta.update({
                         "Po": 0.01, # 1% outlier pixels.
-                        "Vo": max([np.nanmedian(s.variance) for s in data]),
+                        "Vo": np.mean([np.nanmedian(s.variance) for s in data]),
                     })
 
         logger.info("Initial estimate: {}".format(theta))
@@ -293,6 +293,9 @@ class Model(BaseModel):
         logger.debug("Inferring {0} parameters: {1}".format(len(parameters),
             ", ".join(parameters)))
 
+        # Create the spectrum approximator/interpolator.
+        # TODO: Allow rescale command for the approximator.
+        
         if walkers % 2 > 0 or walkers < 2 * len(parameters):
             raise ValueError("the number of walkers must be an even number and "
                 "be at least twice the number of model parameters")
@@ -338,6 +341,20 @@ class Model(BaseModel):
             initial_proposal = self.estimate(data)
 
         if isinstance(initial_proposal, dict):
+
+            wavelengths_required = []
+            for channel, spectrum in zip(matched_channels, data):
+                if channel is None: continue
+                z = initial_proposal.get("z",
+                    initial_proposal.get("z_{}".format(channel), 0))
+                wavelengths_required.append(
+                    [spectrum.disp[0] * (1 - z), spectrum.disp[-1] * (1 - z)])
+
+            closest_point = [initial_proposal[p] for p in self.grid_points.dtype.names]
+            subset_bounds = self._initialise_approximator(
+                closest_point=closest_point, 
+                wavelengths_required=wavelengths_required, force=True, **kwargs)
+
             initial_proposal = self._initial_proposal_distribution(
                 parameters, initial_proposal, walkers)
 
@@ -386,10 +403,10 @@ class Model(BaseModel):
             # Make the binning matrices accessible globally.
             generate.binning_matrices.append(matrices)
         """
-        logger.info("Creating box factories...")
         calculate_binning_matrices = not self._configuration.get("settings",
             {}).get("fast_binning", True)
         if calculate_binning_matrices:
+            logger.info("Creating box factories...")
             matrix_factories = []
             for channel, spectrum in zip(matched_channels, data):
                 if channel is None:
@@ -397,9 +414,10 @@ class Model(BaseModel):
                     continue
 
                 # Should it be a BlurryBoxFactory or a BoxFactory?
-                klass = specutils.sample._BlurryBoxFactory if any([p.startswith(
-                    "resolution_") or p == "resolution" for p in parameters]) else \
-                    specutils.sample._BoxFactory
+                klass = specutils.sample._BlurryBoxFactory \
+                    if any([p.startswith("resolution_") or p == "resolution" \
+                        for p in parameters]) \
+                    else specutils.sample._BoxFactory
 
                 # TODO: provide 'old_resolution' metadata.
                 matrix_factories.append(
@@ -651,7 +669,8 @@ class Model(BaseModel):
                 p_.append(parameter)
                 t_ = np.append(theta, value)
 
-            return -inference.ln_probability(t_, p_, self, data, debug)
+            return -inference.ln_probability(t_, p_, self, data, debug,
+                matched_channels=matched_channels)
 
         # Do the optimisation.
         p0 = np.array([initial_theta[p] for p in parameters])
@@ -708,7 +727,10 @@ class Model(BaseModel):
         model_fluxes = []
         model_flux_variances = []
 
-        matched_channels, _, __ = self._match_channels_to_data(data)
+        matched_channels = kwargs.get("matched_channels", None)
+        if matched_channels is None:
+            matched_channels, _, __ = self._match_channels_to_data(data)
+        
         for i, (channel, spectrum) in enumerate(zip(matched_channels, data)):
             if channel is None:
                 _ = np.nan * np.ones(spectrum.disp.size)

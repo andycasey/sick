@@ -224,9 +224,10 @@ class BaseModel(object):
             model_configuration.get("redshift", False)))
 
         # Spectral resolution
-        parameters.extend(channel_parameters(
+        resolution_parameters = channel_parameters(
             "resolution", self.channel_names,
-            model_configuration.get("spectral_resolution", False)))
+            model_configuration.get("spectral_resolution", False))
+        parameters.extend(resolution_parameters)
 
         # Underestimated variance
         parameters.extend(channel_parameters(
@@ -239,7 +240,9 @@ class BaseModel(object):
 
         assert len(parameters) == len(set(parameters)), "Duplicate parameters!"
 
+        self._resolution_parameters = resolution_parameters
         self._parameters = tuple(parameters)
+
         return self._parameters
 
 
@@ -253,7 +256,8 @@ class BaseModel(object):
 
         matched_channel_names = []
         for i, (name, size) in enumerate(zip(self.channel_names, sizes)):
-            min_b, max_b = self.wavelengths[[sum(sizes[:i]), size - 1]]
+            si = sum(sizes[:i])
+            min_b, max_b = self.wavelengths[[si, si + size - 1]]
             if max_a > min_b and min_a < max_b:
                 matched_channel_names.append(name)
 
@@ -273,8 +277,13 @@ class BaseModel(object):
 
 
     def _format_data(self, data):
-        return sorted(data if isinstance(data, (list, tuple)) \
-            else [data], key=lambda x: x.disp[0])
+        """
+        Sort the data in blue wavelengths to red, and ignore any spectra that
+        have entirely non-finite or negative fluxes.
+        """
+        return [spectrum for spectrum in \
+            sorted(data if isinstance(data, (list, tuple)) else [data],
+                key=lambda x: x.disp[0]) if np.any(np.isfinite(spectrum.flux))]
 
     def _apply_data_mask(self, data):
         """
@@ -353,7 +362,8 @@ class BaseModel(object):
                         for _ in ("resolution_{}", "f_{}", "z_{}")]))
                 
                 ignore_parameters.extend(["continuum_{0}_{1}".format(channel, i)\
-                    for i in range(self._configuration["model"]["continuum"][channel] + 1)])
+                    for i in range(self._configuration["model"]["continuum"].get(
+                        channel, -1) + 1)])
 
         if ignore_parameters:
             logger.warn("Ignoring the following model parameters because there "
@@ -453,6 +463,7 @@ class BaseModel(object):
         wavelengths_memmap = np.memmap(output_prefix + "-wavelengths.memmap",
             dtype="float32", mode="w+", shape=(num_pixels, ))
         wavelengths_memmap[:] = np.hstack(channel_wavelengths)
+        wavelengths_memmap.flush()
         del wavelengths_memmap
 
         # Write the new configuration to file.
@@ -539,8 +550,9 @@ class BaseModel(object):
             in enumerate(zip(channel_sizes, matrices, wavelength_indices)):
                 idx = sum(channel_sizes[:j])
                 cast_intensities[i, idx:idx + size] = \
-                    intensities[i, indices[0]:indices[1]] * matrix
+                    np.copy(intensities[i, indices[0]:indices[1]]) * matrix
 
+        cast_intensities.flush()
         del cast_intensities
         if progressbar:
             print("\r")
