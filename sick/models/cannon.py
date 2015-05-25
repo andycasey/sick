@@ -136,98 +136,6 @@ class CannonModel(Model):
 
         return True
 
-    """
-    def estimate(self, data, full_output=False, **kwargs):
-
-        theta, chi_sq, dof, model_fluxes = self._estimate(data,
-            full_output=True, **kwargs)
-
-        # We can assume that the initial estimate is *reasonable*.
-        # Thus, the continuum and redshift are probably OK. But the actual
-        # astrophysical parameters are limited to the discretization of the
-        # grid.
-
-        # Instead we should determine the optimal astrophysical parameters
-        # algebraically!
-        matched_channels, missing_channels, ignore_parameters \
-            = self._match_channels_to_data(data)
-
-        observed_variances = []
-        observed_intensities = []
-        for channel, spectrum in zip(matched_channels, data):
-
-            # For each channel:
-            # 1) Put the observed spectrum at rest.
-            z = theta.get("z", theta.get("z_{}".format(channel), 0))
-            rest_observed_disp = spectrum.disp * (1 - z)
-
-            # 2) Correct for continuum.
-            j, coeffs = 0, []
-            while theta.get("continuum_{0}_{1}".format(channel, j), None):
-                coeffs.append(theta["continuum_{0}_{1}".format(channel, j)])
-                j += 1
-
-            # Remember: model.__call__ calculates continuum based on the
-            # *observed* wavelength points, so here we do the same (e.g.,
-            # not those that have potentially been corrected for redshift)
-            if not coeffs: continuum = 1.0
-            else:
-                continuum = np.polyval(coeffs[::-1], spectrum.disp) 
-            
-            # 3) Put the observed data onto the self.wavelengths scale.
-            # [TODO] do the resampling correctly.
-            rebinned_observed_intensities = np.interp(self.wavelengths,
-                rest_observed_disp, spectrum.flux / continuum,
-                left=np.nan, right=np.nan)
-
-            rebinned_observed_variances = np.interp(self.wavelengths,
-                rest_observed_disp, spectrum.variance / continuum,
-                left=np.nan, right=np.nan)
-
-            observed_variances.append(rebinned_observed_variances)
-            observed_intensities.append(rebinned_observed_intensities)
-
-        # [TODO] This may be the wrong thing to do.
-        observed_variances \
-            = np.nanmean(np.vstack(observed_variances), axis=0)
-        observed_intensities \
-            = np.nanmean(np.vstack(observed_intensities), axis=0)
-
-
-        # What model wavelength ranges will be required?
-        wavelengths_required = []
-        for channel, spectrum in zip(matched_channels, data):
-            if channel is None: continue
-            z = theta.get("z", theta.get("z_{}".format(channel), 0))
-            wavelengths_required.append(
-                [spectrum.disp[0] * (1 - z), spectrum.disp[-1] * (1 - z)])
-
-        # (If necessary,..) train the Cannon model around the closest point.
-        subset_bounds = self._initialise_approximator(closest_point=\
-            [theta[p] for p in self.grid_points.dtype.names], 
-            wavelengths_required=wavelengths_required, **kwargs)
-
-        # Solve for the astrophysical parameters.
-        try:
-            labels = self._solve_labels(observed_intensities,
-                observed_variances)
-
-        except:
-            logger.exception("Could not determine sub-grid labels in estimate:")
-
-        else:
-            theta.update(labels)
-
-            # Update the chi_sq values etc if full_output is required.
-            if full_output:
-                logger.warn("Returning grid model fluxes instead")
-        
-        if full_output:
-            return (theta, chi_sq, dof, model_fluxes)
-
-        return theta
-    """
-
 
     def optimise(self, data, initial_theta=None, full_output=False, **kwargs):
         """
@@ -358,14 +266,11 @@ class CannonModel(Model):
 
             # Solve for the astrophysical parameters.
             try:
-                #labels = self._solve_labels(observed_intensities,
-                #    observed_variances)
                 labels = self._solve_labels(observed_intensities,
                     observed_variances)
 
             except:
                 logger.exception("Could not determine labels:")
-                raise
                 if debug: raise
                 return np.inf
 
@@ -606,17 +511,6 @@ class CannonModel(Model):
             Cinv * normalised_flux[finite])
         initial_vector_labels = np.linalg.solve(A, B)
         
-        """
-        Y = normalised_flux/(self._cannon_scatter**2 + variance)
-        ATY = np.dot(self._cannon_coefficients[finite, :].T, Y[finite])
-        CiA = self._cannon_coefficients[finite, :] \
-            * np.tile(1./(self._cannon_scatter[finite]**2 + variance),
-                (self._cannon_coefficients[finite, :].shape[1], 1)).T
-        ATCiA = np.dot(self._cannon_coefficients[finite, :].T, CiA)
-        ATCiAinv = np.linalg.inv(ATCiA)
-        initial_vector_labels2 = np.dot(ATCiAinv, ATY)
-        """
-
         # p0 contains all coefficients, but we need only the linear terms for
         # the initial estimate
         _ = np.array([i for i, vector_terms \
