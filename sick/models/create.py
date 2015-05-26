@@ -12,12 +12,13 @@ import cPickle as pickle
 import logging
 import os
 import yaml
+from time import strftime
 
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
 
-from time import strftime
+from sick import __version__ as sick_version
 
 logger = logging.getLogger("sick")
 
@@ -118,7 +119,8 @@ def create(output_prefix, grid_flux_filename, wavelength_filenames,
         "wavelength_filenames": wavelength_filenames,
         "channel_names": channel_names,
         "channel_sizes": channel_sizes,
-        "sick_version": None
+        "channel_resolutions": [float("inf")] * len(channel_names),
+        "sick_version": sick_version
     }
     logger.debug("Dumping grid points and metadata to file")
     with open(output_prefix + ".pkl", "wb") as fp:

@@ -239,6 +239,9 @@ def _pre_solving(args, expected_output_files):
     map(logger.info, yaml.safe_dump(model._configuration, stream=None,
         allow_unicode=True, default_flow_style=False).split("\n"))
 
+    logger.info("Model parameters ({}):".format(len(model.parameters)))
+    logger.info(", ".join(model.parameters))
+
     # Define headers that we want in the results filename 
     metadata = {
         "model": model.hash, 

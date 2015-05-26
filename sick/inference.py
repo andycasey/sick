@@ -28,6 +28,8 @@ def ln_likelihood(theta, model, data, debug=False, **kwargs):
 
     logger.debug("In likelihood func with {}".format(theta))
 
+    sigma_clip = model._configuration.get("settings", {}).get("sigma_clip", -1)
+
     try:
         # Setting debug to True means it will re-raise any exceptions when
         # trying to approximate spectra from the grid.
@@ -49,6 +51,15 @@ def ln_likelihood(theta, model, data, debug=False, **kwargs):
         # Observed and model variance (where it exists)
         variance = spectrum.variance + model_variance * continuum
 
+        # Any on-the-fly sigma-clipping?
+        if sigma_clip > 0:
+            chi_sq = (spectrum.flux - model_flux)**2 / variance
+            mask = chi_sq > sigma_clip**2
+            logger.debug("Num masking due to sigma clipping: {0} in {1}".format(
+                mask.sum(), channel))
+            if float(mask.sum()/variance.size) < 0.05:
+                variance[mask] = np.nan
+
         # Any underestimated variance?
         ln_f = theta.get("f", theta.get("f_{}".format(channel), None))
         if ln_f is not None:
@@ -59,7 +70,7 @@ def ln_likelihood(theta, model, data, debug=False, **kwargs):
         likelihood = -0.5 * ((spectrum.flux - model_flux)**2 * ivar \
             - np.log(ivar))
         pixels = np.isfinite(likelihood)
-        
+    
         # Outliers?
         if "Po" in theta:
             # Calculate outlier likelihoods.

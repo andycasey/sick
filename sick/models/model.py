@@ -32,9 +32,8 @@ class Model(BaseModel):
         """
 
         # Number of model comparisons can be specified in the configuration.
-        num_model_comparisons = self._configuration.get("estimate", {
-                "num_model_comparisons": self.grid_points.size
-            })["num_model_comparisons"]
+        num_model_comparisons = self._configuration.get("estimate", {}).get(
+            "num_model_comparisons", self.grid_points.size)
         # If it's a fraction, we need to convert that to an integer.
         if 1 > num_model_comparisons > 0:
             num_model_comparisons *= self.grid_points.size
@@ -78,7 +77,8 @@ class Model(BaseModel):
         any_continuum_parameters = any(map(lambda s: s.startswith("continuum_"),
             set(self.parameters).difference(ignore_parameters)))
 
-        # [TODO]: Model mask.
+        # [TODO]: CCF MASK
+        # [TODO]: Don't require CCF if we have only continuum parameters.
 
         theta = {} # Dictionary for the estimated model parameters.
         best_grid_index = None
@@ -546,7 +546,7 @@ class Model(BaseModel):
             # Option 1.
             # Create static binning matrices for each channel.
             if not redshift and not resolution:
-                logger.debug("Creating static matrix for channel {0} because "\
+                logger.info("Creating static matrix for channel {0} because "\
                     "no redshift or resolution parameters were found".format(
                         channel))
 
@@ -556,7 +556,7 @@ class Model(BaseModel):
                     spectrum.disp)
 
                 # Wrap in a lambda function to be consistent with other options.
-                convolution_function = lambda w, f, *a: np.dot(f, matrix)
+                convolution_function = lambda w, f, *a: f * matrix
 
             else:
 
@@ -569,7 +569,7 @@ class Model(BaseModel):
                     # px_scale = ((w.mean()/R) / 2.35)/np.diff(w).mean()
                     # px_scale = R_scale / R
 
-                    logger.debug("Creating simple convolution & interpolating "\
+                    logger.info("Creating simple convolution & interpolating "\
                         "function for channel {0}".format(channel))
 
                     # [TODO] Account for the existing spectral resolution of the
@@ -600,7 +600,7 @@ class Model(BaseModel):
                 else:
                     if redshift and not resolution:
                         # Option 3: Produce a _BoxFactory
-                        logger.debug("Producing a Box Factory for convolution "\
+                        logger.info("Producing a Box Factory for convolution "\
                             "in channel {}".format(channel))
 
                         matrix = specutils.sample._BoxFactory(
@@ -612,7 +612,7 @@ class Model(BaseModel):
                     else:
                         # Could be redshift and resolution, or just resolution.
                         # Options 4 and 5: Produce a _BlurryBoxFactory
-                        logger.debug("Producing a Blurry Box Factory for "\
+                        logger.info("Producing a Blurry Box Factory for "\
                             "convolution in channel {}".format(channel))
 
                         matrix = specutils.sample._BlurryBoxFactory(
@@ -807,14 +807,14 @@ class Model(BaseModel):
                 # (This will always be a callable)
                 convolution_function = generate.binning_matrices[-1][i]
 
+                t = time()
                 channel_fluxes = convolution_function(
                     spectrum.disp, model_intensities, z, resolution)
+                t_a = time()
                 channel_variance = convolution_function(
                     spectrum.disp, model_variances, z, resolution)
+                logger.debug("{0:.4f} {1:.4f}".format(t_a - t, time() - t_a))
 
-                if not np.any(np.isfinite(channel_fluxes)) \
-                and np.any(np.isfinite(model_intensities)):
-                    raise a
 
 
             # Apply continuum if it is present.

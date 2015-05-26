@@ -78,7 +78,7 @@ class InterpolationModel(Model):
         # Slice small part of the intensities grid.
         intensities = np.memmap(
             self._configuration["model_grid"]["intensities"],
-            dtype="float32", mode="c", shape=(N, self.wavelengths.size))
+            dtype="float32", mode="r", shape=(N, self.wavelengths.size))
         subset = np.copy(intensities[grid_indices, :])
         subset[:, ~mask] = np.nan
         del intensities

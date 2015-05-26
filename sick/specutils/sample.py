@@ -17,6 +17,8 @@ from sick.utils import lru_cache
 
 logger = logging.getLogger("sick")
 
+LRU_SIZE = 25
+
 def resample_and_convolve(old_wavelengths, new_wavelengths, new_resolution,
     old_resolution=np.inf, threshold=5):
 
@@ -31,7 +33,7 @@ def resample_and_convolve(old_wavelengths, new_wavelengths, new_resolution,
         fwhms -= (new_wavelengths/old_resolution)**2
 
     # 2.355 ~= 2 * sqrt(2*log(2))
-    sigmas = np.sqrt(fwhms)/2.3548200450309493
+    sigmas = fwhms/2.3548200450309493
     N_kernel_pixels = int(np.ceil(sigmas[-1] * threshold_pixels))
     integer_offsets = old_wavelengths.searchsorted(new_wavelengths)
 
@@ -180,7 +182,7 @@ class _BoxFactory(object):
             logger.warn("from wavelengths scale might be non-linear")
 
 
-    @lru_cache(maxsize=100, tol=6)
+    @lru_cache(maxsize=LRU_SIZE, tol=6)
     def __call__(self, z=0, **kwargs):
         """
         Return a binning matrix for the given redshift based on the original
@@ -299,7 +301,7 @@ class _BlurryBoxFactory(object):
         self.N, self.M = (to_wavelengths.size, from_wavelengths.size)
         
 
-    @lru_cache(maxsize=100, tol=[0, 6])
+    @lru_cache(maxsize=LRU_SIZE, tol=[0, 6])
     def __call__(self, resolution, z=0, **kwargs):
         """
         Return a binning matrix for the given resolution and optional redshift,
@@ -321,7 +323,7 @@ class _BlurryBoxFactory(object):
             fwhms -= (wavelengths/self.from_resolution)**2
 
         # 2.355 ~= 2 * sqrt(2*log(2))
-        sigmas = np.sqrt(fwhms)/2.3548200450309493
+        sigmas = fwhms/2.3548200450309493
         N_kernel_pixels = int(np.ceil(sigmas[-1] * self._threshold_pixels))
         integer_offsets = self.from_wavelengths.searchsorted(wavelengths)
 

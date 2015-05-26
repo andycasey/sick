@@ -51,8 +51,8 @@ def simple_round_factory(tol):
         argstype = type(args)
         _args = list(args)
         _kwds = kwds.copy()
-        for i,j in enumerate(args):
-            if isinstance(j, float): _args[i] = round(j, tol[i] \
+        for i,j in enumerate(args): # args[0] is the class.
+            if isinstance(j, float): _args[i] = round(j, tol[i - 1] \
                 if isinstance(tol, (list, tuple)) else tol) # don't round int
         for k, (i,j) in enumerate(kwds.items()):
             if isinstance(j, float): _kwds[i] = round(j, tol[k] \

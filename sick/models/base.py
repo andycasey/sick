@@ -269,7 +269,7 @@ class BaseModel(object):
         for i, px in enumerate(self.meta["channel_sizes"]):
             si = np.sum(self.meta["channel_sizes"][:i])
             data.append(specutils.Spectrum1D(disp=self.wavelengths[si:si+px],
-                flux=np.ones(px) * np.nan))
+                flux=np.ones(px)))
         return data
 
 
@@ -359,8 +359,8 @@ class BaseModel(object):
                         for _ in ("resolution_{}", "f_{}", "z_{}")]))
                 
                 ignore_parameters.extend(["continuum_{0}_{1}".format(channel, i)\
-                    for i in range(self._configuration["model"]["continuum"].get(
-                        channel, -1) + 1)])
+                    for i in range(self._configuration["model"].get("continuum",
+                        {}).get(channel, -1) + 1)])
 
         if ignore_parameters:
             logger.warn("Ignoring the following model parameters because there "
@@ -528,7 +528,8 @@ class BaseModel(object):
         meta = self.meta.copy()
         meta.update({
             "channel_names": channel_names,
-            "channel_sizes": channel_sizes
+            "channel_sizes": channel_sizes,
+            "channel_resolutions": [new_channels[n][1] for n in channel_names]
         })
         with open(output_prefix + ".pkl", "wb") as fp:
             pickle.dump((self.grid_points, meta), fp, -1)
