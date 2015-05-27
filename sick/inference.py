@@ -90,7 +90,7 @@ def ln_likelihood(theta, model, data, debug=False, **kwargs):
         num_pixels += pixels.sum()
 
     if num_pixels == 0:
-        logger.warn("No pixels used for likelihood calculation! Returning -inf")
+        logger.debug("No pixels used for likelihood calculation! Returning -inf")
         return -np.inf
 
     if not np.isfinite(ln_likelihood):

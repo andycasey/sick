@@ -7,7 +7,9 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
+import curses
 import logging
+import sys
 from time import time
 from collections import OrderedDict
 
@@ -111,7 +113,8 @@ class Model(BaseModel):
                     * (spectrum.disp[-1] >= self.wavelengths))[0]
 
                 v, v_err, R = spectrum.cross_correlate(
-                    (self.wavelengths[idx], intensities[:, idx]),
+                    #(self.wavelengths[idx], intensities[:, idx]),
+                    (self.wavelengths, intensities),
                     continuum_degree=continuum_degree)
 
                 # Apply limits:
@@ -284,26 +287,6 @@ class Model(BaseModel):
         infer_kwargs = self._configuration.get("infer", {}).copy()
         infer_kwargs.update(kwargs)
 
-        """
-        fixed = infer_kwargs.pop("fixed", {})
-        if fixed:
-            # Remove non-parameters from the 'fixed' keywords.
-            keys = set(fixed).intersection(parameters)
-            # If the 'fixed' value is provided, use that. Otherwise if it is
-            # None then use the initial_theta value.
-            fixed = dict(zip(keys, 
-                [(fixed[k], initial_theta.get(k, None))[fixed[k] is None] \
-                    for k in keys]))
-
-            logger.info("Fixing keyword arguments (these will not be inferred)"\
-                ": {}".format(fixed))
-
-        # Remove fixed parameters from the parameters to be optimised
-        #parameters = list(set(parameters).difference(fixed))
-        parameters = [p for p in parameters if p not in fixed]
-        """
-
-
         # Initial proposal could be:
         #   - an array (N_walkers, N_dimensions)
         #   - a dictionary containing key/value pairs for the dimensions
@@ -352,8 +335,10 @@ class Model(BaseModel):
             kwargs={"matched_channels": matched_channels}, threads=threads)
 
         # Burn in.
+        progress_bar = kwargs.get("__show_progress_bar", True)
         sampler, burn_acceptance_fractions, pos, lnprob, rstate, burn_elapsed \
-            = self._sample(sampler, initial_proposal, burn, descr="burn-in")
+            = self._sample(sampler, initial_proposal, burn, descr="burn-in",
+                parameters=parameters, __show_progress_bar=progress_bar)
 
         # Save the chain and log probabilities before we reset the chain.
         burn_chains = sampler.chain
@@ -366,8 +351,9 @@ class Model(BaseModel):
         # Sampler.
         sampler, prod_acceptance_fractions, pos, lnprob, rstate, prod_elapsed \
             = self._sample(sampler, pos, sample, lnprob0=lnprob, rstate0=rstate, 
-                descr="production")
-
+                descr="production", parameters=parameters,
+                __show_progress_bar=progress_bar)
+                
         if sampler.pool:
             sampler.pool.close()
             sampler.pool.join()
@@ -434,24 +420,68 @@ class Model(BaseModel):
 
     def _sample(self, sampler, p0, iterations, descr=None, **kwargs):
 
+        progress_bar = kwargs.pop("__show_progress_bar", True)
+        parameters = kwargs.pop("parameters", np.arange(sampler.chain.shape[2]))
         runtime_descr = "" if descr is None else " of {}".format(descr)
         mean_acceptance_fraction = np.zeros(iterations)
+
+        increment = int(iterations / 100)
+
+        if progress_bar:
+            screen = curses.initscr()
+            curses.noecho()
+            curses.cbreak()
 
         t_init = time()
         for i, (pos, lnprob, rstate) \
         in enumerate(sampler.sample(p0, iterations=iterations, **kwargs)):
             mean_acceptance_fraction[i] = sampler.acceptance_fraction.mean()
 
-            # Announce progress.
-            logger.info(u"Sampler at step {0:.0f}{1} has a mean acceptance "
-                "fraction of {2:.3f} and highest log probability was {3:.3e}"\
-                .format(i + 1, runtime_descr, mean_acceptance_fraction[i],
-                    sampler.lnprobability[:, i].max()))
+            if progress_bar:
+
+                screen.addstr(0, 0,
+                    "\rSampler at step {0:.0f}{1} with a mean accept"\
+                    "ance fraction of {2:.3f}, highest ln(P) was {3:.3e}\n"\
+                    .format(i + 1, runtime_descr,
+                        mean_acceptance_fraction[i],
+                        sampler.lnprobability[:, i].max()))
+
+                if (i % increment == 0):
+                    
+                    message = "[{done}{not_done}] {percent:3.0f}%".format(
+                        done="=" * int(i / increment),
+                        not_done=" " * int((iterations - i)/increment),
+                        percent=100.*i/iterations)
+                    screen.addstr(1, 0, message)
+
+                    if i > 0:
+                        for j, parameter in enumerate(parameters):
+                            pcs = np.percentile(
+                                sampler.chain[:, i-increment:i, j], [16, 50, 84])
+                            message = "\t{0}: {1:.3f} ({2:+.3f}, {3:+.3f})".format(
+                                parameter, pcs[1], pcs[2] - pcs[1], -pcs[1] + pcs[0])
+
+                            if parameter == "z" or parameter[:2] == "z_":
+                                pcs *= 299792.458
+                                message += " [{0:.1f} ({1:+.1f}, {2:+.1f}) km/s]"\
+                                    .format(pcs[1], pcs[2] - pcs[1], -pcs[1] + pcs[0])
+                            
+                            screen.addstr(j + 2, 0, message)
+
+                screen.refresh()
+
+            else:
+                # Announce progress.
+                logger.info("Sampler at step {0:.0f}{1} has a mean acceptance f"
+                    "raction of {2:.3f} and highest ln probability was {3:.3e}"\
+                    .format(i + 1, runtime_descr, mean_acceptance_fraction[i],
+                        sampler.lnprobability[:, i].max()))
 
             if mean_acceptance_fraction[i] in (0, 1):
                 raise RuntimeError("mean acceptance fraction is {0:.0f}".format(
                     mean_acceptance_fraction[i]))
 
+            """
             if i % 100 == 0 and i > 0:
                 # Do autocorrelation time.
                 try:
@@ -468,7 +498,11 @@ class Model(BaseModel):
                     print(effective_samples)
                     print("MINIMUM NUMBER OF EFFECTIVE SAMPLES {0:.0f}".format(
                         effective_samples.min()))
-            
+            """
+        
+        curses.echo()
+        curses.nocbreak()
+        curses.endwin()
 
         elapsed = time() - t_init
         logger.debug("Sampling{0} took {1:.1f} seconds".format(

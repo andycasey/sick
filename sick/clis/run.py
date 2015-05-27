@@ -403,7 +403,8 @@ def infer(args):
         theta, chains, lnprobability, acceptance_fractions, sampler, info_dict \
             = model.infer(data, initial_proposal=optimised_theta, 
                 full_output=True, debug=args.debug, 
-                __keep_convolution_functions=True,**kwargs)
+                __keep_convolution_functions=True,
+                __show_progress_bar=True, **kwargs)
 
     except:
         logger.exception("Failed to infer model parameters")

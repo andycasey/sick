@@ -17,6 +17,7 @@ from time import strftime
 
 import numpy as np
 from astropy.constants import c as speed_of_light
+from scipy.ndimage import gaussian_filter1d
 
 # sick
 from .. import specutils
@@ -535,8 +536,10 @@ class BaseModel(object):
             pickle.dump((self.grid_points, meta), fp, -1)
             
         # Create the rebinning matrices.
-        matrices = []
+        convolutions = []
         wavelength_indices = []
+        fast_binning \
+            = self._configuration.get("settings", {}).get("fast_binning", False)
         for name in channel_names:
             new_wavelengths, spectral_resolution = new_channels[name]
 
@@ -550,14 +553,27 @@ class BaseModel(object):
                     old_wavelengths[0], old_wavelengths[-1],
                     new_wavelengths[0], new_wavelengths[-1]))
 
-            if spectral_resolution is None \
-            or not np.isfinite(spectral_resolution):
-                matrices.append(
-                    specutils.sample.resample(old_wavelengths, new_wavelengths))
+            if fast_binning and False:
+                if spectral_resolution is None \
+                or not np.isfinite(spectral_resolution):
+                    convolutions.append(lambda nw, ow, of: \
+                        np.interp(nw, ow, of, left=np.nan, right=np.nan))
+
+                else:
+                    convolutions.append(lambda nw, ow, of: \
+                        np.interp(nw, ow,
+                            gaussian_filter1d(f, spectral_resolution * R_scale),
+                            left=np.nan, right=np.nan))
+
             else:
-                matrices.append(
-                    specutils.sample.resample_and_convolve(old_wavelengths,
-                        new_wavelengths, new_resolution=spectral_resolution))
+                if spectral_resolution is None \
+                or not np.isfinite(spectral_resolution):
+                    convolutions.append(lambda *_: specutils.sample.resample(
+                        old_wavelengths, new_wavelengths))
+                else:
+                    convolutions.append(lambda *_: \
+                        specutils.sample.resample_and_convolve(old_wavelengths,
+                            new_wavelengths, new_resolution=spectral_resolution))
 
         # Load the intensities.
         intensities = np.memmap(
@@ -588,15 +604,15 @@ class BaseModel(object):
             else:
                 logger.debug("Recasting point {0}/{1}".format(i, n))
 
-            for j, (size, matrix, indices) \
-            in enumerate(zip(channel_sizes, matrices, wavelength_indices)):
+            for j, (size, convolution, indices) \
+            in enumerate(zip(channel_sizes, convolutions, wavelength_indices)):
                 idx = sum(channel_sizes[:j])
                 cast_intensities[i, idx:idx + size] = \
-                    np.copy(intensities[i, indices[0]:indices[1]]) * matrix
+                    np.copy(intensities[i, indices[0]:indices[1]])
 
         """
         for j, (size, matrix, indices) \
-        in enumerate(zip(channel_sizes, matrices, wavelength_indices)):
+        in enumerate(zip(channel_sizes, convolutions, wavelength_indices)):
             idx = sum(channel_sizes[:j])
             cast_intensities[:, idx:idx + size] = \
                 intensities[:, indices[0]:indices[1]] * matrix
