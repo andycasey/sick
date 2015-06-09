@@ -182,7 +182,11 @@ class CannonModel(Model):
         if fixed is None: fixed = {}
         if fixed:
             # Remove non-parameters from the 'fixed' keywords.
-            keys = set(fixed).intersection(parameters)
+            keys = set(fixed).intersection(self.parameters)
+            ignored_keys = set(fixed).difference(parameters)
+            if ignored_keys:
+                logger.warn("Ignoring optimise.fixed keys because they are not"
+                    " model parameters: {0}".format(", ".join(ignored_keys)))
             # If the 'fixed' value is provided, use that. Otherwise if it is
             # None then use the initial_theta value.
             fixed = dict(zip(keys, 
@@ -291,9 +295,9 @@ class CannonModel(Model):
 
         # Put the result into a usable form.
         result = dict(zip(parameters, x_opt))
-        result.update(fixed)
         result.update(nlp(x_opt, return_labels=True))
-
+        result.update(fixed)
+        
         result = OrderedDict([(k, result[k]) \
             for k in self.parameters if k in result])
 
@@ -355,12 +359,7 @@ class CannonModel(Model):
         mask *= self._model_mask()
 
         # Do we have a globally-trained model, or should we do a local train?
-        if "cannon_data" in self._configuration["model_grid"]:
-            # Global Cannon.
-            coeffs = self._cannon_coefficients.copy()
-            coeffs[~mask, :] = np.nan
-            
-        else:
+        if "cannon_data" not in self._configuration["model_grid"]:
             # Local Cannon. Train around the closest point.
             if closest_point is None:
                 raise WTFError("you want a local Cannon model but you haven't "\
@@ -394,15 +393,25 @@ class CannonModel(Model):
                         pickle.dump((coefficients, scatter, lv, offsets,
                             grid_indices), fp, -1)
 
+        # Apply masks to cannoniser.
+        # This ensures the plots don't look like they are interpolating over
+        # masked regions, while minimising the number of nan-multiplications
+        # required,
+        coefficients = self._cannon_coefficients.copy()
+        coefficients[~mask, :] = np.nan
 
-        cannoniser = lambda pt: np.dot(self._cannon_coefficients,
+        # Slice only to the left and right most nans.
+        _ = np.where(mask)[0]
+        lhs, rhs = np.clip([_.min(), _.max() + 1], 0, self.wavelengths.size)
+        
+        cannoniser = lambda pt: np.dot(coefficients[lhs:rhs],
             _build_label_vector_rows(self._cannon_label_vector,
                 pt - self._cannon_offsets.copy()).T).flatten()
 
         generate.init()
-        generate.wavelengths.append(self.wavelengths)
+        generate.wavelengths.append(self.wavelengths[lhs:rhs])
         generate.intensities.append(cannoniser)
-        generate.variances[-1] = self._cannon_scatter**2
+        generate.variances[-1] = self._cannon_scatter[lhs:rhs]**2
 
         self._initialised = True
         self._subset_bounds = {}

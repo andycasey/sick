@@ -7,10 +7,14 @@ from __future__ import division, print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
-__all__ = ("human_readable_digit", "unique_preserved_list", "update_recursively")
+__all__ = ("estimate_tau_exp", "estimate_tau_int", "human_readable_digit",
+    "unique_preserved_list", "update_recursively")
 
 import collections
 import numpy as np
+from scipy.optimize import leastsq
+
+from emcee import autocorr
 
 def update_recursively(original, new):
     """
@@ -91,3 +95,38 @@ def human_readable_digit(number):
     millidx = max(0, min(len(word)-1, int(np.floor(np.log10(abs(number))/3.0))))
     return "{0:.1f} {1}".format(number/10**(3*millidx), word[millidx])
 
+
+
+
+def estimate_tau_exp(chains, **kwargs):
+    """
+    Estimate the exponential auto-correlation time for all parameters in a chain.
+    """
+
+    # Calculate the normalised autocorrelation function in each parameter.
+    rho = np.nan * np.ones(chains.shape[1:])
+    for i in range(chains.shape[2]):
+        try:
+            rho[:, i] = autocorr.function(np.mean(chains[:, :, i], axis=0),
+                **kwargs)
+        except:
+            continue
+
+    # Take the max rho at any step.
+    rho_max = np.max(rho, axis=1)
+
+    # Now fit the max rho with an exponential profile.
+    x = np.arange(rho_max.size)
+    func = lambda tau_exp: np.exp(-x/tau_exp)
+    chi = lambda tau_exp: func(tau_exp[0]) - rho_max # tau_exp is a list
+
+    # Start with 50% of the chain length. probably OK.
+    tau_exp, ier = leastsq(chi, [chains.shape[1]/2.])
+    return (tau_exp, rho, func(tau_exp))
+
+
+def estimate_tau_int(chains, **kwargs):
+    """
+    Estimate the integrated auto-correlation time for all parameters in a chain.
+    """
+    return autocorr.integrated_time(np.mean(chains, axis=0), **kwargs)

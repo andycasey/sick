@@ -17,10 +17,11 @@ import numpy as np
 import emcee
 from astropy.constants import c as speed_of_light
 from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import leastsq
 
 import generate
 from base import BaseModel
-from .. import (inference, optimise as op, specutils)
+from .. import (inference, optimise as op, specutils, utils)
 
 
 logger = logging.getLogger("sick")
@@ -218,8 +219,8 @@ class Model(BaseModel):
                     # Assume oversampling rate of ~5.
                     theta.update({ parameter: np.median(R)/5.})
 
-                elif parameter == "f" or parameter.startswith("f_"):
-                    theta.update({ parameter: -10.0 }) # Not overestimated.
+                elif parameter == "ln_f" or parameter.startswith("ln_f_"):
+                    theta.update({ parameter: -9.9 }) # Not overestimated.
 
                 elif parameter in ("Po", "Vo"):
                     theta.update({
@@ -249,10 +250,14 @@ class Model(BaseModel):
 
         
 
-    def infer(self, data, initial_proposal=None, walkers=100, burn=5000,
-        sample=5000, a=2.0, threads=1, full_output=False, **kwargs):
+    def infer(self, data, initial_proposal=None, full_output=False,**kwargs):
+
         """
         Infer the model parameters, given the data.
+        auto_convergence=True,
+        walkers=100, burn=2000, sample=2000, minimum_sample=2000,
+        convergence_check_frequency=1000, a=2.0, threads=1,
+
         """
 
         # Apply data masks now so we don't have to do it on the fly.
@@ -267,33 +272,72 @@ class Model(BaseModel):
         logger.debug("Inferring {0} parameters: {1}".format(len(parameters),
             ", ".join(parameters)))
 
-        # Create the spectrum approximator/interpolator.
-        # TODO: Allow rescale command for the approximator.
-        
-        if walkers % 2 > 0 or walkers < 2 * len(parameters):
+        # What sampling behaviour will we have?
+        # - Auto-convergence:
+        #       + Sample for `minimum_sample` (default 2000, 200 walkers)
+        #       + Calculate the maximum exponential autocorrelation time for
+        #         all parameters
+        #       + For the rest of the chain, calculate the autocorrelation time
+        #       + Ensure that the number of samples we have is more than 
+        #         `effectively_independent_samples` (default 100) times.
+        # - Specified convergence:
+        #       + Burn for `burn` (default 2000) steps
+        #       + Sample for `sample` (default 2000) steps
+
+        kwd = {
+            "auto_convergence": False, # TODO CHANGE ME
+            "walkers": 100,
+            "burn": 2000,
+            "sample": 2000,
+            # The minimum_sample, n_tau_exp_as_burn_in, minimum_eis are only
+            # used if auto_convergence is turned on.
+            "minimum_sample": 2000,
+            "maximum_sample": 100000,
+            "n_tau_exp_as_burn_in": 3,
+            "minimum_effective_independent_samples": 100,
+            "check_convergence_frequency": 1000,
+            "a": 2.0,
+            "threads": 1
+        }
+
+        # Update from the model, then update from any keyword arguments given.
+        kwd.update(self._configuration.get("infer", {}).copy())
+        kwd.update(**kwargs)
+
+        # Make some checks.
+        if kwd["walkers"] % 2 > 0 or kwd["walkers"] < 2 * len(parameters):
             raise ValueError("the number of walkers must be an even number and "
                 "be at least twice the number of model parameters")
 
-        _be_positive = {
-            "burn": burn,
-            "sample": sample,
-            "threads": threads
-        }
-        for k, v in _be_positive.items():
-            if v < 1:
-                raise ValueError("{} must be a positive integer".format(k))
+        check_keywords = ["threads", "a"]
+        if kwd["auto_convergence"]:
+            logger.info("Convergence will be estimated automatically.")
+            check_keywords += ["minimum_sample", "check_convergence_frequency",
+                "minimum_effective_independent_samples", "n_tau_exp_as_burn_in",
+                "maximum_sample"]
+        
+        else:
+            check_keywords += ["burn", "sample"]
+            logger.warn("No convergence checks will be done!")
+            logger.info("Burning for {0} steps and sampling for {1} with {2} "\
+                "walkers".format(kwd["burn"], kwd["sample"], kwd["walkers"]))
 
-        # Get the inference keyword arguments.
-        infer_kwargs = self._configuration.get("infer", {}).copy()
-        infer_kwargs.update(kwargs)
+        for keyword in check_keywords:
+            if kwd[keyword] < 1:
+                raise ValueError("keyword {} must be a positive value".format(
+                    keyword))
+
+        # Check for non-standard proposal scales.
+        if kwd["a"] != 2.0:
+            logger.warn("Using proposal scale of {0:.2f}".format(kwd["a"]))
+
+        # If no initial proposal given, estimate the model parameters.
+        if initial_proposal is None:
+            initial_proposal = self.estimate(data)
 
         # Initial proposal could be:
         #   - an array (N_walkers, N_dimensions)
         #   - a dictionary containing key/value pairs for the dimensions
-        #   - None
-        if initial_proposal is None:
-            initial_proposal = self.estimate(data)
-
         if isinstance(initial_proposal, dict):
 
             wavelengths_required = []
@@ -304,69 +348,177 @@ class Model(BaseModel):
                 wavelengths_required.append(
                     [spectrum.disp[0] * (1 - z), spectrum.disp[-1] * (1 - z)])
 
-            closest_point = [initial_proposal[p] for p in self.grid_points.dtype.names]
+            closest_point = [initial_proposal[p] \
+                for p in self.grid_points.dtype.names]
             subset_bounds = self._initialise_approximator(
                 closest_point=closest_point, 
                 wavelengths_required=wavelengths_required, force=True, **kwargs)
 
             initial_proposal = self._initial_proposal_distribution(
-                parameters, initial_proposal, walkers)
+                parameters, initial_proposal, kwd["walkers"])
 
         elif isinstance(initial_proposal, np.ndarray):
             initial_proposal = np.atleast_2d(initial_proposal)
-            if initial_proposal.shape != (walkers, len(parameters)):
+            if initial_proposal.shape != (kwd["walkers"], len(parameters)):
                 raise ValueError("initial proposal must be an array of shape "\
-                    "(N_parameters, N_walkers) ({0}, {1})".format(walkers,
+                    "(N_parameters, N_walkers) ({0}, {1})".format(kwd["walkers"],
                         len(parameters)))
 
         # Prepare the convolution functions.
         self._create_convolution_functions(matched_channels, data, parameters)
 
-        # Check for non-standard proposal scales.
-        if a != 2.0:
-            logger.warn("Using proposal scale of {0:.2f}".format(a))
-
         # Create the sampler.
         logger.info("Creating sampler with {0} walkers and {1} threads".format(
-            walkers, threads))
+            kwd["walkers"], kwd["threads"]))
         debug = kwargs.get("debug", False)
-        sampler = emcee.EnsembleSampler(walkers, len(parameters),
-            inference.ln_probability, a=a, args=(parameters, self, data, debug),
-            kwargs={"matched_channels": matched_channels}, threads=threads)
+        sampler = emcee.EnsembleSampler(kwd["walkers"], len(parameters),
+            inference.ln_probability, a=kwd["a"], threads=kwd["threads"],
+            args=(parameters, self, data, debug),
+            kwargs={"matched_channels": matched_channels})
 
-        # Burn in.
+        # Regardless of whether we automatically check for convergence or not,
+        # we will still need to burn in for some minimum amount of time.
+        if kwd["auto_convergence"]:
+            # Sample for `minimum_sample` period.
+            descr, iterations = "", kwd["minimum_sample"]
+        else:
+            # Sample for `burn` period
+            descr, iterations = "burn-in", kwd["burn"]
+
+        # Start sampling.
+        t_init = time()
+        acceptance_fractions = []
         progress_bar = kwargs.get("__show_progress_bar", True)
-        sampler, burn_acceptance_fractions, pos, lnprob, rstate, burn_elapsed \
-            = self._sample(sampler, initial_proposal, burn, descr="burn-in",
+        sampler, init_acceptance_fractions, pos, lnprob, rstate, init_elapsed \
+            = self._sample(sampler, initial_proposal, iterations, descr=descr,
                 parameters=parameters, __show_progress_bar=progress_bar)
+        acceptance_fractions.append(init_acceptance_fractions)
 
-        # Save the chain and log probabilities before we reset the chain.
-        burn_chains = sampler.chain
-        burn_ln_probabilities = sampler.lnprobability
+        # If we don't have to check for convergence, it's easy:
+        if not kwd["auto_convergence"]:
 
-        # Reset the chain.
-        logger.debug("Resetting chain...")
-        sampler.reset()
+            # Save the chain and log probabilities before we reset the chain.
+            burn, sample = kwd["burn"], kwd["sample"]
+            converged = None # we don't know!
+            burn_chains = sampler.chain
+            burn_ln_probabilities = sampler.lnprobability
 
-        # Sampler.
-        sampler, prod_acceptance_fractions, pos, lnprob, rstate, prod_elapsed \
-            = self._sample(sampler, pos, sample, lnprob0=lnprob, rstate0=rstate, 
-                descr="production", parameters=parameters,
-                __show_progress_bar=progress_bar)
+            # Reset the chain.
+            logger.debug("Resetting chain...")
+            sampler.reset()
+
+            # Sample the posterior.
+            sampler, prod_acceptance_fractions, pos, lnprob, rstate, t_elapsed \
+                = self._sample(sampler, pos, kwd["sample"], lnprob0=lnprob,
+                    rstate0=rstate, descr="production", parameters=parameters,
+                    __show_progress_bar=progress_bar)
+
+            production_chains = sampler.chain
+            production_ln_probabilities = sampler.lnprobability
+            acceptance_fractions.append(prod_acceptance_fractions)
+
+        else:
+
+            # Start checking for convergence at a frequency
+            # of check_convergence_frequency
+            last_state = [pos, lnprob, rstate]
+            converged, total_steps = False, 0 + iterations
+            min_eis_required = kwd["minimum_effective_independent_samples"]
+            while not converged and kwd["maximum_sample"] > total_steps:
                 
+                # Check for convergence.
+                # Estimate the exponential autocorrelation time.
+                try:
+                    tau_exp, rho, rho_max_fit \
+                        = utils.estimate_tau_exp(sampler.chain)
+
+                except:
+                    logger.exception("Exception occurred when trying to "
+                        "estimate the exponential autocorrelation time:")
+
+                    logger.info("To recover, we are temporarily setting tau_exp"
+                        " to {0}".format(total_steps))
+                    tau_exp = total_steps
+
+                logger.info("Estimated tau_exp at {0} is {1:.0f}".format(
+                    total_steps, tau_exp))
+
+                # Grab everything n_tau_exp_as_burn_in times that.
+                burn = int(np.ceil(tau_exp)) * kwd["n_tau_exp_as_burn_in"]
+                sample = sampler.chain.shape[1] - burn
+
+                if 1 > sample:
+                    logger.info("Sampler has not converged because {0}x the "
+                        "estimated exponential autocorrelation time of {1:.0f}"
+                        " is step {2}, and we are only at step {3}".format(
+                            kwd["n_tau_exp_as_burn_in"], tau_exp, burn,
+                            total_steps))
+        
+                else:
+
+                    # Calculate the integrated autocorrelation time in the 
+                    # remaining sample, for every parameter.
+                    tau_int = utils.estimate_tau_int(sampler.chain[:, burn:])
+
+                    # Calculate the effective number of independent samples in 
+                    # each parameter.
+                    num_effective = (kwd["walkers"] * sample)/(2*tau_int)
+                    
+                    logger.info("Effective number of independent samples in "
+                        "each parameter:")
+                    for parameter, n_eis in zip(parameters, num_effective):
+                        logger.info("\t{0}: {1:.0f}".format(parameter, n_eis))
+
+                    if num_effective.min() > min_eis_required:
+                        # Converged.
+                        converged = True
+                        logger.info("Convergence achieved ({0:.0f} > {1:.0f})"\
+                            .format(num_effective.min() > min_eis_required))
+
+                        # Separate the samples into burn and production..
+                        burn_chains = sampler.chain[:, :burn, :]
+                        burn_ln_probabilities = sampler.lnprobability[:burn]
+
+                        production_chains = sampler.chain[:, burn:, :]
+                        production_ln_probabilities = sampler.lnprobability[burn:]
+                        break
+
+                    else:
+                        # Nope.
+                        logger.info("Sampler has not converged because it did "
+                            "not meet the minimum number of effective "
+                            "independent samples ({0:.0f})".format(kwd["n"]))
+                
+                # Keep sampling.
+                iterations = kwd["check_convergence_frequency"]
+                logger.info("Trying for another {0} steps".format(iterations))
+
+                pos, lnprob, rstate = last_state
+                sampler, af, pos, lnprob, rstate, t_elapsed = self._sample(
+                    sampler, pos, iterations, lnprob0=lnprob, rstate0=rstate,
+                    descr="", parameters=parameters,
+                    __show_progress_bar=progress_bar)
+
+                total_steps += iterations
+                acceptance_fractions.append(af)
+                last_state.extend(pos, lnprob, rstate)
+                del last_state[:3]
+
+            if not converged:
+                logger.warn("Maximum number of samples ({:.0f}) reached without"
+                    "convergence!".format(kwd["maximum_sample"]))
+
+        logger.info("Total time elapsed: {0} seconds".format(time() - t_init))
+        
         if sampler.pool:
             sampler.pool.close()
             sampler.pool.join()
-        
-        logger.info("Time elapsed for burn / production / total: {0:.1f} "
-            "{1:.1f} {2:.1f}".format(burn_elapsed, prod_elapsed, burn_elapsed +
-                prod_elapsed))
 
         # Stack burn and production information together.
-        chains = np.hstack([burn_chains, sampler.chain])
-        lnprobability = np.hstack([burn_ln_probabilities, sampler.lnprobability])
-        acceptance_fractions \
-            = np.hstack([burn_acceptance_fractions, prod_acceptance_fractions])
+        chains = np.hstack([burn_chains, production_chains])
+        lnprobability = np.hstack([
+            burn_ln_probabilities, production_ln_probabilities])
+        acceptance_fractions = np.hstack(acceptance_fractions)
 
         chi_sq, dof, model_fluxes = self._chi_sq(dict(zip(parameters, 
             [np.percentile(chains[:, burn:, i], 50) 
@@ -406,7 +558,7 @@ class Model(BaseModel):
         if full_output:
             metadata = {
                 "burn": burn,
-                "walkers": walkers,
+                "walkers": kwd["walkers"],
                 "sample": sample,
                 "parameters": labels,
                 "scales": scales,
@@ -438,7 +590,6 @@ class Model(BaseModel):
             mean_acceptance_fraction[i] = sampler.acceptance_fraction.mean()
 
             if progress_bar:
-
                 screen.addstr(0, 0,
                     "\rSampler at step {0:.0f}{1} with a mean accept"\
                     "ance fraction of {2:.3f}, highest ln(P) was {3:.3e}\n"\
@@ -447,7 +598,6 @@ class Model(BaseModel):
                         sampler.lnprobability[:, i].max()))
 
                 if (i % increment == 0):
-                    
                     message = "[{done}{not_done}] {percent:3.0f}%".format(
                         done="=" * int(i / increment),
                         not_done=" " * int((iterations - i)/increment),
@@ -465,7 +615,6 @@ class Model(BaseModel):
                                 pcs *= 299792.458
                                 message += " [{0:.1f} ({1:+.1f}, {2:+.1f}) km/s]"\
                                     .format(pcs[1], pcs[2] - pcs[1], -pcs[1] + pcs[0])
-                            
                             screen.addstr(j + 2, 0, message)
 
                 screen.refresh()
@@ -480,25 +629,6 @@ class Model(BaseModel):
             if mean_acceptance_fraction[i] in (0, 1):
                 raise RuntimeError("mean acceptance fraction is {0:.0f}".format(
                     mean_acceptance_fraction[i]))
-
-            """
-            if i % 100 == 0 and i > 0:
-                # Do autocorrelation time.
-                try:
-                    tau_eff = emcee.autocorr.integrated_time(
-                        sampler.chain[:, :i, :].reshape(-1, p0.shape[1]))
-                except ValueError:
-                    logger.debug("Could not calculate integrated autocorrelation"
-                        " times")
-
-                else:
-                    N = p0.shape[0] * (i + 1)
-                    effective_samples = N / (2 * tau_eff)
-
-                    print(effective_samples)
-                    print("MINIMUM NUMBER OF EFFECTIVE SAMPLES {0:.0f}".format(
-                        effective_samples.min()))
-            """
         
         curses.echo()
         curses.nocbreak()
@@ -511,7 +641,8 @@ class Model(BaseModel):
         return (sampler, mean_acceptance_fraction, pos, lnprob, rstate, elapsed)
 
 
-    def _create_convolution_functions(self, matched_channels, data, free_parameters):
+    def _create_convolution_functions(self, matched_channels, data, 
+        free_parameters, fixed_parameters=None):
         """
         Pre-create binning matrix factories. The following options need to be
         followed on a per-matched channel basis.
@@ -566,6 +697,9 @@ class Model(BaseModel):
         logger.info("Creating convolution functions (fast_binning = {})".format(
             fast_binning))
 
+        if fixed_parameters is None:
+            fixed_parameters = {}
+
         convolution_functions = []
         for channel, spectrum in zip(matched_channels, data):
             if channel is None:
@@ -584,9 +718,14 @@ class Model(BaseModel):
                     "no redshift or resolution parameters were found".format(
                         channel))
 
+                # Is there any z?
+                z = fixed_parameters.get(
+                    "z_{}".format(channel), fixed_parameters.get("z", 0))
+
                 # Create the binning matrix based on the globally-scoped array
                 # of wavelengths.
-                matrix = specutils.sample.resample(generate.wavelengths[-1],
+                matrix = specutils.sample.resample(
+                    generate.wavelengths[-1] * (1 + z),
                     spectrum.disp)
 
                 # Wrap in a lambda function to be consistent with other options.
@@ -733,7 +872,8 @@ class Model(BaseModel):
         masked_data, pixels_affected = self._apply_data_mask(data)
 
         # Prepare the convolution functions.
-        self._create_convolution_functions(matched_channels, data, parameters)
+        self._create_convolution_functions(matched_channels, data, parameters,
+            fixed_parameters=fixed)
 
         logger.info("Optimising parameters: {0}".format(", ".join(parameters)))
         logger.info("Optimisation keywords: {0}".format(op_kwargs))
@@ -760,8 +900,6 @@ class Model(BaseModel):
         # TODO: MAKE SURE THE x_opt_theta IS IN THE SAME ORDER AS MODEL.pARAMETERS
         x_opt_theta_unscaled.update(fixed)
 
-        if hasattr(self, "_cannon_offsets"):
-            x_opt[:self._cannon_offsets.size] += self._cannon_offsets
         x_opt_theta = OrderedDict(zip(parameters, x_opt))
         x_opt_theta.update(fixed)
 
@@ -852,15 +990,16 @@ class Model(BaseModel):
 
 
             # Apply continuum if it is present.
-            i, coeff = 0, []
-            while theta.get("continuum_{0}_{1}".format(channel, i), None):
-                coeff.append(theta["continuum_{0}_{1}".format(channel, i)])
-                i += 1
+            j, coeff = 0, []
+            while theta.get("continuum_{0}_{1}".format(channel, j), None) is not None:
+                coeff.append(theta["continuum_{0}_{1}".format(channel, j)])
+                j += 1
 
             continuum = np.polyval(coeff[::-1], spectrum.disp) if coeff else 1.
 
             channel_fluxes *= continuum
 
+            channel_fluxes[0 >= channel_fluxes] = np.nan
 
 
             continua.append(continuum)

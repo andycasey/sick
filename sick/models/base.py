@@ -232,7 +232,7 @@ class BaseModel(object):
 
         # Underestimated variance
         parameters.extend(channel_parameters(
-            "f", self.channel_names,
+            "ln_f", self.channel_names,
             model_configuration.get("underestimated_variance", False)))
 
         # Outlier pixels
@@ -317,7 +317,9 @@ class BaseModel(object):
         wavelengths = np.array(wavelengths)
 
         mask = np.ones_like(wavelengths, dtype=bool)
-        for start, end in self._configuration.get("masks", {}).get("model", []):
+        model_mask = self._configuration.get("masks", {}).get("model", [])
+        logger.debug("Applying model mask: {0}".format(model_mask))
+        for start, end in model_mask:
             idx = np.clip(wavelengths.searchsorted([start, end]) + [0, 1], 0,
                 wavelengths.size)
             mask[idx[0]:idx[1]] = False

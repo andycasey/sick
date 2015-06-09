@@ -126,7 +126,7 @@ def minimise(objective_function, p0, **kwargs):
             return objective_function(theta.copy() * scale)
 
         x_opt, f_opt, info_dict = op.fmin_l_bfgs_b(scaled_objective_function,
-            np.ones(p0.size), **op_kwargs)
+            np.ones(p0.size, dtype=float), **op_kwargs)
 
         # Rescale.
         x_opt *= scale

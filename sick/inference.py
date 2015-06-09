@@ -49,7 +49,7 @@ def ln_likelihood(theta, model, data, debug=False, **kwargs):
             continue 
 
         # Observed and model variance (where it exists)
-        variance = spectrum.variance + model_variance * continuum
+        variance = spectrum.variance + model_variance * continuum**2
 
         # Any on-the-fly sigma-clipping?
         if sigma_clip > 0:
@@ -61,7 +61,7 @@ def ln_likelihood(theta, model, data, debug=False, **kwargs):
                 variance[mask] = np.nan
 
         # Any underestimated variance?
-        ln_f = theta.get("f", theta.get("f_{}".format(channel), None))
+        ln_f = theta.get("ln_f", theta.get("ln_f_{}".format(channel), None))
         if ln_f is not None:
             variance += model_flux**2 * np.exp(2.0 * ln_f)
 
@@ -69,7 +69,9 @@ def ln_likelihood(theta, model, data, debug=False, **kwargs):
         ivar = 1.0/variance
         likelihood = -0.5 * ((spectrum.flux - model_flux)**2 * ivar \
             - np.log(ivar))
-        pixels = np.isfinite(likelihood)
+
+        # Only allow for positive flux to be produced!
+        pixels = np.isfinite(likelihood) * (model_flux > 0)
     
         # Outliers?
         if "Po" in theta:
@@ -126,7 +128,7 @@ def ln_prior(theta, model, debug=False):
 
         try:
             f = eval(rule, _prior_eval_env_)
-            ln_prior += f(value)
+            ln_prior += f(theta[parameter])
 
         except:
             logger.exception("Failed to evaluate prior for {0}: {1}".format(

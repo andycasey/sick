@@ -147,7 +147,7 @@ corner.__doc__ = """
         :class:`matplotlib.Figure`
 """
 
-def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
+def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn=None,
     alpha=0.5, fig=None):
     """
     Create a plot showing the walker values for each parameter at every step.
@@ -174,10 +174,10 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     :param truth_color: [optional]
         A ``matplotlib`` style color for the ``truths`` markers.
 
-    :param burn_in: [optional]
+    :param burn: [optional]
         Reference step to indicate on the plots.
 
-    :type burn_in:
+    :type burn:
         integer or None
 
     :param alpha: [optional]
@@ -242,8 +242,8 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
         for walker in range(n_walkers):
             ax.plot(xs[walker, :, k], color="k", alpha=alpha)
 
-        if burn_in is not None:
-            ax.axvline(burn_in, color="k", linestyle=":")
+        if burn is not None:
+            ax.axvline(burn, color="k", linestyle=":")
 
         if truths is not None:
             ax.axhline(truths[k], color=truth_color, lw=2)
@@ -263,7 +263,7 @@ def chains(xs, labels=None, truths=None, truth_color=u"#4682b4", burn_in=None,
     return fig
 
 
-def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
+def acceptance_fractions(mean_acceptance_fractions, burn=None, ax=None):
     """
     Plot the meana cceptance fractions for each MCMC step.
 
@@ -273,11 +273,11 @@ def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
     :type mean_acceptance_fractions:
         :class:`numpy.array`
 
-    :param burn_in: [optional]
+    :param burn: [optional]
         The burn-in point. If provided, a dashed vertical line will be shown at
         the burn-in point.
 
-    :type burn_in:
+    :type burn:
         int
 
     :param ax: [optional]
@@ -311,8 +311,8 @@ def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
 
     ax.plot(mean_acceptance_fractions, color="k", lw=2)
 
-    if burn_in is not None:
-        ax.axvline(burn_in, linestyle=":", color="k")
+    if burn is not None:
+        ax.axvline(burn, linestyle=":", color="k")
 
     ax.set_xlim(0, len(mean_acceptance_fractions))
 
@@ -328,8 +328,8 @@ def acceptance_fractions(mean_acceptance_fractions, burn_in=None, ax=None):
     return fig
 
 
-def autocorrelation(chain, index=0, burn_in=None, limit=None, fig=None, 
-    figsize=None):
+def normalised_autocorrelation_function(chain, index=0, burn=None, 
+    limit=None, fig=None, figsize=None):
     """
     Plot the autocorrelation function for each parameter of a sampler chain.
 
@@ -394,8 +394,8 @@ def autocorrelation(chain, index=0, burn_in=None, limit=None, fig=None,
         else:
             ax.plot(rho, "k", lw=1)
 
-    if burn_in:
-        ax.axvline(burn_in, linestyle=":", color="k")
+    if burn:
+        ax.axvline(burn, linestyle=":", color="k")
 
     ax.xaxis.set_major_locator(MaxNLocator(5))
     [l.set_rotation(45) for l in ax.get_xticklabels()]

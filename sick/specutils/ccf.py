@@ -9,9 +9,10 @@ __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 __all__ = ["Spectrum1D"]
 
 import numpy as np
-from .sample import resample
-
+from scipy.optimize import curve_fit
 from astropy.constants import c as speed_of_light
+
+from .sample import resample
 
 c = speed_of_light.to("km/s").value
 
@@ -146,8 +147,8 @@ def cross_correlate(observed, template_dispersion, template_fluxes,
         h = ccf.max()
 
         # Scale the CCF
-        ccf -= ccf.min()
-        ccf *= (h/ccf.max())
+        #ccf -= ccf.min()
+        #ccf *= (h/ccf.max())
         
         R[i] = h
         z[i] = z_array[ccf.argmax()]
@@ -155,6 +156,58 @@ def cross_correlate(observed, template_dispersion, template_fluxes,
             z_err[i] = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.35482)**2
         except ValueError:
             continue
+
+    # Re-measure the velocity at the best peak.
+    index = np.nanargmax(R)
+
+    denominator = np.sqrt(
+        np.inner(apod_template_flux[index, :], apod_template_flux[index, :]))
+
+    flux_correlation = template_flux_corr[index, :] / denominator
+    correlation = np.fft.ifft(flux_correlation).real
+
+    # FReflect about zero.
+    ccf = np.zeros(N)
+    ccf[:N/2] = correlation[N/2:]
+    ccf[N/2:] = correlation[:N/2]
+
+    h = ccf.max()
+    ccf -= ccf.min()
+    ccf *= h/ccf.max()
+
+    # Fit +/- 5 pixels
+    idx = np.argmax(ccf) - 3, np.argmax(ccf) + 3
+
+    coeffs = np.polyfit(z_array[idx[0]:idx[1]], ccf[idx[0]:idx[1]], 2)
+    x_i = np.linspace(z_array[idx[0]], z_array[idx[1]], 1000)
+    y_i = np.polyval(coeffs, x_i)
+
+    # Update the value
+    z[index] = x_i[y_i.argmax()]
+
+    """
+    # Fit the profile peak.
+    fwhm = np.ptp(z_array[np.where(ccf >= 0.5)])
+    p0 = np.array([z[index], fwhm/2.355, 1.0]) # mu, sigma, peak.
+    use = (z_array > (p0[0] - 3 * p0[1])) * ((p0[0] + 3*p0[1]) > z_array)
+    x, y = z_array[use], ccf[use]
+
+    # Fit profile:
+    f = lambda x, mu, sigma, peak: peak * np.exp(-(mu - x)**2/(2*sigma**2)) 
+    
+    import matplotlib.pyplot as plt
+    plt.plot(z_array, ccf, c='k')
+    plt.plot(x, y, c='b')
+    plt.plot(x, f(x, *p0), c='r')
+
+    p1 = curve_fit(f, x, y, p0=p0)
+    plt.plot(x, f(x, *p1[0]), c='m')
+
+    plt.gca().set_ylim(0,1)
+    raise a
+
+    p1 = curve_fit(f, x, y, p0=p0)
+    """
 
     return (z * c, z_err * c, R)
 

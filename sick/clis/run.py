@@ -7,16 +7,27 @@ from __future__ import print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
+from time import time
+t_init = time()
 import argparse
 import cPickle as pickle
 import logging
 import os
 
+t_a = time()
+print(t_a - t_init)
+
 import numpy as np
 import yaml
 import json
 
+t_b = time()
+print(t_b - t_a)
+
 import sick
+t_c = time()
+print(t_c - t_b)
+
 
 logger = logging.getLogger("sick")
 
@@ -80,6 +91,9 @@ def parser(input_args=None):
     estimate_parser.add_argument(
         "--plot-format", "-pf", dest="plot_format", action="store", type=str, 
         default="png", help="Format for output plots (default: %(default)s)")
+    estimate_parser.add_argument(
+        "-r", dest="read_from_filename", action="store", type=bool,
+        default=False, help="Read spectrum paths from a filename.")
     estimate_parser.set_defaults(func=estimate)
 
     # Create parser for the optimise command
@@ -101,6 +115,9 @@ def parser(input_args=None):
     optimise_parser.add_argument(
         "--plot-format", "-pf", dest="plot_format", action="store", type=str,
         default="png", help="Format for output plots (default: %(default)s)")
+    optimise_parser.add_argument(
+        "-r", dest="read_from_filename", action="store", type=bool,
+        default=False, help="Read spectrum paths from a filename.")
     optimise_parser.set_defaults(func=optimise)
 
     # Create parser for the infer command
@@ -125,14 +142,31 @@ def parser(input_args=None):
     infer_parser.add_argument(
         "--plot-format", "-pf", dest="plot_format", action="store", type=str,
         default="png", help="Format for output plots (default: %(default)s)")
+    infer_parser.add_argument(
+        "-r", dest="read_from_filename", action="store", type=bool,
+        default=False, help="Read spectrum paths from a filename.")
     infer_parser.set_defaults(func=infer)
 
     args = parser.parse_args(input_args)
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
+    # Check plot formats.
+    if args.plotting \
+    and args.command.lower() in ("estimate", "optimise", "infer"):
+
+        import matplotlib.pyplot as plt
+        fig = plt.figure()
+        available = fig.canvas.get_supported_filetypes().keys()
+        plt.close(fig)
+
+        if args.plot_format.lower() not in available:
+            raise ValueError("plotting format {0} is unavailable: Options are:"\
+                " {1}".format(args.plot_format.lower(), ", ".join(available)))
+
     # Create a default filename prefix based on the input filename arguments
     if args.command.lower() in ("estimate", "optimise", "infer") \
-    and args.filename_prefix is None:
+    and args.filename_prefix is None \
+    and not args.read_from_filename:
         args.filename_prefix = _default_output_prefix(args.spectrum_filenames)
 
         handler = logging.FileHandler("{}.log".format(
@@ -140,23 +174,38 @@ def parser(input_args=None):
         formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-    
-        # Check plot formats.
-        if args.plotting:
 
-            import matplotlib.pyplot as plt
-            fig = plt.figure()
-            available = fig.canvas.get_supported_filetypes().keys()
-            plt.close(fig)
-
-            if args.plot_format.lower() not in available:
-                raise ValueError("plotting format {0} is unavailable: Options "\
-                    "are: {1}".format(
-                        args.plot_format.lower(), ", ".join(available)))
     else:
         args.filename_prefix = ""
 
     return args
+
+
+class loopify(object):
+
+    def __init__(self, function):
+        self.function = function
+
+    def __call__(self, args):
+
+        if args.read_from_filename:
+
+            # Read the filenames in from the first file given.
+
+            # Turn off read_from filename
+
+            # For each row in that file:
+            #  + Generate a filename prefix and create a logging handler.
+            #  + Set the spectrum filename to be the filenames in that row
+            #  + Run the function on that file
+            raise a
+
+        # Check if args has a read_from_filename. If so then we should read
+        # the filenames from each line, run the function on that, and move on.
+
+        self.function(args)
+
+
 
 
 def _announce_theta(theta):
@@ -168,11 +217,12 @@ def _announce_theta(theta):
     is_a_redshift = lambda p: p == "z" or p[:2] == "z_"
 
     for parameter, value in theta.items():
-        if isinstance(value, (int, float)):
+        try:
+            value[0]
+        except (IndexError, TypeError):
             message = "\t{0}: {1:.3f}".format(parameter, value)
             if is_a_redshift(parameter):
                 message += " [{0:.1f} km/s]".format(value * c)
-
         else:
             # (MAP, u_pos, u_neg)
             message = "\t{0}: {1:.3f} ({2:+.3f}, {3:+.3f})".format(parameter,
@@ -252,7 +302,8 @@ def _pre_solving(args, expected_output_files):
 
     # Get some headers from the first spectrum.
     for header in ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS",
-        "LONG_OBS", "MAGNITUDE","NAME", "OBJECT", "UTEND", "UTDATE", "UTSTART"):
+        "LONG_OBS", "MAGNITUDE","NAME", "OBJECT", "UTEND", "UTDATE", "UTSTART",
+        "V_HELIO", "V_BARY"):
         metadata["headers"][header] = data[0].headers.get(header, None)
 
     return (model, data, metadata)
@@ -264,7 +315,7 @@ def _write_output(filename, output):
     #        default_flow_style=False)
 
     with open(filename, "w+") as fp:
-        fp.write(json.dumps(output, indent=2))
+        pickle.dump(output, fp, -1)
     logger.info("Results written to {}".format(filename))
     return True
 
@@ -276,7 +327,7 @@ def estimate(args, **kwargs):
 
     expected_output_files = kwargs.pop("expected_output_files", None)
     if not expected_output_files:
-        expected_output_files = ["estimate.yaml"]
+        expected_output_files = ["estimate.pkl"]
         if args.plotting:
             expected_output_files.extend(
                 ["projection-estimate.{}".format(args.plot_format)])
@@ -314,11 +365,11 @@ def estimate(args, **kwargs):
         return (model, data, metadata, theta)
 
     # Write the result to file.
-    _write_output(_prefix(args, "estimate.yaml"), metadata)
+    _write_output(_prefix(args, "estimate.pkl"), metadata)
     return None
 
 
-
+@loopify
 def optimise(args, **kwargs):
     """
     Optimise the model parameters.
@@ -326,7 +377,7 @@ def optimise(args, **kwargs):
 
     expected_output_files = kwargs.pop("expected_output_files", None)
     if not expected_output_files:
-        expected_output_files = ["optimised.yaml"]
+        expected_output_files = ["optimised.pkl"]
         if args.plotting:
             expected_output_files.extend([
                 "projection-estimate.{}".format(args.plot_format),
@@ -374,8 +425,9 @@ def optimise(args, **kwargs):
         return (model, data, metadata, theta)
 
     # Write the results to file.
-    _write_output(_prefix(args, "optimised.yaml"), metadata)
+    _write_output(_prefix(args, "optimised.pkl"), metadata)
     return None
+
 
 
 
@@ -384,7 +436,7 @@ def infer(args):
     Infer the model parameters.
     """
 
-    expected_output_files = ["inferred.yaml"]
+    expected_output_files = ["inferred.pkl"]
     if args.plotting:
         expected_output_files.extend([each.format(args.plot_format) \
             for each in "chain.{}", "corner.{}", "acceptance-fractions.{}",
@@ -421,7 +473,7 @@ def infer(args):
     _announce_theta(theta)
     
     # Write the results to file.
-    _write_output(_prefix(args, "inferred.yaml"), metadata)
+    _write_output(_prefix(args, "inferred.pkl"), metadata)
 
     # Write the chains, etc to disk.
     if args.save_chain_files:
@@ -446,19 +498,19 @@ def infer(args):
         
         # Acceptance fractions.
         fig = sick.plot.acceptance_fractions(acceptance_fractions,
-            burn_in=burn)
+            burn=burn)
         _ = _prefix(args, "acceptance-fractions.{}".format(args.plot_format))
         fig.savefig(_)
         logger.info("Saved acceptance fractions figure to {}".format(_))
 
         # Autocorrelation.
-        fig = sick.plot.autocorrelation(chains, burn_in=burn)
+        fig = sick.plot.normalised_autocorrelation_function(chains, burn=burn)
         _ = _prefix(args, "auto-correlation.{}".format(args.plot_format))
         fig.savefig(_)
         logger.info("Saved auto-correlation figure to {}".format(_))
 
         # Chains.
-        fig = sick.plot.chains(chains, labels=labels, burn_in=burn,
+        fig = sick.plot.chains(chains, labels=labels, burn=burn,
             truths=truths)
         _ = _prefix(args, "chains.{}".format(args.plot_format))
         fig.savefig(_)
@@ -507,12 +559,14 @@ def aggregate(args):
 
     # What header keys should be passed to the final table?
     header_keys = ["RA", "DEC", "NAME", "OBJECT", "MAGNITUDE",
-        "UTSTART", "UTEND", "UTDATE"]
+        "UTSTART", "UTEND", "UTDATE", "V_HELIO", "V_BARY"]
 
     def load_result_file(filename, debug):
+        
+        loader = yaml.load if filename.lower().endswith(".yaml") else pickle.load
         with open(filename, "r") as fp:
             try:
-                result = yaml.load(fp)
+                result = loader(fp)
             
             except:
                 logger.exception("Could not read results filename: {}".format(
@@ -597,9 +651,12 @@ def aggregate(args):
         columns += sorted(each.keys())
 
     table = Table(rows=rows, names=columns)
-    table.write(args.output_filename[0], overwrite=args.clobber)
-    logger.info("Results from {0} files aggregated and saved to {1}".format(
-        len(args.result_filenames), args.output_filename[0]))
+    try:
+        table.write(args.output_filename[0], overwrite=args.clobber)
+    except TypeError:
+        table.write(args.output_filename[0])
+        logger.info("Results from {0} files aggregated and saved to {1}".format(
+            len(args.result_filenames), args.output_filename[0]))
 
 
 def main():

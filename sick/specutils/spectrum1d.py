@@ -99,7 +99,8 @@ class Spectrum1D(object):
         if not os.path.exists(filename):
             raise IOError("filename {0} does not exist" .format(filename))
         
-        if filename.endswith('.fits'):
+        if filename.lower().endswith(".fits") \
+        or filename.lower().endswith(".fits.gz"):
             image = fits.open(filename, **kwargs)
             
             header = image[0].header
@@ -123,14 +124,23 @@ class Spectrum1D(object):
                 #a.headers['CRVAL1'] + a.headers['CD1_1'] * (li - a.headers['CRPIX1'])
 
                 if np.all([key in header.keys() for key in ('CDELT1', 'NAXIS1', 'CRVAL1')]):
-                    disp = header['CRVAL1'] + np.arange(header['NAXIS1']) * header['CDELT1']
+                    disp = header['CRVAL1'] + (np.arange(header['NAXIS1']) \
+                        - header.get("CRPIX1", 0)) * header['CDELT1']
             
                 if "LTV1" in header.keys():
                     disp -= header['LTV1'] * header['CDELT1']
 
                 #disp -= header['LTV1'] if header.has_key('LTV1') else 0
                 flux = image[0].data
-                variance = None
+
+                # Check for an input_variance array
+                extnames = [ext.header.get("EXTNAME", None) for ext in image[1:]]
+                if "input_variance" in extnames:
+                    index = 1 + extnames.index("input_variance")
+                    variance = image[index].data
+                    
+                else:
+                    variance = None
             
                 # Check for logarithmic dispersion
                 if "CTYPE1" in header.keys() and header["CTYPE1"] == "AWAV-LOG":
