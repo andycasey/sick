@@ -74,6 +74,11 @@ class Model(BaseModel):
 
         ccf_channel = self._configuration.get("settings", {}).get("ccf_channel",
             max(median_snr, key=median_snr.get))
+        if ccf_channel not in matched_channels:
+            logger.warn("Ignoring CCF channel {0} because it was not a matched"
+                " channel".format(ccf_channel))
+            ccf_channel = max(median_snr, key=median_snr.get)
+
         logger.debug("Channel with peak SNR is {0}".format(ccf_channel))
 
         # Are there *any* continuum parameters in any matched channel?
@@ -82,6 +87,8 @@ class Model(BaseModel):
 
         # [TODO]: CCF MASK
         # [TODO]: Don't require CCF if we have only continuum parameters.
+
+        z_limits = self._configuration["settings"].get("ccf_z_limits", None)
 
         theta = {} # Dictionary for the estimated model parameters.
         best_grid_index = None
@@ -114,13 +121,9 @@ class Model(BaseModel):
                     * (spectrum.disp[-1] >= self.wavelengths))[0]
 
                 v, v_err, R = spectrum.cross_correlate(
-                    #(self.wavelengths[idx], intensities[:, idx]),
-                    (self.wavelengths, intensities),
-                    continuum_degree=continuum_degree)
-
-                # Apply limits:
-                #lower, upper = -500, 500
-                #R[~((upper > v) * (v > lower))] = np.nan
+                    (self.wavelengths[idx], intensities[:, idx]),
+                    #(self.wavelengths, intensities),
+                    continuum_degree=continuum_degree, z_limits=z_limits)
 
                 # Identify the best point by the CCF peak.
                 best = np.nanargmax(R)
@@ -181,9 +184,14 @@ class Model(BaseModel):
                 continuum = spectrum.flux/best_intensities
                 finite = np.isfinite(continuum)
 
-                coefficients = np.polyfit(
-                    spectrum.disp[finite], continuum[finite], continuum_degree,
-                    w=spectrum.ivariance[finite])
+                try:
+                    coefficients = np.polyfit(
+                        spectrum.disp[finite], continuum[finite], continuum_degree,
+                        )#w=spectrum.ivariance[finite])
+                except np.linalg.linalg.LinAlgError:
+                    logger.exception("Exception in initial polynomial fit")
+                    coefficients = np.polyfit(spectrum.disp[finite], continuum[finite],
+                        continuum_degree)
 
                 # They go into theta backwards. such that coefficients[-1] is
                 # continuum_{name}_0
@@ -696,6 +704,8 @@ class Model(BaseModel):
 
         logger.info("Creating convolution functions (fast_binning = {})".format(
             fast_binning))
+        logger.info("Free parameters: {}".format(free_parameters))
+        logger.info("Fixed parameters: {}".format(fixed_parameters))
 
         if fixed_parameters is None:
             fixed_parameters = {}
@@ -714,22 +724,33 @@ class Model(BaseModel):
             # Option 1.
             # Create static binning matrices for each channel.
             if not redshift and not resolution:
-                logger.info("Creating static matrix for channel {0} because "\
-                    "no redshift or resolution parameters were found".format(
-                        channel))
 
-                # Is there any z?
-                z = fixed_parameters.get(
-                    "z_{}".format(channel), fixed_parameters.get("z", 0))
+                if fast_binning:
+                    logger.info("Doing static interpolation for channel {}"\
+                        .format(channel))
+                    convolution_function = lambda w, f, z, *a: \
+                        np.interp(w, generate.wavelengths[-1], f,
+                            left=np.nan, right=np.nan)
 
-                # Create the binning matrix based on the globally-scoped array
-                # of wavelengths.
-                matrix = specutils.sample.resample(
-                    generate.wavelengths[-1] * (1 + z),
-                    spectrum.disp)
 
-                # Wrap in a lambda function to be consistent with other options.
-                convolution_function = lambda w, f, *a: f * matrix
+                else:
+
+                    logger.info("Creating static matrix for channel {0} because "\
+                        "no redshift or resolution parameters were found".format(
+                            channel))
+
+                    # Is there any z?
+                    z = fixed_parameters.get(
+                        "z_{}".format(channel), fixed_parameters.get("z", 0))
+
+                    # Create the binning matrix based on the globally-scoped array
+                    # of wavelengths.
+                    matrix = specutils.sample.resample(
+                        generate.wavelengths[-1] * (1 + z),
+                        spectrum.disp)
+
+                    # Wrap in a lambda function to be consistent with other options.
+                    convolution_function = lambda w, f, *a: f * matrix
 
             else:
 
@@ -893,19 +914,17 @@ class Model(BaseModel):
 
         # Do the optimisation.
         p0 = np.array([initial_theta[p] for p in parameters])
+
         x_opt = op.minimise(nlp, p0, **op_kwargs)
 
         # Put the result into a usable form.
-        x_opt_theta_unscaled = OrderedDict(zip(parameters, x_opt))
-        # TODO: MAKE SURE THE x_opt_theta IS IN THE SAME ORDER AS MODEL.pARAMETERS
-        x_opt_theta_unscaled.update(fixed)
-
         x_opt_theta = OrderedDict(zip(parameters, x_opt))
         x_opt_theta.update(fixed)
 
         if full_output:
             # Create model fluxes and calculate some metric.
-            chi_sq, dof, model_fluxes = self._chi_sq(x_opt_theta_unscaled, data)
+            chi_sq, dof, model_fluxes = self._chi_sq(x_opt_theta, data)
+
 
             # Remove any prepared convolution functions.
             self._destroy_convolution_functions()
@@ -935,6 +954,9 @@ class Model(BaseModel):
         else:
             model_wavelengths, model_intensities, model_variances \
                 = self._approximate_intensities(theta, data, debug=debug, **kwargs)
+
+        #print("CONTINUUM {0:.3f} {1:.3f} {2:.3f}".format(theta["continuum_1700D_0"],
+        #    theta["continuum_1700D_1"], theta["continuum_1700D_2"]))
 
         continua = []
         model_fluxes = []
@@ -995,11 +1017,24 @@ class Model(BaseModel):
                 coeff.append(theta["continuum_{0}_{1}".format(channel, j)])
                 j += 1
 
-            continuum = np.polyval(coeff[::-1], spectrum.disp) if coeff else 1.
-
+            continuum = np.abs(np.polyval(coeff[::-1], spectrum.disp)) \
+                if coeff else 1.
             channel_fluxes *= continuum
 
-            channel_fluxes[0 >= channel_fluxes] = np.nan
+            """
+            m = 0 >= channel_fluxes
+            if np.any(m):
+                raise ValueError("negative model fluxes produced")
+
+                logger.warn("Setting {0} model fluxes in {1} channel to NaN "
+                    "because they are zero or negative".format(m.sum(), channel))
+                if m.all():
+                    raise Nope
+                #    return 
+                #if channel == "1700D" or m.all():
+                #    raise a
+                channel_fluxes[m] = np.nan
+            """
 
 
             continua.append(continuum)

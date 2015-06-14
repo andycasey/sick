@@ -18,7 +18,7 @@ c = speed_of_light.to("km/s").value
 
 def cross_correlate(observed, template_dispersion, template_fluxes,
     rebin="template", wavelength_range=None, continuum_degree=-1,
-    apodize=0.10, rescale=False, full_output=False):
+    apodize=0.10, rescale=False, z_limits=None, full_output=False):
     """
     Cross-correlate the observed spectrum against template fluxes.
     """
@@ -79,7 +79,6 @@ def cross_correlate(observed, template_dispersion, template_fluxes,
     observed_ivar = observed_ivar[l_idx:u_idx]
     template_flux = template_flux[:, l_idx:u_idx]
 
-
     # Ensure an even number of points.
     N = u_idx - l_idx
     N = N - 1 if N % 2 > 0 else N
@@ -88,18 +87,17 @@ def cross_correlate(observed, template_dispersion, template_fluxes,
     observed_ivar = observed_ivar[:N]
     template_flux = template_flux[:, :N]
 
-    # Interpolate over non-finite pixels.
-    finite = np.isfinite(observed_flux)
-    observed_flux[~finite] = np.interp(dispersion[~finite], dispersion[finite],
-        observed_flux[finite])
-    finite = np.isfinite(observed_ivar)
-    observed_flux[~finite] = 1e-8
-
+    finite = np.isfinite(observed_flux * observed_ivar) * (observed_flux > 1e-3)
+    
     # Continuum.
     if continuum_degree >= 0:
-        coefficients = np.polyfit(dispersion, observed_flux,
+        coefficients = np.polyfit(dispersion[finite], observed_flux[finite],
             continuum_degree)
         observed_flux /= np.polyval(coefficients, dispersion)
+
+    # Interpolate over non-finite pixels.
+    observed_flux[~finite] = np.interp(dispersion[~finite], dispersion[finite],
+        observed_flux[finite], left=1, right=1)
 
     # Scale the flux level to that the template intensities
     if rescale:
@@ -156,6 +154,10 @@ def cross_correlate(observed, template_dispersion, template_fluxes,
             z_err[i] = (np.ptp(z_array[np.where(ccf >= 0.5*h)])/2.35482)**2
         except ValueError:
             continue
+
+    # Limits:
+    if z_limits is not None:
+        R[~((z_limits[1] >= z) * (z >= z_limits[0]))] = np.nan
 
     # Re-measure the velocity at the best peak.
     index = np.nanargmax(R)
