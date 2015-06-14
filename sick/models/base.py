@@ -555,28 +555,31 @@ class BaseModel(object):
                     old_wavelengths[0], old_wavelengths[-1],
                     new_wavelengths[0], new_wavelengths[-1]))
 
-            if fast_binning and False:
+            if fast_binning:
                 if spectral_resolution is None \
                 or not np.isfinite(spectral_resolution):
                     convolutions.append(lambda nw, ow, of: \
                         np.interp(nw, ow, of, left=np.nan, right=np.nan))
 
                 else:
+                    print("OK")
+                    logger.debug("Using fast binning with spectral resolution")
+                    R_scale = 2.3548200450309493 * new_wavelengths.mean()**2/ np.diff(new_wavelengths).mean()
                     convolutions.append(lambda nw, ow, of: \
                         np.interp(nw, ow,
-                            gaussian_filter1d(f, spectral_resolution * R_scale),
+                            gaussian_filter1d(of, R_scale/spectral_resolution**2),
                             left=np.nan, right=np.nan))
 
             else:
                 if spectral_resolution is None \
                 or not np.isfinite(spectral_resolution):
-                    convolutions.append(lambda *_: specutils.sample.resample(
+                    convolutions.append(lambda *_: _[2] * specutils.sample.resample(
                         old_wavelengths, new_wavelengths))
                 else:
-                    convolutions.append(lambda *_: \
+                    convolutions.append(lambda *_: _[2] * \
                         specutils.sample.resample_and_convolve(old_wavelengths,
                             new_wavelengths, new_resolution=spectral_resolution))
-
+            
         # Load the intensities.
         intensities = np.memmap(
             self._configuration["model_grid"]["intensities"],
@@ -608,9 +611,17 @@ class BaseModel(object):
 
             for j, (size, convolution, indices) \
             in enumerate(zip(channel_sizes, convolutions, wavelength_indices)):
+
+                new_wavelengths, _ = new_channels[channel_names[j]]
+                old_wl_idxs = np.clip(self.wavelengths.searchsorted(
+                    [new_wavelengths.min(), new_wavelengths.max()]) + [0, 1],
+                    0, self.wavelengths.size - 1)
+                old_wavelengths = self.wavelengths[old_wl_idxs[0]:old_wl_idxs[1]]
+
+                old_fluxes = np.copy(intensities[i, indices[0]:indices[1]])
+
                 idx = sum(channel_sizes[:j])
-                cast_intensities[i, idx:idx + size] = \
-                    np.copy(intensities[i, indices[0]:indices[1]])
+                cast_intensities[i, idx:idx + size] = convolution(new_wavelengths, old_wavelengths, old_fluxes)
 
         """
         for j, (size, matrix, indices) \
