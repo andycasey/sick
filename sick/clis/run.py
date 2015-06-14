@@ -151,8 +151,8 @@ def parser(input_args=None):
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
     # Check plot formats.
-    if args.plotting \
-    and args.command.lower() in ("estimate", "optimise", "infer"):
+    if args.command.lower() in ("estimate", "optimise", "infer") \
+    and args.plotting:
 
         import matplotlib.pyplot as plt
         fig = plt.figure()
@@ -300,6 +300,12 @@ def _pre_solving(args, expected_output_files):
         "headers": {}
     }
 
+    sn_values = []
+    for spectrum in data:
+        sn_values.extend(spectrum.flux/(spectrum.variance**0.5))
+
+    metadata["SNR"] = np.nanmedian(sn_values)
+
     # Get some headers from the first spectrum.
     for header in ("RA", "DEC", "COMMENT", "ELAPSED", "FIBRE_NUM", "LAT_OBS",
         "LONG_OBS", "MAGNITUDE","NAME", "OBJECT", "UTEND", "UTDATE", "UTSTART",
@@ -369,7 +375,6 @@ def estimate(args, **kwargs):
     return None
 
 
-@loopify
 def optimise(args, **kwargs):
     """
     Optimise the model parameters.
@@ -616,7 +621,7 @@ def aggregate(args):
         return _
 
     rows = []
-    columns = [] + header_keys + ["model", "sick_version", "results_filename"]
+    columns = [] + header_keys + ["SNR", "model", "sick_version", "results_filename"]
     for i, filename in enumerate(args.result_filenames):
 
         result = load_result_file(filename, debug=args.debug)
@@ -629,6 +634,7 @@ def aggregate(args):
             "model": result["model"],
             "sick_version": result["sick_version"],
             "results_filename": filename,
+            "SNR": result["SNR"]
         })
         
         # Include estimated values (which should always be present)
