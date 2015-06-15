@@ -7,26 +7,17 @@ from __future__ import print_function
 
 __author__ = "Andy Casey <arc@ast.cam.ac.uk>"
 
-from time import time
-t_init = time()
 import argparse
 import cPickle as pickle
 import logging
 import os
-
-t_a = time()
-print(t_a - t_init)
+from glob import glob
 
 import numpy as np
 import yaml
 import json
 
-t_b = time()
-print(t_b - t_a)
-
 import sick
-t_c = time()
-print(t_c - t_b)
 
 
 logger = logging.getLogger("sick")
@@ -582,6 +573,10 @@ def aggregate(args):
                 logger.debug("Successfully loaded results from {}".format(
                     filename))
         return result
+
+    # Dows the first result actually exist, or is it a wildname mask?
+    if not os.path.exists(args.result_filenames[0]):
+        args.result_filenames = glob(args.result_filenames[0])
 
     # Load the first set of results to get the parameter names.
     first_results = load_result_file(args.result_filenames[0], True)
