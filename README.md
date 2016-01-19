@@ -1,6 +1,12 @@
 *sick*, the spectroscopic inference crank
 ------
 
+Remaining to-do items
+---------------------
+[ ] Default behaviour for judging convergence
+[ ] Some refactoring and tests to add
+ 
+
 [![Build Status](http://img.shields.io/travis/andycasey/sick.svg)](https://travis-ci.org/andycasey/sick) [![PyPi download count image](http://img.shields.io/pypi/dm/sick.svg)](https://pypi.python.org/pypi/sick/)
 
 ``sick`` is a generalised package for inferring astrophysical parameters from noisy observed spectra. Phenomena that can alter the data (e.g., redshift, continuum, instrumental broadening, outlier pixels) are modelled and simultaneously inferred with the astrophysical parameters of interest. This package is best-suited for situations where a grid of model spectra already exists, and you would like to infer model parameters given some data.
