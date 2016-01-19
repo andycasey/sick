@@ -228,7 +228,7 @@ class Model(BaseModel):
                     theta.update({ parameter: np.median(R)/5.})
 
                 elif parameter == "ln_f" or parameter.startswith("ln_f_"):
-                    theta.update({ parameter: -9.9 }) # Not overestimated.
+                    theta.update({ parameter: 0.5 }) # Not overestimated.
 
                 elif parameter in ("Po", "Vo"):
                     theta.update({
